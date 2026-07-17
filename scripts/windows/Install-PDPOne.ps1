@@ -10,7 +10,7 @@ $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
 Set-StrictMode -Version Latest
 
-$InstallerVersion = "2026.07.18.14"
+$InstallerVersion = "2026.07.18.15"
 $ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 Set-Location $ProjectRoot
 
@@ -264,8 +264,8 @@ POSTGRES_PORT=5432
 DATABASE_URL=postgresql://pdp_one:change-me@db:5432/pdp_one
 DJANGO_SECRET_KEY=change-this-in-production
 DJANGO_DEBUG=false
-DJANGO_ALLOWED_HOSTS=localhost,127.0.0.1,backend,nginx,.trycloudflare.com
-DJANGO_CSRF_TRUSTED_ORIGINS=https://*.trycloudflare.com
+DJANGO_ALLOWED_HOSTS=localhost,127.0.0.1,backend,nginx,.trycloudflare.com,.pinggy-free.link,.pinggy.link
+DJANGO_CSRF_TRUSTED_ORIGINS=https://*.trycloudflare.com,https://*.pinggy-free.link,https://*.pinggy.link
 REDIS_URL=redis://redis:6379/0
 PDP_API_URL=http://backend:8000/api/v1
 PDP_MCP_TOKEN=replace-with-a-long-random-token
