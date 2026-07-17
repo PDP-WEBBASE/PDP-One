@@ -1,4 +1,5 @@
-FROM python:3.13-slim
+ARG PDP_DOCKER_REGISTRY=docker.arvancloud.ir/library
+FROM ${PDP_DOCKER_REGISTRY}/python:3.13-slim
 WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
