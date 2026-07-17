@@ -1,3 +1,4 @@
+#requires -Version 5.1
 [CmdletBinding()]
 param(
     [switch]$SkipPackageInstall,
@@ -5,8 +6,10 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+$ProgressPreference = "SilentlyContinue"
 Set-StrictMode -Version Latest
 
+$InstallerVersion = "2026.07.17.2"
 $ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 Set-Location $ProjectRoot
 
@@ -24,7 +27,7 @@ function Install-WingetPackage([string]$Id, [string]$CommandName) {
     }
     Write-Host "Installing $Id ..." -ForegroundColor Cyan
     winget install --id $Id --exact --silent --accept-package-agreements --accept-source-agreements
-    if ($LASTEXITCODE -ne 0) { throw "Installation failed for $Id." }
+    if ($LASTEXITCODE -ne 0) { throw "Installation failed for $Id. Exit code: $LASTEXITCODE" }
 }
 
 function New-RandomSecret([int]$Bytes = 36) {
@@ -34,7 +37,7 @@ function New-RandomSecret([int]$Bytes = 36) {
     return [Convert]::ToBase64String($buffer).TrimEnd('=').Replace('+', '-').Replace('/', '_')
 }
 
-Write-Host "PDP One - Windows trial installer" -ForegroundColor Green
+Write-Host "PDP One Windows installer $InstallerVersion" -ForegroundColor Green
 Install-WingetPackage "Git.Git" "git"
 Install-WingetPackage "Docker.DockerDesktop" "docker"
 Install-WingetPackage "Cloudflare.cloudflared" "cloudflared"
@@ -75,7 +78,8 @@ if (-not (Test-Path $EnvPath)) {
     $content = $content.Replace("postgresql://pdp_one:change-me@db:5432/pdp_one", "postgresql://pdp_one:$postgresPassword@db:5432/pdp_one")
     $content = $content.Replace("DJANGO_SECRET_KEY=change-this-in-production", "DJANGO_SECRET_KEY=$djangoSecret")
     $content = $content.Replace("PDP_MCP_TOKEN=replace-with-a-long-random-token", "PDP_MCP_TOKEN=$mcpToken")
-    [IO.File]::WriteAllText($EnvPath, $content, [Text.UTF8Encoding]::new($false))
+    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+    [IO.File]::WriteAllText($EnvPath, $content, $utf8NoBom)
     Write-Host "Secure configuration file created." -ForegroundColor Green
 } else {
     Write-Host "Existing .env file preserved." -ForegroundColor DarkYellow
@@ -105,6 +109,6 @@ if (-not $SkipAdministrator) {
     docker compose exec backend python manage.py createsuperuser
 }
 
-Write-Host "`nPDP One is ready: http://localhost:8080" -ForegroundColor Green
-Write-Host "To create a temporary internet link, run:" -ForegroundColor Cyan
-Write-Host "powershell -ExecutionPolicy Bypass -File .\scripts\windows\Start-PDPOneTunnel.ps1"
+Write-Host ""
+Write-Host "PDP One is ready: http://localhost:8080" -ForegroundColor Green
+Write-Host "To create a temporary internet link, double-click START-INTERNET-LINK.bat" -ForegroundColor Cyan
