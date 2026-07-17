@@ -4,6 +4,7 @@ WORKDIR /app
 COPY package*.json ./
 RUN npm ci
 COPY . .
+RUN chmod +x scripts/*.sh
 RUN npm run build
 
 FROM ${PDP_DOCKER_REGISTRY}/node:22-bookworm-slim
