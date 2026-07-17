@@ -10,7 +10,7 @@ $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
 Set-StrictMode -Version Latest
 
-$InstallerVersion = "2026.07.18.12"
+$InstallerVersion = "2026.07.18.13"
 $ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 Set-Location $ProjectRoot
 
@@ -225,13 +225,14 @@ if (Install-DockerRegistryMirror) {
     Restart-RancherForProvisioning
 }
 
-Write-Host "Downloading required container images through the free registry cache ..." -ForegroundColor Cyan
+$containerRegistry = "docker.arvancloud.ir/library"
+Write-Host "Downloading required container images from the direct regional mirror ..." -ForegroundColor Cyan
 $requiredImages = @(
-    "postgres:17-alpine",
-    "redis:7-alpine",
-    "nginx:1.27-alpine",
-    "python:3.13-slim",
-    "node:22-alpine"
+    "$containerRegistry/postgres:17-alpine",
+    "$containerRegistry/redis:7-alpine",
+    "$containerRegistry/nginx:1.27-alpine",
+    "$containerRegistry/python:3.13-slim",
+    "$containerRegistry/node:22-alpine"
 )
 foreach ($image in $requiredImages) {
     cmd /c "docker image inspect $image >nul 2>&1"
@@ -239,7 +240,7 @@ foreach ($image in $requiredImages) {
     Write-Host "Downloading $image ..." -ForegroundColor Cyan
     docker pull $image
     if ($LASTEXITCODE -ne 0) {
-        throw "Could not download $image through the configured registry cache."
+        throw "Could not download $image from the direct regional mirror."
     }
 }
 
@@ -254,6 +255,7 @@ if (-not (Test-Path $EnvPath)) {
     } else {
         Write-Host ".env.example is missing; using the built-in safe template." -ForegroundColor Yellow
         $envContent = @"
+PDP_DOCKER_REGISTRY=docker.arvancloud.ir/library
 POSTGRES_DB=pdp_one
 POSTGRES_USER=pdp_one
 POSTGRES_PASSWORD=change-me
