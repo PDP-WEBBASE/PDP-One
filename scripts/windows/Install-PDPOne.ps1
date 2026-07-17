@@ -9,7 +9,7 @@ $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
 Set-StrictMode -Version Latest
 
-$InstallerVersion = "2026.07.17.2"
+$InstallerVersion = "2026.07.17.3"
 $ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 Set-Location $ProjectRoot
 
@@ -26,7 +26,7 @@ function Install-WingetPackage([string]$Id, [string]$CommandName) {
         throw "Windows Package Manager (winget) is unavailable. Install App Installer from Microsoft Store."
     }
     Write-Host "Installing $Id ..." -ForegroundColor Cyan
-    winget install --id $Id --exact --silent --accept-package-agreements --accept-source-agreements
+    winget install --id $Id --exact --source winget --silent --accept-package-agreements --accept-source-agreements --disable-interactivity
     if ($LASTEXITCODE -ne 0) { throw "Installation failed for $Id. Exit code: $LASTEXITCODE" }
 }
 
