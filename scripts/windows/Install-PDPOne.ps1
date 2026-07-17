@@ -1,4 +1,5 @@
 #requires -Version 5.1
+#requires -RunAsAdministrator
 [CmdletBinding()]
 param(
     [switch]$SkipPackageInstall,
@@ -9,7 +10,7 @@ $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
 Set-StrictMode -Version Latest
 
-$InstallerVersion = "2026.07.17.5"
+$InstallerVersion = "2026.07.17.6"
 $ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 Set-Location $ProjectRoot
 
