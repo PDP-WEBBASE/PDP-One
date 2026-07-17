@@ -10,7 +10,7 @@ $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
 Set-StrictMode -Version Latest
 
-$InstallerVersion = "2026.07.18.9"
+$InstallerVersion = "2026.07.18.10"
 $ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 Set-Location $ProjectRoot
 
@@ -172,7 +172,27 @@ if (-not (Test-Path $EnvPath)) {
     $postgresPassword = New-RandomSecret 30
     $djangoSecret = New-RandomSecret 48
     $mcpToken = New-RandomSecret 48
-    $envContent = Get-Content (Join-Path $ProjectRoot ".env.example") -Raw
+    $envTemplatePath = Join-Path $ProjectRoot ".env.example"
+    if (Test-Path -LiteralPath $envTemplatePath) {
+        $envContent = Get-Content -LiteralPath $envTemplatePath -Raw
+    } else {
+        Write-Host ".env.example is missing; using the built-in safe template." -ForegroundColor Yellow
+        $envContent = @"
+POSTGRES_DB=pdp_one
+POSTGRES_USER=pdp_one
+POSTGRES_PASSWORD=change-me
+POSTGRES_HOST=db
+POSTGRES_PORT=5432
+DATABASE_URL=postgresql://pdp_one:change-me@db:5432/pdp_one
+DJANGO_SECRET_KEY=change-this-in-production
+DJANGO_DEBUG=false
+DJANGO_ALLOWED_HOSTS=localhost,127.0.0.1,backend,nginx,.trycloudflare.com
+DJANGO_CSRF_TRUSTED_ORIGINS=https://*.trycloudflare.com
+REDIS_URL=redis://redis:6379/0
+PDP_API_URL=http://backend:8000/api/v1
+PDP_MCP_TOKEN=replace-with-a-long-random-token
+"@
+    }
     $envContent = $envContent.Replace("POSTGRES_PASSWORD=change-me", "POSTGRES_PASSWORD=$postgresPassword")
     $envContent = $envContent.Replace("postgresql://pdp_one:change-me@db:5432/pdp_one", "postgresql://pdp_one:$postgresPassword@db:5432/pdp_one")
     $envContent = $envContent.Replace("DJANGO_SECRET_KEY=change-this-in-production", "DJANGO_SECRET_KEY=$djangoSecret")
