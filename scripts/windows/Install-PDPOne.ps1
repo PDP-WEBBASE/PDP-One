@@ -10,7 +10,7 @@ $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
 Set-StrictMode -Version Latest
 
-$InstallerVersion = "2026.07.17.6"
+$InstallerVersion = "2026.07.18.7"
 $ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 Set-Location $ProjectRoot
 
@@ -77,7 +77,7 @@ Install-WingetPackage "Cloudflare.cloudflared" "cloudflared"
 
 $engineReady = $false
 if (Test-Command "docker") {
-    docker info *> $null
+    cmd /c "docker info >nul 2>&1"
     if ($LASTEXITCODE -eq 0) { $engineReady = $true }
 }
 
@@ -102,7 +102,7 @@ if (-not $engineReady) {
         Start-Sleep -Seconds 2
         Add-RancherPaths
         if (Test-Command "docker") {
-            docker info *> $null
+            cmd /c "docker info >nul 2>&1"
             if ($LASTEXITCODE -eq 0) { $engineReady = $true; break }
         }
     }
@@ -112,7 +112,7 @@ if (-not $engineReady) {
     throw "The container engine is not ready. Open Rancher Desktop, finish any WSL2 or administrator prompt, then run this installer again."
 }
 
-docker compose version *> $null
+cmd /c "docker compose version >nul 2>&1"
 if ($LASTEXITCODE -ne 0) {
     throw "Docker Compose is unavailable. In Rancher Desktop select the Moby container engine, then run this installer again."
 }
@@ -144,7 +144,7 @@ if ($LASTEXITCODE -ne 0) { throw "PDP One services failed to start." }
 Write-Host "Waiting for the application ..." -ForegroundColor Yellow
 $backendReady = $false
 foreach ($attempt in 1..60) {
-    docker compose exec -T backend python manage.py check *> $null
+    cmd /c "docker compose exec -T backend python manage.py check >nul 2>&1"
     if ($LASTEXITCODE -eq 0) { $backendReady = $true; break }
     Start-Sleep -Seconds 2
 }
