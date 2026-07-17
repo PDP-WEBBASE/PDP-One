@@ -98,12 +98,15 @@ if (-not $engineReady) {
     }
 
     Write-Host "Waiting for Rancher Desktop and the Moby engine ..." -ForegroundColor Yellow
-    foreach ($attempt in 1..180) {
+    foreach ($attempt in 1..300) {
         Start-Sleep -Seconds 2
         Add-RancherPaths
         if (Test-Command "docker") {
             cmd /c "docker info >nul 2>&1"
             if ($LASTEXITCODE -eq 0) { $engineReady = $true; break }
+        }
+        if (($attempt % 15) -eq 0) {
+            Write-Host "Rancher Desktop is still starting; please wait ..." -ForegroundColor DarkYellow
         }
     }
 }
