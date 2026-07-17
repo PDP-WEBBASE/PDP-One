@@ -10,7 +10,7 @@ $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
 Set-StrictMode -Version Latest
 
-$InstallerVersion = "2026.07.18.8"
+$InstallerVersion = "2026.07.18.9"
 $ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 Set-Location $ProjectRoot
 
@@ -71,7 +71,46 @@ function Start-RancherDesktop {
     throw "Rancher Desktop was installed but its executable could not be found."
 }
 
+function Enable-RequiredWindowsFeatures {
+    $requiredFeatures = @(
+        "Microsoft-Windows-Subsystem-Linux",
+        "VirtualMachinePlatform"
+    )
+    $restartRequired = $false
+
+    foreach ($featureName in $requiredFeatures) {
+        $feature = Get-WindowsOptionalFeature -Online -FeatureName $featureName -ErrorAction Stop
+        if ($feature.State -eq "Enabled") {
+            Write-Host "$featureName is enabled." -ForegroundColor DarkGreen
+            continue
+        }
+        if ($feature.State -eq "EnablePending") {
+            Write-Host "$featureName is waiting for a Windows restart." -ForegroundColor Yellow
+            $restartRequired = $true
+            continue
+        }
+
+        Write-Host "Enabling required Windows feature: $featureName ..." -ForegroundColor Cyan
+        Enable-WindowsOptionalFeature -Online -FeatureName $featureName -All -NoRestart -ErrorAction Stop | Out-Null
+        $restartRequired = $true
+    }
+
+    if ($restartRequired) {
+        Write-Host ""
+        Write-Host "The required WSL features are now enabled, but Windows must restart before installation can continue." -ForegroundColor Yellow
+        $answer = Read-Host "Restart Windows automatically in 30 seconds? Enter Y for yes"
+        if ($answer -match "^(?i:y|yes)$") {
+            shutdown.exe /r /t 30 /c "PDP One enabled the required WSL features. Windows must restart."
+            Write-Host "Windows restart scheduled. Save any open work now. To cancel, run: shutdown /a" -ForegroundColor Yellow
+        } else {
+            Write-Host "Please restart Windows manually, then run INSTALL-PDP-ONE.bat again." -ForegroundColor Yellow
+        }
+        exit 0
+    }
+}
+
 Write-Host "PDP One Windows installer $InstallerVersion" -ForegroundColor Green
+Enable-RequiredWindowsFeatures
 Install-WingetPackage "Git.Git" "git"
 Install-WingetPackage "Cloudflare.cloudflared" "cloudflared"
 
