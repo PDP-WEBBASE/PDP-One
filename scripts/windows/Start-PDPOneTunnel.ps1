@@ -1,4 +1,5 @@
 #requires -Version 5.1
+#requires -RunAsAdministrator
 $ErrorActionPreference = "Stop"
 $ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 Set-Location $ProjectRoot
