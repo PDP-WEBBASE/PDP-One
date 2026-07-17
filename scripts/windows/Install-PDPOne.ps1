@@ -10,7 +10,7 @@ $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
 Set-StrictMode -Version Latest
 
-$InstallerVersion = "2026.07.18.7"
+$InstallerVersion = "2026.07.18.8"
 $ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 Set-Location $ProjectRoot
 
@@ -112,7 +112,15 @@ if (-not $engineReady) {
 }
 
 if (-not $engineReady) {
-    throw "The container engine is not ready. Open Rancher Desktop, finish any WSL2 or administrator prompt, then run this installer again."
+    Write-Host "The container engine is not ready. Automatic diagnostics will run now ..." -ForegroundColor Red
+    $diagnosticScript = Join-Path $PSScriptRoot "Diagnose-PDPOne.ps1"
+    if (Test-Path -LiteralPath $diagnosticScript) {
+        & $diagnosticScript
+        Write-Host "Diagnostics were saved to pdp-one-diagnostics.txt." -ForegroundColor Yellow
+    } else {
+        Write-Host "The diagnostics script is missing. Download the latest repository ZIP." -ForegroundColor Yellow
+    }
+    exit 1
 }
 
 cmd /c "docker compose version >nul 2>&1"
