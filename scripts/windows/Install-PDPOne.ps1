@@ -10,7 +10,7 @@ $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
 Set-StrictMode -Version Latest
 
-$InstallerVersion = "2026.07.18.10"
+$InstallerVersion = "2026.07.18.11"
 $ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 Set-Location $ProjectRoot
 
@@ -69,6 +69,60 @@ function Start-RancherDesktop {
         }
     }
     throw "Rancher Desktop was installed but its executable could not be found."
+}
+
+function Install-DockerRegistryMirror {
+    $provisioningDirectory = Join-Path $env:LOCALAPPDATA "rancher-desktop\provisioning"
+    $provisioningPath = Join-Path $provisioningDirectory "pdp-one-registry-mirror.start"
+    $scriptContent = @'
+#!/bin/sh
+set -e
+mkdir -p /etc/conf.d /etc/docker
+touch /etc/conf.d/docker
+sed -i '/PDP_ONE_REGISTRY_MIRROR/d' /etc/conf.d/docker
+cat <<'PDPONEOPTS' >> /etc/conf.d/docker
+DOCKER_OPTS="${DOCKER_OPTS} --registry-mirror=https://mirror.gcr.io" # PDP_ONE_REGISTRY_MIRROR
+PDPONEOPTS
+if [ ! -s /etc/docker/daemon.json ]; then
+  cat <<'PDPONEJSON' > /etc/docker/daemon.json
+{
+  "registry-mirrors": ["https://mirror.gcr.io"]
+}
+PDPONEJSON
+fi
+'@
+    $scriptContent = $scriptContent -replace "`r`n", "`n"
+
+    New-Item -ItemType Directory -Path $provisioningDirectory -Force | Out-Null
+    if (Test-Path -LiteralPath $provisioningPath) {
+        $existing = [IO.File]::ReadAllText($provisioningPath)
+        if ($existing -eq $scriptContent) { return $false }
+    }
+
+    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+    [IO.File]::WriteAllText($provisioningPath, $scriptContent, $utf8NoBom)
+    Write-Host "The free Google Docker Hub cache has been configured for Rancher Desktop." -ForegroundColor Green
+    return $true
+}
+
+function Restart-RancherForProvisioning {
+    Write-Host "Restarting Rancher Desktop to activate the registry mirror ..." -ForegroundColor Yellow
+    if (Test-Command "rdctl") {
+        rdctl shutdown
+        Start-Sleep -Seconds 5
+    }
+    Start-RancherDesktop
+
+    foreach ($attempt in 1..180) {
+        Start-Sleep -Seconds 2
+        Add-RancherPaths
+        cmd /c "docker info >nul 2>&1"
+        if ($LASTEXITCODE -eq 0) { return }
+        if (($attempt % 15) -eq 0) {
+            Write-Host "Rancher Desktop is applying the registry mirror; please wait ..." -ForegroundColor DarkYellow
+        }
+    }
+    throw "Rancher Desktop did not restart after registry mirror configuration."
 }
 
 function Enable-RequiredWindowsFeatures {
@@ -165,6 +219,28 @@ if (-not $engineReady) {
 cmd /c "docker compose version >nul 2>&1"
 if ($LASTEXITCODE -ne 0) {
     throw "Docker Compose is unavailable. In Rancher Desktop select the Moby container engine, then run this installer again."
+}
+
+if (Install-DockerRegistryMirror) {
+    Restart-RancherForProvisioning
+}
+
+Write-Host "Downloading required container images through the free registry cache ..." -ForegroundColor Cyan
+$requiredImages = @(
+    "postgres:17-alpine",
+    "redis:7-alpine",
+    "nginx:1.27-alpine",
+    "python:3.13-slim",
+    "node:22-alpine"
+)
+foreach ($image in $requiredImages) {
+    docker image inspect $image *> $null
+    if ($LASTEXITCODE -eq 0) { continue }
+    Write-Host "Downloading $image ..." -ForegroundColor Cyan
+    docker pull $image
+    if ($LASTEXITCODE -ne 0) {
+        throw "Could not download $image through the configured registry cache."
+    }
 }
 
 $EnvPath = Join-Path $ProjectRoot ".env"
