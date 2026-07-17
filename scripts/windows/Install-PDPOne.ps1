@@ -9,12 +9,18 @@ $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
 Set-StrictMode -Version Latest
 
-$InstallerVersion = "2026.07.17.3"
+$InstallerVersion = "2026.07.17.4"
 $ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 Set-Location $ProjectRoot
 
 function Test-Command([string]$Name) {
     return $null -ne (Get-Command $Name -ErrorAction SilentlyContinue)
+}
+
+function Refresh-Path {
+    $machinePath = [Environment]::GetEnvironmentVariable("Path", "Machine")
+    $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
+    $env:Path = "$machinePath;$userPath"
 }
 
 function Install-WingetPackage([string]$Id, [string]$CommandName) {
@@ -28,6 +34,7 @@ function Install-WingetPackage([string]$Id, [string]$CommandName) {
     Write-Host "Installing $Id ..." -ForegroundColor Cyan
     winget install --id $Id --exact --source winget --silent --accept-package-agreements --accept-source-agreements --disable-interactivity
     if ($LASTEXITCODE -ne 0) { throw "Installation failed for $Id. Exit code: $LASTEXITCODE" }
+    Refresh-Path
 }
 
 function New-RandomSecret([int]$Bytes = 36) {
@@ -37,35 +44,78 @@ function New-RandomSecret([int]$Bytes = 36) {
     return [Convert]::ToBase64String($buffer).TrimEnd('=').Replace('+', '-').Replace('/', '_')
 }
 
+function Set-RancherDefaults {
+    $root = "HKCU:\Software\Policies\Rancher Desktop\Defaults"
+    New-Item -Path $root -Force | Out-Null
+    New-ItemProperty -Path $root -Name "version" -Value 18 -PropertyType DWord -Force | Out-Null
+    New-Item -Path "$root\containerEngine" -Force | Out-Null
+    New-ItemProperty -Path "$root\containerEngine" -Name "name" -Value "moby" -PropertyType String -Force | Out-Null
+    New-Item -Path "$root\kubernetes" -Force | Out-Null
+    New-ItemProperty -Path "$root\kubernetes" -Name "enabled" -Value 0 -PropertyType DWord -Force | Out-Null
+}
+
+function Add-RancherPaths {
+    $candidates = @(
+        "C:\Program Files\Rancher Desktop\resources\resources\win32\bin",
+        (Join-Path $env:LOCALAPPDATA "Programs\Rancher Desktop\resources\resources\win32\bin")
+    )
+    foreach ($candidate in $candidates) {
+        if ((Test-Path $candidate) -and ($env:Path -notlike "*$candidate*")) {
+            $env:Path = "$candidate;$env:Path"
+        }
+    }
+}
+
+function Start-RancherDesktop {
+    $executables = @(
+        "C:\Program Files\Rancher Desktop\Rancher Desktop.exe",
+        (Join-Path $env:LOCALAPPDATA "Programs\Rancher Desktop\Rancher Desktop.exe")
+    )
+    foreach ($executable in $executables) {
+        if (Test-Path $executable) {
+            Start-Process -FilePath $executable
+            return
+        }
+    }
+    throw "Rancher Desktop was installed but its executable could not be found."
+}
+
 Write-Host "PDP One Windows installer $InstallerVersion" -ForegroundColor Green
 Install-WingetPackage "Git.Git" "git"
-Install-WingetPackage "Docker.DockerDesktop" "docker"
 Install-WingetPackage "Cloudflare.cloudflared" "cloudflared"
 
-$env:Path = [Environment]::GetEnvironmentVariable("Path", "Machine") + ";" + [Environment]::GetEnvironmentVariable("Path", "User")
-if (-not (Test-Command "docker")) {
-    $DockerCli = "C:\Program Files\Docker\Docker\resources\bin"
-    if (Test-Path $DockerCli) { $env:Path = "$DockerCli;$env:Path" }
+$engineReady = $false
+if (Test-Command "docker") {
+    docker info *> $null
+    if ($LASTEXITCODE -eq 0) { $engineReady = $true }
 }
 
-if (-not (Test-Command "docker")) {
-    throw "Docker was installed but is not active in PATH. Restart Windows, then run this installer again."
-}
+if (-not $engineReady) {
+    Write-Host "Installing Rancher Desktop as the Docker-compatible container engine ..." -ForegroundColor Cyan
+    Set-RancherDefaults
+    Install-WingetPackage "SUSE.RancherDesktop" "rdctl"
+    Refresh-Path
+    Add-RancherPaths
+    Start-RancherDesktop
 
-docker info *> $null
-if ($LASTEXITCODE -ne 0) {
-    $DockerDesktop = "C:\Program Files\Docker\Docker\Docker Desktop.exe"
-    if (Test-Path $DockerDesktop) { Start-Process $DockerDesktop }
-    Write-Host "Waiting for Docker Desktop ..." -ForegroundColor Yellow
-    $ready = $false
-    foreach ($attempt in 1..60) {
+    Write-Host "Waiting for Rancher Desktop and the Moby engine ..." -ForegroundColor Yellow
+    foreach ($attempt in 1..180) {
         Start-Sleep -Seconds 2
-        docker info *> $null
-        if ($LASTEXITCODE -eq 0) { $ready = $true; break }
+        Add-RancherPaths
+        if (Test-Command "docker") {
+            docker info *> $null
+            if ($LASTEXITCODE -eq 0) { $engineReady = $true; break }
+        }
     }
-    if (-not $ready) {
-        throw "Docker Desktop did not become ready. Open it, finish initial WSL2 setup, and run this installer again."
-    }
+}
+
+if (-not $engineReady) {
+    throw "The container engine is not ready. Open Rancher Desktop, finish any WSL2 or administrator prompt, then run this installer again."
+}
+
+docker compose version *> $null
+if ($LASTEXITCODE -ne 0) {
+    throw "Docker Compose is unavailable. In Rancher Desktop select the Moby container engine, then run this installer again."
 }
 
 $EnvPath = Join-Path $ProjectRoot ".env"
@@ -73,13 +123,13 @@ if (-not (Test-Path $EnvPath)) {
     $postgresPassword = New-RandomSecret 30
     $djangoSecret = New-RandomSecret 48
     $mcpToken = New-RandomSecret 48
-    $content = Get-Content (Join-Path $ProjectRoot ".env.example") -Raw
-    $content = $content.Replace("POSTGRES_PASSWORD=change-me", "POSTGRES_PASSWORD=$postgresPassword")
-    $content = $content.Replace("postgresql://pdp_one:change-me@db:5432/pdp_one", "postgresql://pdp_one:$postgresPassword@db:5432/pdp_one")
-    $content = $content.Replace("DJANGO_SECRET_KEY=change-this-in-production", "DJANGO_SECRET_KEY=$djangoSecret")
-    $content = $content.Replace("PDP_MCP_TOKEN=replace-with-a-long-random-token", "PDP_MCP_TOKEN=$mcpToken")
+    $envContent = Get-Content (Join-Path $ProjectRoot ".env.example") -Raw
+    $envContent = $envContent.Replace("POSTGRES_PASSWORD=change-me", "POSTGRES_PASSWORD=$postgresPassword")
+    $envContent = $envContent.Replace("postgresql://pdp_one:change-me@db:5432/pdp_one", "postgresql://pdp_one:$postgresPassword@db:5432/pdp_one")
+    $envContent = $envContent.Replace("DJANGO_SECRET_KEY=change-this-in-production", "DJANGO_SECRET_KEY=$djangoSecret")
+    $envContent = $envContent.Replace("PDP_MCP_TOKEN=replace-with-a-long-random-token", "PDP_MCP_TOKEN=$mcpToken")
     $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
-    [IO.File]::WriteAllText($EnvPath, $content, $utf8NoBom)
+    [IO.File]::WriteAllText($EnvPath, $envContent, $utf8NoBom)
     Write-Host "Secure configuration file created." -ForegroundColor Green
 } else {
     Write-Host "Existing .env file preserved." -ForegroundColor DarkYellow
