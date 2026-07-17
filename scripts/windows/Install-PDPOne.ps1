@@ -9,7 +9,7 @@ $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
 Set-StrictMode -Version Latest
 
-$InstallerVersion = "2026.07.17.4"
+$InstallerVersion = "2026.07.17.5"
 $ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 Set-Location $ProjectRoot
 
@@ -42,16 +42,6 @@ function New-RandomSecret([int]$Bytes = 36) {
     $generator = [System.Security.Cryptography.RandomNumberGenerator]::Create()
     try { $generator.GetBytes($buffer) } finally { $generator.Dispose() }
     return [Convert]::ToBase64String($buffer).TrimEnd('=').Replace('+', '-').Replace('/', '_')
-}
-
-function Set-RancherDefaults {
-    $root = "HKCU:\Software\Policies\Rancher Desktop\Defaults"
-    New-Item -Path $root -Force | Out-Null
-    New-ItemProperty -Path $root -Name "version" -Value 18 -PropertyType DWord -Force | Out-Null
-    New-Item -Path "$root\containerEngine" -Force | Out-Null
-    New-ItemProperty -Path "$root\containerEngine" -Name "name" -Value "moby" -PropertyType String -Force | Out-Null
-    New-Item -Path "$root\kubernetes" -Force | Out-Null
-    New-ItemProperty -Path "$root\kubernetes" -Name "enabled" -Value 0 -PropertyType DWord -Force | Out-Null
 }
 
 function Add-RancherPaths {
@@ -92,11 +82,19 @@ if (Test-Command "docker") {
 
 if (-not $engineReady) {
     Write-Host "Installing Rancher Desktop as the Docker-compatible container engine ..." -ForegroundColor Cyan
-    Set-RancherDefaults
     Install-WingetPackage "SUSE.RancherDesktop" "rdctl"
     Refresh-Path
     Add-RancherPaths
-    Start-RancherDesktop
+    if (Test-Command "rdctl") {
+        Write-Host "Starting Rancher Desktop with Moby and without Kubernetes ..." -ForegroundColor Cyan
+        rdctl start --container-engine.name=moby --kubernetes.enabled=false
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "rdctl start did not complete; opening Rancher Desktop for initial setup ..." -ForegroundColor Yellow
+            Start-RancherDesktop
+        }
+    } else {
+        Start-RancherDesktop
+    }
 
     Write-Host "Waiting for Rancher Desktop and the Moby engine ..." -ForegroundColor Yellow
     foreach ($attempt in 1..180) {
