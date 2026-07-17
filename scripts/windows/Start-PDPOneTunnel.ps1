@@ -37,10 +37,20 @@ function Get-SshClient {
     throw "The Windows OpenSSH client could not be installed."
 }
 
-Update-TunnelHosts
-
-docker compose up --detach
-if ($LASTEXITCODE -ne 0) { throw "PDP One failed to start." }
+$localEnvPath = Join-Path $ProjectRoot ".env"
+if (Test-Path -LiteralPath $localEnvPath) {
+    Update-TunnelHosts
+    docker compose up --detach
+    if ($LASTEXITCODE -ne 0) { throw "PDP One failed to start." }
+} else {
+    Write-Host "No local configuration was found in this ZIP folder; using the already-running PDP One service." -ForegroundColor Yellow
+    try {
+        $localResponse = Invoke-WebRequest -Uri "http://127.0.0.1:8080" -UseBasicParsing -TimeoutSec 10
+        Write-Host "The installed PDP One service is available on port 8080." -ForegroundColor Green
+    } catch {
+        throw "PDP One is not available on http://127.0.0.1:8080. Run INSTALL-PDP-ONE.bat from the installed folder first."
+    }
+}
 
 if (Get-Command "cloudflared" -ErrorAction SilentlyContinue) {
     Write-Host "Trying a temporary Cloudflare HTTPS URL ..." -ForegroundColor Yellow
@@ -59,4 +69,4 @@ Write-Host ""
 Write-Host "The HTTPS address printed below is the PDP One internet link." -ForegroundColor Green
 Write-Host "The free fallback link lasts up to 60 minutes. Keep this window open." -ForegroundColor Cyan
 Write-Host ""
-& $sshPath -p 443 -o "StrictHostKeyChecking=accept-new" -o "ConnectTimeout=20" -o "ServerAliveInterval=30" -o "ServerAliveCountMax=3" -o "ExitOnForwardFailure=yes" -R "0:127.0.0.1:8080" "free.pinggy.io"
+& $sshPath -p 443 -t -o "StrictHostKeyChecking=accept-new" -o "ConnectTimeout=20" -o "ServerAliveInterval=30" -o "ServerAliveCountMax=3" -o "ExitOnForwardFailure=yes" -R "0:127.0.0.1:8080" "free.pinggy.io" "u:Host:localhost" "u:Origin:https://localhost"
