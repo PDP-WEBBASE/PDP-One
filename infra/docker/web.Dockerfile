@@ -1,11 +1,12 @@
-FROM node:22-alpine AS build
+ARG PDP_DOCKER_REGISTRY=docker.arvancloud.ir/library
+FROM ${PDP_DOCKER_REGISTRY}/node:22-alpine AS build
 WORKDIR /app
 COPY package*.json ./
 RUN npm ci
 COPY . .
 RUN npm run build
 
-FROM node:22-alpine
+FROM ${PDP_DOCKER_REGISTRY}/node:22-alpine
 WORKDIR /app
 ENV NODE_ENV=production
 COPY --from=build /app ./
