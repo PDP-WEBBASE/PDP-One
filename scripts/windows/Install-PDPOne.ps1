@@ -17,14 +17,14 @@ function Test-Command([string]$Name) {
 function Install-WingetPackage([string]$Id, [string]$CommandName) {
     if (Test-Command $CommandName) { return }
     if ($SkipPackageInstall) {
-        throw "ابزار $CommandName نصب نیست. اسکریپت را بدون گزینه SkipPackageInstall اجرا کنید."
+        throw "$CommandName is not installed. Run this script without SkipPackageInstall."
     }
     if (-not (Test-Command "winget")) {
-        throw "Windows Package Manager (winget) در دسترس نیست. App Installer را از Microsoft Store نصب کنید."
+        throw "Windows Package Manager (winget) is unavailable. Install App Installer from Microsoft Store."
     }
-    Write-Host "در حال نصب $Id ..." -ForegroundColor Cyan
+    Write-Host "Installing $Id ..." -ForegroundColor Cyan
     winget install --id $Id --exact --silent --accept-package-agreements --accept-source-agreements
-    if ($LASTEXITCODE -ne 0) { throw "نصب $Id ناموفق بود." }
+    if ($LASTEXITCODE -ne 0) { throw "Installation failed for $Id." }
 }
 
 function New-RandomSecret([int]$Bytes = 36) {
@@ -34,7 +34,7 @@ function New-RandomSecret([int]$Bytes = 36) {
     return [Convert]::ToBase64String($buffer).TrimEnd('=').Replace('+', '-').Replace('/', '_')
 }
 
-Write-Host "PDP One - نصب خودکار نسخه آزمایشی ویندوز" -ForegroundColor Green
+Write-Host "PDP One - Windows trial installer" -ForegroundColor Green
 Install-WingetPackage "Git.Git" "git"
 Install-WingetPackage "Docker.DockerDesktop" "docker"
 Install-WingetPackage "Cloudflare.cloudflared" "cloudflared"
@@ -46,14 +46,14 @@ if (-not (Test-Command "docker")) {
 }
 
 if (-not (Test-Command "docker")) {
-    throw "Docker نصب شد اما هنوز در PATH فعال نیست. ویندوز را یک‌بار Restart و سپس همین اسکریپت را دوباره اجرا کنید."
+    throw "Docker was installed but is not active in PATH. Restart Windows, then run this installer again."
 }
 
 docker info *> $null
 if ($LASTEXITCODE -ne 0) {
     $DockerDesktop = "C:\Program Files\Docker\Docker\Docker Desktop.exe"
     if (Test-Path $DockerDesktop) { Start-Process $DockerDesktop }
-    Write-Host "در انتظار آماده‌شدن Docker Desktop ..." -ForegroundColor Yellow
+    Write-Host "Waiting for Docker Desktop ..." -ForegroundColor Yellow
     $ready = $false
     foreach ($attempt in 1..60) {
         Start-Sleep -Seconds 2
@@ -61,7 +61,7 @@ if ($LASTEXITCODE -ne 0) {
         if ($LASTEXITCODE -eq 0) { $ready = $true; break }
     }
     if (-not $ready) {
-        throw "Docker Desktop آماده نشد. آن را باز کنید، راه‌اندازی اولیه WSL2 را کامل کنید و اسکریپت را دوباره اجرا کنید."
+        throw "Docker Desktop did not become ready. Open it, finish initial WSL2 setup, and run this installer again."
     }
 }
 
@@ -76,19 +76,19 @@ if (-not (Test-Path $EnvPath)) {
     $content = $content.Replace("DJANGO_SECRET_KEY=change-this-in-production", "DJANGO_SECRET_KEY=$djangoSecret")
     $content = $content.Replace("PDP_MCP_TOKEN=replace-with-a-long-random-token", "PDP_MCP_TOKEN=$mcpToken")
     [IO.File]::WriteAllText($EnvPath, $content, [Text.UTF8Encoding]::new($false))
-    Write-Host "فایل تنظیمات امن ایجاد شد." -ForegroundColor Green
+    Write-Host "Secure configuration file created." -ForegroundColor Green
 } else {
-    Write-Host "فایل .env موجود حفظ شد." -ForegroundColor DarkYellow
+    Write-Host "Existing .env file preserved." -ForegroundColor DarkYellow
 }
 
 docker compose config --quiet
-if ($LASTEXITCODE -ne 0) { throw "تنظیمات Docker Compose معتبر نیست." }
+if ($LASTEXITCODE -ne 0) { throw "Docker Compose configuration is invalid." }
 
-Write-Host "در حال دریافت و ساخت سرویس‌ها؛ این مرحله بار اول ممکن است چند دقیقه طول بکشد ..." -ForegroundColor Cyan
+Write-Host "Downloading and building services. The first run may take several minutes ..." -ForegroundColor Cyan
 docker compose up --build --detach
-if ($LASTEXITCODE -ne 0) { throw "راه‌اندازی سرویس‌های PDP One ناموفق بود." }
+if ($LASTEXITCODE -ne 0) { throw "PDP One services failed to start." }
 
-Write-Host "در انتظار آماده‌شدن برنامه ..." -ForegroundColor Yellow
+Write-Host "Waiting for the application ..." -ForegroundColor Yellow
 $backendReady = $false
 foreach ($attempt in 1..60) {
     docker compose exec -T backend python manage.py check *> $null
@@ -97,14 +97,14 @@ foreach ($attempt in 1..60) {
 }
 if (-not $backendReady) {
     docker compose logs --tail 100 backend
-    throw "بک‌اند PDP One در زمان مقرر آماده نشد. گزارش بالا را بررسی کنید."
+    throw "PDP One backend did not become ready in time. Review the log above."
 }
 
 if (-not $SkipAdministrator) {
-    Write-Host "اکنون حساب مدیر اولیه را تعریف کنید." -ForegroundColor Yellow
+    Write-Host "Create the initial administrator account now." -ForegroundColor Yellow
     docker compose exec backend python manage.py createsuperuser
 }
 
-Write-Host "`nPDP One آماده است: http://localhost:8080" -ForegroundColor Green
-Write-Host "برای لینک موقت اینترنتی اجرا کنید:" -ForegroundColor Cyan
+Write-Host "`nPDP One is ready: http://localhost:8080" -ForegroundColor Green
+Write-Host "To create a temporary internet link, run:" -ForegroundColor Cyan
 Write-Host "powershell -ExecutionPolicy Bypass -File .\scripts\windows\Start-PDPOneTunnel.ps1"
