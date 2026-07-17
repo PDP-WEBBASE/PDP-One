@@ -2,7 +2,7 @@ name: pdp-one
 
 services:
   db:
-    image: postgres:17-alpine
+    image: ${PDP_DOCKER_REGISTRY:-docker.arvancloud.ir/library}/postgres:17-alpine
     restart: unless-stopped
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-pdp_one}
@@ -17,7 +17,7 @@ services:
       retries: 8
 
   redis:
-    image: redis:7-alpine
+    image: ${PDP_DOCKER_REGISTRY:-docker.arvancloud.ir/library}/redis:7-alpine
     restart: unless-stopped
     command: redis-server --appendonly yes
     volumes:
@@ -26,6 +26,8 @@ services:
   backend:
     build:
       context: ./backend
+      args:
+        PDP_DOCKER_REGISTRY: ${PDP_DOCKER_REGISTRY:-docker.arvancloud.ir/library}
     restart: unless-stopped
     env_file: .env
     command: sh -c "python manage.py migrate && gunicorn config.wsgi:application --bind 0.0.0.0:8000 --workers 3"
@@ -40,6 +42,8 @@ services:
   worker:
     build:
       context: ./backend
+      args:
+        PDP_DOCKER_REGISTRY: ${PDP_DOCKER_REGISTRY:-docker.arvancloud.ir/library}
     restart: unless-stopped
     env_file: .env
     command: celery -A config worker -l INFO
@@ -50,6 +54,8 @@ services:
   beat:
     build:
       context: ./backend
+      args:
+        PDP_DOCKER_REGISTRY: ${PDP_DOCKER_REGISTRY:-docker.arvancloud.ir/library}
     restart: unless-stopped
     env_file: .env
     command: celery -A config beat -l INFO --scheduler django_celery_beat.schedulers:DatabaseScheduler
@@ -58,6 +64,8 @@ services:
   mcp:
     build:
       context: ./services/pdp_mcp
+      args:
+        PDP_DOCKER_REGISTRY: ${PDP_DOCKER_REGISTRY:-docker.arvancloud.ir/library}
     restart: unless-stopped
     env_file: .env
     environment:
@@ -68,12 +76,14 @@ services:
     build:
       context: .
       dockerfile: infra/docker/web.Dockerfile
+      args:
+        PDP_DOCKER_REGISTRY: ${PDP_DOCKER_REGISTRY:-docker.arvancloud.ir/library}
     restart: unless-stopped
     environment:
       NEXT_PUBLIC_API_URL: /api/v1
 
   nginx:
-    image: nginx:1.27-alpine
+    image: ${PDP_DOCKER_REGISTRY:-docker.arvancloud.ir/library}/nginx:1.27-alpine
     restart: unless-stopped
     ports:
       - "8080:80"
