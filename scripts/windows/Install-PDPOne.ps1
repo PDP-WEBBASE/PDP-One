@@ -10,7 +10,7 @@ $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
 Set-StrictMode -Version Latest
 
-$InstallerVersion = "2026.07.18.11"
+$InstallerVersion = "2026.07.18.12"
 $ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 Set-Location $ProjectRoot
 
@@ -234,7 +234,7 @@ $requiredImages = @(
     "node:22-alpine"
 )
 foreach ($image in $requiredImages) {
-    docker image inspect $image *> $null
+    cmd /c "docker image inspect $image >nul 2>&1"
     if ($LASTEXITCODE -eq 0) { continue }
     Write-Host "Downloading $image ..." -ForegroundColor Cyan
     docker pull $image
