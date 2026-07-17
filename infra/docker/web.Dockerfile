@@ -1,12 +1,12 @@
 ARG PDP_DOCKER_REGISTRY=docker.arvancloud.ir/library
-FROM ${PDP_DOCKER_REGISTRY}/node:22-alpine AS build
+FROM ${PDP_DOCKER_REGISTRY}/node:22-bookworm-slim AS build
 WORKDIR /app
 COPY package*.json ./
 RUN npm ci
 COPY . .
 RUN npm run build
 
-FROM ${PDP_DOCKER_REGISTRY}/node:22-alpine
+FROM ${PDP_DOCKER_REGISTRY}/node:22-bookworm-slim
 WORKDIR /app
 ENV NODE_ENV=production
 COPY --from=build /app ./
