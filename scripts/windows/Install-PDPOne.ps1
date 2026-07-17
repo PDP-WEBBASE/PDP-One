@@ -10,7 +10,7 @@ $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
 Set-StrictMode -Version Latest
 
-$InstallerVersion = "2026.07.18.13"
+$InstallerVersion = "2026.07.18.14"
 $ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 Set-Location $ProjectRoot
 
@@ -232,7 +232,7 @@ $requiredImages = @(
     "$containerRegistry/redis:7-alpine",
     "$containerRegistry/nginx:1.27-alpine",
     "$containerRegistry/python:3.13-slim",
-    "$containerRegistry/node:22-alpine"
+    "$containerRegistry/node:22-bookworm-slim"
 )
 foreach ($image in $requiredImages) {
     cmd /c "docker image inspect $image >nul 2>&1"
