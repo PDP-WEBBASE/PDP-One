@@ -10,5 +10,7 @@ if not "%errorlevel%"=="0" (
 )
 
 cd /d "%~dp0"
+echo Clearing the Windows DNS cache...
+ipconfig /flushdns >nul 2>&1
 powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\windows\Connect-PDPOneChatGPT.ps1"
 if errorlevel 1 pause
