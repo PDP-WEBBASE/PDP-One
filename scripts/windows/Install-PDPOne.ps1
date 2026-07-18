@@ -323,8 +323,8 @@ if (-not $backendReady) {
     throw "PDP One backend did not become ready in time. Review the log above."
 }
 
-$adminUser = ((Select-String -LiteralPath $EnvPath -Pattern '^PDP_TRIAL_ADMIN_USERNAME=(.*)).Matches.Groups[1].Value)
-$adminPassword = ((Select-String -LiteralPath $EnvPath -Pattern '^PDP_TRIAL_ADMIN_PASSWORD=(.*)).Matches.Groups[1].Value)
+$adminUser = ((Select-String -LiteralPath $EnvPath -Pattern '^PDP_TRIAL_ADMIN_USERNAME=(.*)$').Matches.Groups[1].Value)
+$adminPassword = ((Select-String -LiteralPath $EnvPath -Pattern '^PDP_TRIAL_ADMIN_PASSWORD=(.*)$').Matches.Groups[1].Value)
 $loginPath = Join-Path $ProjectRoot "PDP-ONE-LOCAL-LOGIN.txt"
 $loginText = "PDP One local address: http://localhost:8080`r`nUsername: $adminUser`r`nPassword: $adminPassword`r`n`r`nKeep this file private."
 [IO.File]::WriteAllText($loginPath, $loginText, [Text.UTF8Encoding]::new($false))
