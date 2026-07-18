@@ -6,7 +6,7 @@ class ContractSerializer(serializers.ModelSerializer):
     class Meta:
         model = Contract
         fields = ["id", "code", "title", "employer", "field", "value_rials", "progress", "due_date", "status", "status_label", "created_at", "updated_at"]
-        read_only_fields = ["id", "created_at", "updated_at"]
+        read_only_fields = ["id", "status", "created_at", "updated_at"]
     def validate_progress(self, value):
         if value > 100:
             raise serializers.ValidationError("Progress cannot exceed 100")
@@ -16,7 +16,7 @@ class AnalysisReportSerializer(serializers.ModelSerializer):
     class Meta:
         model = AnalysisReport
         fields = "__all__"
-        read_only_fields = ["id", "requested_by", "created_at", "updated_at"]
+        read_only_fields = ["id", "requested_by", "review_status", "created_at", "updated_at"]
 
 
 class ReceivableSerializer(serializers.ModelSerializer):
