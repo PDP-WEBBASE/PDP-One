@@ -5,7 +5,7 @@
 ## Current milestone
 
 - Persian RTL responsive dashboard and PWA manifest
-- Contract, project, tender, and analysis demonstration flows
+- Contract, finance and receivables, project, tender, and analysis demonstration flows
 - Django REST API foundation with PostgreSQL models
 - Redis/Celery background processing foundation
 - Tool-only MCP service for ChatGPT reads and draft writes
