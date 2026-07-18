@@ -91,6 +91,31 @@ function New-RandomSecret([int]$Bytes = 36) {
     return [Convert]::ToBase64String($buffer).TrimEnd('=').Replace('+', '-').Replace('/', '_')
 }
 
+function Ensure-LocalCsrfOrigins([string]$Path) {
+    $content = [IO.File]::ReadAllText($Path)
+    $name = "DJANGO_CSRF_TRUSTED_ORIGINS"
+    $pattern = "(?m)^$([regex]::Escape($name))=(.*)$"
+    $match = [regex]::Match($content, $pattern)
+    $origins = @()
+    if ($match.Success) {
+        $origins = @($match.Groups[1].Value.Split(',') | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+    }
+
+    foreach ($requiredOrigin in @("http://localhost:8080", "http://127.0.0.1:8080", "https://*.ts.net")) {
+        if ($origins -notcontains $requiredOrigin) {
+            $origins += $requiredOrigin
+        }
+    }
+
+    $newLine = "$name=$($origins -join ',')"
+    if ($match.Success) {
+        $content = [regex]::Replace($content, $pattern, $newLine)
+    } else {
+        $content = $content.TrimEnd() + "`r`n$newLine`r`n"
+    }
+    [IO.File]::WriteAllText($Path, $content, [Text.UTF8Encoding]::new($false))
+}
+
 function Ensure-TrialConnectionSettings([string]$Path) {
     $content = [IO.File]::ReadAllText($Path)
     if ($content -notmatch '(?m)^PDP_MCP_PATH_TOKEN=') {
@@ -185,6 +210,7 @@ if (-not (Test-Path -LiteralPath (Join-Path $InstalledRoot ".env"))) {
 Copy-ApplicationFiles -From $SourceRoot -To $InstalledRoot
 Set-Location $InstalledRoot
 Ensure-TrialConnectionSettings -Path (Join-Path $InstalledRoot ".env")
+Ensure-LocalCsrfOrigins -Path (Join-Path $InstalledRoot ".env")
 
 docker compose config --quiet
 if ($LASTEXITCODE -ne 0) { throw "Docker Compose configuration is invalid. The existing data was not deleted." }
