@@ -55,11 +55,22 @@ function Set-EnvValue([string]$Path, [string]$Name, [string]$Value) {
     [IO.File]::WriteAllText($Path, $content, [Text.UTF8Encoding]::new($false))
 }
 
-function Wait-ForUrl([string]$Path, [string]$Pattern, [int]$Seconds = 35) {
+function Wait-ForUrl([string[]]$Paths, [string]$Pattern, [int]$Seconds = 35) {
     foreach ($attempt in 1..$Seconds) {
-        if (Test-Path -LiteralPath $Path) {
-            $text = Get-Content -LiteralPath $Path -Raw -ErrorAction SilentlyContinue
-            $match = [regex]::Match([string]$text, $Pattern)
+        foreach ($logPath in $Paths) {
+            if (-not (Test-Path -LiteralPath $logPath)) { continue }
+
+            $text = [string]::Empty
+            try {
+                $rawText = Get-Content -LiteralPath $logPath -Raw -ErrorAction Stop
+                if ($null -ne $rawText) { $text = [string]$rawText }
+            } catch {
+                # The tunnel process may still be creating or writing the log.
+                continue
+            }
+
+            if ([string]::IsNullOrWhiteSpace($text)) { continue }
+            $match = [regex]::Match($text, $Pattern)
             if ($match.Success) { return $match.Value.TrimEnd('/', '.', ')') }
         }
         Start-Sleep -Seconds 1
@@ -67,7 +78,7 @@ function Wait-ForUrl([string]$Path, [string]$Pattern, [int]$Seconds = 35) {
     return $null
 }
 
-Write-Host "PDP One - automatic ChatGPT connection" -ForegroundColor Green
+Write-Host "PDP One - automatic ChatGPT connection 2026.07.18.2" -ForegroundColor Green
 if (-not (Get-Command docker -ErrorAction SilentlyContinue)) { throw "Docker command is unavailable." }
 if (-not (Test-DockerEngine)) { throw "Open Rancher Desktop and wait until the Moby engine is ready." }
 
@@ -121,7 +132,7 @@ if (Get-Command cloudflared -ErrorAction SilentlyContinue) {
     $cfErr = Join-Path $logDir "cloudflared.err.log"
     Remove-Item $cfOut, $cfErr -Force -ErrorAction SilentlyContinue
     $tunnelProcess = Start-Process cloudflared -ArgumentList @("tunnel", "--url", "http://127.0.0.1:8080", "--no-autoupdate") -PassThru -WindowStyle Hidden -RedirectStandardOutput $cfOut -RedirectStandardError $cfErr
-    $publicBase = Wait-ForUrl -Path $cfErr -Pattern 'https://[a-z0-9-]+\.trycloudflare\.com' -Seconds 35
+    $publicBase = Wait-ForUrl -Paths @($cfErr, $cfOut) -Pattern 'https://[a-z0-9-]+\.trycloudflare\.com' -Seconds 35
     if ($publicBase) { $provider = "Cloudflare Quick Tunnel" }
     else {
         Stop-Process -Id $tunnelProcess.Id -Force -ErrorAction SilentlyContinue
@@ -142,9 +153,7 @@ if (-not $publicBase) {
         "-R", "0:127.0.0.1:8080", "free.pinggy.io"
     )
     $tunnelProcess = Start-Process $ssh.Source -ArgumentList $arguments -PassThru -WindowStyle Hidden -RedirectStandardOutput $pgOut -RedirectStandardError $pgErr
-    foreach ($path in @($pgOut, $pgErr)) {
-        if (-not $publicBase) { $publicBase = Wait-ForUrl -Path $path -Pattern 'https://[A-Za-z0-9.-]*pinggy[^\s\x1b]*' -Seconds 20 }
-    }
+    $publicBase = Wait-ForUrl -Paths @($pgOut, $pgErr) -Pattern 'https://[A-Za-z0-9.-]*pinggy[^\s\x1b]*' -Seconds 35
     if ($publicBase) { $provider = "Pinggy free tunnel" }
 }
 
