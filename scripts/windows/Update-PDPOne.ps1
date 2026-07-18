@@ -57,6 +57,30 @@ function Copy-ApplicationFiles([string]$From, [string]$To) {
     if ($LASTEXITCODE -gt 7) { throw "Application files could not be copied. Robocopy exit code: $LASTEXITCODE" }
 }
 
+function New-RandomSecret([int]$Bytes = 36) {
+    $buffer = New-Object byte[] $Bytes
+    $generator = [System.Security.Cryptography.RandomNumberGenerator]::Create()
+    try { $generator.GetBytes($buffer) } finally { $generator.Dispose() }
+    return [Convert]::ToBase64String($buffer).TrimEnd('=').Replace('+', '-').Replace('/', '_')
+}
+
+function Ensure-TrialConnectionSettings([string]$Path) {
+    $content = [IO.File]::ReadAllText($Path)
+    if ($content -notmatch '(?m)^PDP_MCP_PATH_TOKEN=') {
+        $content = $content.TrimEnd() + "`r`nPDP_MCP_PATH_TOKEN=$(New-RandomSecret 32)`r`n"
+    }
+    if ($content -notmatch '(?m)^PDP_TRIAL_MODE=') {
+        $content = $content.TrimEnd() + "`r`nPDP_TRIAL_MODE=true`r`n"
+    }
+    if ($content -notmatch '(?m)^PDP_TRIAL_ADMIN_USERNAME=') {
+        $content = $content.TrimEnd() + "`r`nPDP_TRIAL_ADMIN_USERNAME=pdp-admin`r`n"
+    }
+    if ($content -notmatch '(?m)^PDP_TRIAL_ADMIN_PASSWORD=') {
+        $content = $content.TrimEnd() + "`r`nPDP_TRIAL_ADMIN_PASSWORD=$(New-RandomSecret 24)`r`n"
+    }
+    [IO.File]::WriteAllText($Path, $content, [Text.UTF8Encoding]::new($false))
+}
+
 Write-Host "PDP One automatic updater" -ForegroundColor Green
 if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
     throw "Docker is unavailable. Start Rancher Desktop and try again."
@@ -72,6 +96,7 @@ if (-not (Test-Path -LiteralPath (Join-Path $InstalledRoot ".env"))) {
 
 Copy-ApplicationFiles -From $SourceRoot -To $InstalledRoot
 Set-Location $InstalledRoot
+Ensure-TrialConnectionSettings -Path (Join-Path $InstalledRoot ".env")
 
 docker compose config --quiet
 if ($LASTEXITCODE -ne 0) { throw "Docker Compose configuration is invalid. The existing data was not deleted." }
