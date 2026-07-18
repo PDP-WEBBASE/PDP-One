@@ -23,6 +23,15 @@ function Find-InstalledProjectRoot {
     $sourceRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
     if (Test-Path -LiteralPath (Join-Path $sourceRoot ".env")) { return $sourceRoot }
 
+    $installationPathFile = Join-Path $env:LOCALAPPDATA "PDP-One\installation-root.txt"
+    if (Test-Path -LiteralPath $installationPathFile) {
+        $savedRoot = ([IO.File]::ReadAllText($installationPathFile)).Trim()
+        if (-not [string]::IsNullOrWhiteSpace($savedRoot) -and
+            (Test-Path -LiteralPath (Join-Path $savedRoot ".env"))) {
+            return (Resolve-Path -LiteralPath $savedRoot).Path
+        }
+    }
+
     $containerId = docker ps -a `
         --filter "label=com.docker.compose.project=pdp-one" `
         --filter "label=com.docker.compose.service=nginx" `
@@ -108,7 +117,7 @@ function Get-TailscaleContainerStatus {
     try { return ($statusText | ConvertFrom-Json) } catch { return $null }
 }
 
-Write-Host "PDP One - automatic ChatGPT connection 2026.07.18.12" -ForegroundColor Green
+Write-Host "PDP One - automatic ChatGPT connection 2026.07.19.13" -ForegroundColor Green
 if (-not (Get-Command docker -ErrorAction SilentlyContinue)) { throw "Docker command is unavailable." }
 if (-not (Test-DockerEngine)) { throw "Open Rancher Desktop and wait until the Moby engine is ready." }
 
