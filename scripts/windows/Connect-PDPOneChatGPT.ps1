@@ -108,7 +108,7 @@ function Get-TailscaleContainerStatus {
     try { return ($statusText | ConvertFrom-Json) } catch { return $null }
 }
 
-Write-Host "PDP One - automatic ChatGPT connection 2026.07.18.8" -ForegroundColor Green
+Write-Host "PDP One - automatic ChatGPT connection 2026.07.18.9" -ForegroundColor Green
 if (-not (Get-Command docker -ErrorAction SilentlyContinue)) { throw "Docker command is unavailable." }
 if (-not (Test-DockerEngine)) { throw "Open Rancher Desktop and wait until the Moby engine is ready." }
 
@@ -187,8 +187,17 @@ $tsLog = Join-Path $logDir "tailscale-funnel.log"
 Write-Host "Starting the official Tailscale container through the regional registry cache ..." -ForegroundColor Cyan
 Remove-Item $tsOut, $tsErr, $tsLog -Force -ErrorAction SilentlyContinue
 $startLines = @()
-& docker compose --profile tunnel up --detach --force-recreate tailscale 2>&1 | Tee-Object -Variable startLines | Out-Host
-$tailscaleStartExitCode = $LASTEXITCODE
+$previousErrorAction = $ErrorActionPreference
+try {
+    # Windows PowerShell 5.1 wraps normal native stderr progress (for example
+    # Docker "Pulling") as NativeCommandError when stderr is redirected.
+    $ErrorActionPreference = "Continue"
+    $startLines = @(& docker compose --profile tunnel up --detach --force-recreate tailscale 2>&1)
+    $tailscaleStartExitCode = $LASTEXITCODE
+} finally {
+    $ErrorActionPreference = $previousErrorAction
+}
+$startLines | ForEach-Object { Write-Host ([string]$_) }
 [IO.File]::WriteAllText($tsOut, ($startLines | Out-String), [Text.UTF8Encoding]::new($false))
 
 if ($tailscaleStartExitCode -eq 0) {
@@ -239,9 +248,18 @@ if ($tailscaleStartExitCode -eq 0) {
     if ($isLoggedIn) {
         foreach ($funnelAttempt in 1..2) {
             $funnelLines = @()
-            & docker compose --profile tunnel exec -T tailscale tailscale --socket=/tmp/tailscaled.sock funnel --bg --yes 80 2>&1 | Tee-Object -Variable funnelLines | Out-Host
-            $funnelExitCode = $LASTEXITCODE
-            $funnelStatus = (& docker compose --profile tunnel exec -T tailscale tailscale --socket=/tmp/tailscaled.sock funnel status 2>&1 | Out-String)
+            $funnelStatusLines = @()
+            $previousErrorAction = $ErrorActionPreference
+            try {
+                $ErrorActionPreference = "Continue"
+                $funnelLines = @(& docker compose --profile tunnel exec -T tailscale tailscale --socket=/tmp/tailscaled.sock funnel --bg --yes 80 2>&1)
+                $funnelExitCode = $LASTEXITCODE
+                $funnelStatusLines = @(& docker compose --profile tunnel exec -T tailscale tailscale --socket=/tmp/tailscaled.sock funnel status 2>&1)
+            } finally {
+                $ErrorActionPreference = $previousErrorAction
+            }
+            $funnelLines | ForEach-Object { Write-Host ([string]$_) }
+            $funnelStatus = ($funnelStatusLines | Out-String)
             $funnelText = (($funnelLines | Out-String) + [Environment]::NewLine + $funnelStatus)
             [IO.File]::WriteAllText($tsLog, $funnelText, [Text.UTF8Encoding]::new($false))
 
@@ -268,7 +286,14 @@ if ($tailscaleStartExitCode -eq 0) {
 }
 
 if (-not $tailscaleContainerActive) {
-    $containerLogs = (& docker compose --profile tunnel logs --tail 100 tailscale 2>&1 | Out-String)
+    $previousErrorAction = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = "Continue"
+        $containerLogLines = @(& docker compose --profile tunnel logs --tail 100 tailscale 2>&1)
+    } finally {
+        $ErrorActionPreference = $previousErrorAction
+    }
+    $containerLogs = ($containerLogLines | Out-String)
     Add-Content -LiteralPath $tsErr -Value $containerLogs
 }
 
