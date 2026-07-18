@@ -106,15 +106,47 @@ if (-not (Test-DockerEngine)) {
             )
         }
     }
-    foreach ($attempt in 1..100) {
+    foreach ($attempt in 1..15) {
         if (Test-DockerEngine) { break }
         if (($attempt % 5) -eq 0) {
-            Write-Host "Waiting for Moby ... $($attempt * 3) seconds" -ForegroundColor DarkYellow
+            Write-Host "Initial Moby startup wait ... $($attempt * 3) seconds" -ForegroundColor DarkYellow
         }
         Start-Sleep -Seconds 3
     }
     if (-not (Test-DockerEngine)) {
-        throw "Rancher Desktop could not start automatically. Open it and wait for Moby, then run the updater again."
+        Write-Host "The Rancher backend is stale. Restarting Rancher Desktop and WSL automatically ..." -ForegroundColor Yellow
+        if ($rdctl) {
+            $previousErrorAction = $ErrorActionPreference
+            try {
+                $ErrorActionPreference = "Continue"
+                & $rdctl.Source shutdown 2>&1 | Out-Host
+            } finally {
+                $ErrorActionPreference = $previousErrorAction
+            }
+            Start-Sleep -Seconds 8
+        }
+        Get-Process -Name "Rancher Desktop" -ErrorAction SilentlyContinue |
+            Stop-Process -Force -ErrorAction SilentlyContinue
+        & wsl.exe --shutdown | Out-Host
+        Start-Sleep -Seconds 5
+
+        $desktopExe = "C:\Program Files\Rancher Desktop\Rancher Desktop.exe"
+        if (Test-Path -LiteralPath $desktopExe) {
+            Start-Process -FilePath $desktopExe -ArgumentList @(
+                "--containerEngine.name", "moby",
+                "--kubernetes.enabled=false"
+            )
+        }
+        foreach ($attempt in 1..100) {
+            if (Test-DockerEngine) { break }
+            if (($attempt % 5) -eq 0) {
+                Write-Host "Waiting after automatic restart ... $($attempt * 3) seconds" -ForegroundColor DarkYellow
+            }
+            Start-Sleep -Seconds 3
+        }
+    }
+    if (-not (Test-DockerEngine)) {
+        throw "Rancher Desktop could not start after an automatic restart. Run CLEAN-PDP-ONE-DISK.bat to reclaim WSL disk space."
     }
 }
 
