@@ -1,13 +1,16 @@
 "use client";
 
-import { FormEvent, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useState } from "react";
 
 type Page = "dashboard" | "contracts" | "finance" | "projects" | "tenders" | "analysis";
 type Status = "فعال" | "در انتظار" | "بحرانی" | "پیش‌نویس";
 type Contract = { id: string; title: string; employer: string; field: string; value: string; progress: number; status: Status; due: string };
-type FinanceStatus = "معوق" | "سررسید نزدیک" | "در انتظار تأیید" | "وصول شده";
+type FinanceStatus = "پیش‌نویس" | "باز" | "معوق" | "سررسید نزدیک" | "در انتظار تأیید" | "وصول شده" | "لغوشده";
 type FinanceFilter = "همه" | FinanceStatus;
-type Receivable = { id: string; contractId: string; title: string; employer: string; statement: string; amount: string; received: string; due: string; status: FinanceStatus };
+type Receivable = { recordId?: string; id: string; contractId: string; title: string; employer: string; statement: string; amount: string; received: string; due: string; status: FinanceStatus };
+type FinanceMode = "loading" | "live" | "auth" | "demo";
+type ApiReceivable = { id: string; reference_code: string; contract_code: string; contract_title: string; employer: string; statement_title: string; amount_rials: string; received_rials: string; due_date: string; status_label: FinanceStatus };
+type FinanceSummary = { openAmount: string; overdueAmount: string; collectedAmount: string; dueSoonCount: number; openCount: number };
 
 const seedContracts: Contract[] = [
   { id: "PDP-1405-012", title: "مطالعات طرح جامع شهرک صنعتی صفادشت", employer: "شرکت شهرک‌های صنعتی تهران", field: "برنامه‌ریزی فضایی", value: "۱۲.۸ میلیارد", progress: 72, status: "فعال", due: "۲۸ مرداد ۱۴۰۵" },
@@ -23,6 +26,8 @@ const seedReceivables: Receivable[] = [
   { id: "FIN-1405-046", contractId: "PDP-1405-015", title: "مطالعات امکان‌سنجی نیروگاه خورشیدی", employer: "شرکت انرژی آفتاب", statement: "پیش‌پرداخت مرحله اول", amount: "۱.۱ میلیارد", received: "—", due: "۸ مرداد ۱۴۰۵", status: "در انتظار تأیید" },
   { id: "FIN-1405-035", contractId: "PDP-1405-012", title: "مطالعات طرح جامع شهرک صنعتی صفادشت", employer: "شرکت شهرک‌های صنعتی تهران", statement: "صورت‌وضعیت شماره ۵", amount: "۶.۲ میلیارد", received: "۶.۲ میلیارد", due: "۱۵ اردیبهشت ۱۴۰۵", status: "وصول شده" },
 ];
+
+const demoFinanceSummary: FinanceSummary = { openAmount: "۲۶.۴", overdueAmount: "۹.۷", collectedAmount: "۴۸.۲", dueSoonCount: 3, openCount: 7 };
 
 const nav: { id: Page; label: string; icon: string }[] = [
   { id: "dashboard", label: "داشبورد مدیریت", icon: "◫" },
@@ -41,7 +46,40 @@ const stats = [
 ];
 
 const statusClass = (status: Status) => `status ${status === "فعال" ? "ok" : status === "بحرانی" ? "danger" : status === "پیش‌نویس" ? "draft" : "waiting"}`;
-const financeStatusClass = (status: FinanceStatus) => `finance-status ${status === "وصول شده" ? "paid" : status === "معوق" ? "overdue" : status === "سررسید نزدیک" ? "soon" : "review"}`;
+const financeStatusClass = (status: FinanceStatus) => `finance-status ${status === "وصول شده" ? "paid" : status === "معوق" ? "overdue" : status === "سررسید نزدیک" ? "soon" : status === "پیش‌نویس" || status === "لغوشده" ? "draft" : "review"}`;
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || "/api/v1";
+const numberFa = new Intl.NumberFormat("fa-IR", { maximumFractionDigits: 1 });
+const dateFa = new Intl.DateTimeFormat("fa-IR-u-ca-persian", { year: "numeric", month: "long", day: "numeric" });
+
+function displayRials(value: string) {
+  const amount = Number(value);
+  return amount ? `${numberFa.format(amount / 10_000_000_000)} میلیارد` : "—";
+}
+
+function billionValue(value: string | number) {
+  return numberFa.format(Number(value) / 10_000_000_000);
+}
+
+function mapApiReceivable(item: ApiReceivable): Receivable {
+  return {
+    recordId: item.id,
+    id: item.reference_code,
+    contractId: item.contract_code,
+    title: item.contract_title,
+    employer: item.employer,
+    statement: item.statement_title,
+    amount: displayRials(item.amount_rials),
+    received: displayRials(item.received_rials),
+    due: dateFa.format(new Date(`${item.due_date}T12:00:00`)),
+    status: item.status_label,
+  };
+}
+
+async function csrfToken() {
+  const response = await fetch(`${API_BASE}/auth/session/`, { credentials: "include", headers: { Accept: "application/json" } });
+  if (!response.ok) throw new Error("session-unavailable");
+  return String((await response.json()).csrf_token);
+}
 
 export default function Home() {
   const [page, setPage] = useState<Page>("dashboard");
@@ -50,13 +88,56 @@ export default function Home() {
   const [search, setSearch] = useState("");
   const [contracts, setContracts] = useState(seedContracts);
   const [financeFilter, setFinanceFilter] = useState<FinanceFilter>("همه");
+  const [financeRecords, setFinanceRecords] = useState(seedReceivables);
+  const [financeSummary, setFinanceSummary] = useState(demoFinanceSummary);
+  const [financeMode, setFinanceMode] = useState<FinanceMode>("loading");
+  const [financeModal, setFinanceModal] = useState(false);
+  const [receiptModal, setReceiptModal] = useState(false);
+  const [selectedReceivable, setSelectedReceivable] = useState<Receivable | null>(null);
+  const [loginModal, setLoginModal] = useState(false);
+  const [financeRefresh, setFinanceRefresh] = useState(0);
+  const [saving, setSaving] = useState(false);
   const [toast, setToast] = useState("");
   const results = useMemo(() => contracts.filter((c) => !search || [c.id, c.title, c.employer, c.field].some((v) => v.includes(search))), [contracts, search]);
-  const receivables = useMemo(() => seedReceivables.filter((item) => {
+  const receivables = useMemo(() => financeRecords.filter((item) => {
     const matchesFilter = financeFilter === "همه" || item.status === financeFilter;
     const matchesSearch = !search || [item.id, item.contractId, item.title, item.employer, item.statement].some((value) => value.includes(search));
     return matchesFilter && matchesSearch;
-  }), [financeFilter, search]);
+  }), [financeFilter, financeRecords, search]);
+
+  useEffect(() => {
+    if (page !== "finance") return;
+    let cancelled = false;
+    async function loadFinance() {
+      setFinanceMode("loading");
+      try {
+        const response = await fetch(`${API_BASE}/receivables/?ordering=due_date`, { credentials: "include", headers: { Accept: "application/json" } });
+        if (response.status === 401 || response.status === 403) {
+          if (!cancelled) setFinanceMode("auth");
+          return;
+        }
+        if (!response.ok || !(response.headers.get("content-type") || "").includes("application/json")) throw new Error("api-unavailable");
+        const payload = await response.json();
+        const summaryResponse = await fetch(`${API_BASE}/financial-summary/`, { credentials: "include", headers: { Accept: "application/json" } });
+        if (!summaryResponse.ok || !(summaryResponse.headers.get("content-type") || "").includes("application/json")) throw new Error("summary-unavailable");
+        const summary = await summaryResponse.json();
+        const items: ApiReceivable[] = Array.isArray(payload) ? payload : payload.results || [];
+        if (!cancelled) {
+          setFinanceRecords(items.map(mapApiReceivable));
+          setFinanceSummary({ openAmount: billionValue(summary.open_amount_rials), overdueAmount: billionValue(summary.overdue_amount_rials), collectedAmount: billionValue(summary.collected_amount_rials), dueSoonCount: Number(summary.due_soon_count), openCount: Number(summary.open_count) });
+          setFinanceMode("live");
+        }
+      } catch {
+        if (!cancelled) {
+          setFinanceRecords(seedReceivables);
+          setFinanceSummary(demoFinanceSummary);
+          setFinanceMode("demo");
+        }
+      }
+    }
+    loadFinance();
+    return () => { cancelled = true; };
+  }, [page, financeRefresh]);
 
   function navigate(next: Page) { setPage(next); setMenu(false); }
   function notify(message: string) { setToast(message); window.setTimeout(() => setToast(""), 2600); }
@@ -69,6 +150,80 @@ export default function Home() {
       value: `${String(form.get("value") || "—")} میلیارد`, progress: 0, status: "پیش‌نویس", due: "تعیین نشده",
     }, ...items]);
     setModal(false); setPage("contracts"); notify("پیش‌نویس قرارداد ثبت شد");
+  }
+
+  async function submitLogin(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setSaving(true);
+    const form = new FormData(event.currentTarget);
+    try {
+      const token = await csrfToken();
+      const response = await fetch(`${API_BASE}/auth/login/`, {
+        method: "POST", credentials: "include",
+        headers: { "Content-Type": "application/json", "X-CSRFToken": token, Accept: "application/json" },
+        body: JSON.stringify({ username: form.get("username"), password: form.get("password") }),
+      });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.detail || "ورود انجام نشد.");
+      setLoginModal(false); setFinanceRefresh((value) => value + 1); notify(`ورود ${payload.username} موفق بود`);
+    } catch (error) {
+      notify(error instanceof Error && error.message !== "session-unavailable" ? error.message : "ارتباط با سرور ورود برقرار نشد");
+    } finally { setSaving(false); }
+  }
+
+  async function submitReceivable(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setSaving(true);
+    const form = new FormData(event.currentTarget);
+    try {
+      const token = await csrfToken();
+      const response = await fetch(`${API_BASE}/receivables/`, {
+        method: "POST", credentials: "include",
+        headers: { "Content-Type": "application/json", "X-CSRFToken": token, Accept: "application/json" },
+        body: JSON.stringify({
+          contract_code: form.get("contract_code"), contract_title: form.get("contract_title"),
+          employer: form.get("employer"), statement_title: form.get("statement_title"),
+          amount_rials: form.get("amount_rials"), received_rials: 0, due_date: form.get("due_date"),
+        }),
+      });
+      const payload = await response.json();
+      if (response.status === 401 || response.status === 403) { setFinanceModal(false); setLoginModal(true); throw new Error("ابتدا وارد سامانه شوید"); }
+      if (!response.ok) throw new Error("اطلاعات مالی معتبر نیست یا رکورد تکراری است");
+      setFinanceRecords((items) => [mapApiReceivable(payload), ...items]);
+      setFinanceModal(false); notify("مطالبه به‌صورت پیش‌نویس در PostgreSQL ثبت شد");
+    } catch (error) {
+      notify(error instanceof Error ? error.message : "ثبت مطالبه انجام نشد");
+    } finally { setSaving(false); }
+  }
+
+  async function submitPaymentReceipt(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!selectedReceivable?.recordId) return;
+    setSaving(true);
+    const form = new FormData(event.currentTarget);
+    try {
+      const token = await csrfToken();
+      const response = await fetch(`${API_BASE}/payment-receipts/`, {
+        method: "POST", credentials: "include",
+        headers: { "Content-Type": "application/json", "X-CSRFToken": token, Accept: "application/json" },
+        body: JSON.stringify({
+          receivable: selectedReceivable.recordId, amount_rials: form.get("amount_rials"),
+          received_date: form.get("received_date"), tracking_code: form.get("tracking_code"), note: form.get("note"),
+        }),
+      });
+      const payload = await response.json();
+      if (response.status === 401 || response.status === 403) { setReceiptModal(false); setLoginModal(true); throw new Error("ابتدا وارد سامانه شوید"); }
+      if (!response.ok) throw new Error(payload.detail || "اطلاعات دریافت معتبر نیست");
+      setReceiptModal(false); setSelectedReceivable(null); notify("دریافت وجه به‌صورت پیش‌نویس در PostgreSQL ثبت شد");
+    } catch (error) {
+      notify(error instanceof Error ? error.message : "ثبت دریافت انجام نشد");
+    } finally { setSaving(false); }
+  }
+
+  function openReceipt(item: Receivable) {
+    if (financeMode === "auth") { setLoginModal(true); return; }
+    if (financeMode !== "live" || !item.recordId) { notify("ثبت دائمی دریافت در نسخه سرور فعال است"); return; }
+    setSelectedReceivable(item); setReceiptModal(true);
   }
 
   const title = nav.find((item) => item.id === page)?.label;
@@ -96,18 +251,19 @@ export default function Home() {
           <div className="panel table-panel"><ContractTable contracts={results} detailed /></div>
         </SectionIntro>}
         {page === "finance" && <SectionIntro eyebrow="کنترل مالی پروژه‌ها" title="مالی و مطالبات" description="نمای یکپارچه صورت‌وضعیت‌ها، سررسیدها، مبالغ وصول‌شده و مطالبات نیازمند پیگیری.">
+          <div className={`connection-banner ${financeMode}`}><i />{financeMode === "live" ? "متصل به پایگاه داده PostgreSQL" : financeMode === "auth" ? "برای مشاهده و ثبت داده واقعی وارد سامانه شوید" : financeMode === "loading" ? "در حال بررسی اتصال به سرور..." : "نسخه نمایشی؛ داده واقعی در نسخه سرور شرکت نگهداری می‌شود"}{financeMode === "auth" && <button onClick={() => setLoginModal(true)}>ورود کاربر</button>}</div>
           <section className="finance-stats">
-            <article className="finance-stat open"><span>کل مطالبات باز</span><b>۲۶.۴</b><small>میلیارد تومان</small><em>۷ پرونده در جریان</em></article>
-            <article className="finance-stat overdue"><span>مطالبات معوق</span><b>۹.۷</b><small>میلیارد تومان</small><em>۳ پرونده نیازمند اقدام</em></article>
-            <article className="finance-stat collected"><span>وصول شش‌ماهه</span><b>۴۸.۲</b><small>میلیارد تومان</small><em>۱۴.۸٪ رشد</em></article>
-            <article className="finance-stat upcoming"><span>سررسید نزدیک</span><b>۳</b><small>صورت‌وضعیت</small><em>تا هفت روز آینده</em></article>
+            <article className="finance-stat open"><span>کل مطالبات باز</span><b>{financeSummary.openAmount}</b><small>میلیارد تومان</small><em>{numberFa.format(financeSummary.openCount)} پرونده در جریان</em></article>
+            <article className="finance-stat overdue"><span>مطالبات معوق</span><b>{financeSummary.overdueAmount}</b><small>میلیارد تومان</small><em>نیازمند اقدام واحد مالی</em></article>
+            <article className="finance-stat collected"><span>مجموع وصول‌شده</span><b>{financeSummary.collectedAmount}</b><small>میلیارد تومان</small><em>{financeMode === "live" ? "بر اساس داده ثبت‌شده" : "۱۴.۸٪ رشد"}</em></article>
+            <article className="finance-stat upcoming"><span>سررسید نزدیک</span><b>{numberFa.format(financeSummary.dueSoonCount)}</b><small>صورت‌وضعیت</small><em>تا هفت روز آینده</em></article>
           </section>
           <div className="finance-toolbar">
             <label className="search wide"><span>⌕</span><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="قرارداد، کارفرما یا صورت‌وضعیت..." /></label>
-            <div className="pills" aria-label="فیلتر وضعیت مالی">{(["همه", "معوق", "سررسید نزدیک", "در انتظار تأیید", "وصول شده"] as FinanceFilter[]).map((filter) => <button key={filter} className={financeFilter === filter ? "selected" : ""} onClick={() => setFinanceFilter(filter)}>{filter}</button>)}</div>
-            <button className="primary" onClick={() => notify("گزارش مالی برای خروجی آماده شد")}>خروجی گزارش</button>
+            <div className="pills" aria-label="فیلتر وضعیت مالی">{(["همه", "پیش‌نویس", "باز", "معوق", "سررسید نزدیک", "در انتظار تأیید", "وصول شده"] as FinanceFilter[]).map((filter) => <button key={filter} className={financeFilter === filter ? "selected" : ""} onClick={() => setFinanceFilter(filter)}>{filter}</button>)}</div>
+            <button className="primary" onClick={() => financeMode === "live" ? setFinanceModal(true) : financeMode === "auth" ? setLoginModal(true) : notify("ثبت دائمی در نسخه سرور فعال است")}>＋ ثبت مطالبه</button>
           </div>
-          <div className="panel finance-panel"><ReceivablesTable items={receivables} notify={notify} /></div>
+          <div className="panel finance-panel"><ReceivablesTable items={receivables} onReceipt={openReceipt} /></div>
         </SectionIntro>}
         {page === "projects" && <SectionIntro eyebrow="مدیریت پروژه" title="پروژه‌های جاری" description="پایش پیشرفت، تیم مسئول، مدارک و وضعیت مالی پروژه‌ها."><div className="cards-grid">{seedContracts.slice(0,3).map((item, i) => <article className="panel project-card" key={item.id}><div className="project-head"><b className={`project-icon i${i}`}>◇</b><span className={statusClass(item.status)}>{item.status}</span></div><small>{item.field}</small><h3>{item.title}</h3><p>{item.employer}</p><div className="progress"><div><b>پیشرفت پروژه</b><em>{item.progress}٪</em></div><span><i style={{width:`${item.progress}%`}} /></span></div><button onClick={() => notify(`پرونده ${item.id} انتخاب شد`)}>مشاهده پرونده ←</button></article>)}</div></SectionIntro>}
         {page === "tenders" && <SectionIntro eyebrow="پایش فرصت‌ها" title="مناقصات پیشنهادی برای PDP" description="آگهی‌های جمع‌آوری‌شده پس از حذف موارد تکراری و تطبیق با صلاحیت‌های شرکت."><div className="tender-stats"><article><b>۴۷</b><span>آگهی جدید امروز</span></article><article><b>۱۲</b><span>دارای تطابق بالا</span></article><article><b>۵</b><span>مهلت کمتر از ۷ روز</span></article></div><div className="panel opportunities">{["مطالعات توسعه منطقه ویژه اقتصادی","طراحی مجموعه آموزشی و ورزشی","مطالعات برنامه‌ریزی فضایی شهرستان"].map((item,i)=><article key={item}><div className="score"><b>{[92,84,78][i]}٪</b><span>تطابق</span></div><div><small>{["ستاد ایران","هزاره","پارس‌نماد"][i]}</small><h3>{item}</h3><p>{["سازمان منطقه ویژه اقتصادی","اداره کل نوسازی مدارس","سازمان مدیریت و برنامه‌ریزی"][i]}</p></div><div className="opp-action"><span>مهلت: {[3,6,9][i]} روز</span><button onClick={()=>notify("فرصت به فهرست بررسی افزوده شد")}>افزودن به بررسی</button></div></article>)}</div></SectionIntro>}
@@ -116,6 +272,9 @@ export default function Home() {
     </section>
 
     {modal && <div className="modal-layer" onMouseDown={(e)=>e.currentTarget===e.target&&setModal(false)}><section className="modal" role="dialog" aria-modal="true"><header><div><small>ثبت سریع</small><h2>پیش‌نویس قرارداد جدید</h2></div><button onClick={()=>setModal(false)}>×</button></header><p>اطلاعات اولیه را وارد کنید. تأیید نهایی بعداً از داخل پرونده انجام می‌شود.</p><form onSubmit={submit}><label className="full">عنوان قرارداد *<input name="title" required autoFocus placeholder="مثلاً مطالعات طرح جامع..." /></label><label className="full">کارفرما *<input name="employer" required placeholder="نام دستگاه یا شرکت کارفرما" /></label><label>حوزه تخصصی<select name="field"><option>معماری</option><option>برنامه‌ریزی فضایی</option><option>تاسیسات</option><option>انرژی</option></select></label><label>مبلغ اولیه (میلیارد تومان)<input name="value" inputMode="decimal" placeholder="۰" /></label><div className="modal-note full"><b>i</b>این رکورد با وضعیت پیش‌نویس ثبت می‌شود و اثر مالی ندارد.</div><footer className="full"><button type="button" onClick={()=>setModal(false)}>انصراف</button><button className="primary">ثبت پیش‌نویس</button></footer></form></section></div>}
+    {loginModal && <div className="modal-layer" onMouseDown={(e)=>e.currentTarget===e.target&&setLoginModal(false)}><section className="modal compact" role="dialog" aria-modal="true"><header><div><small>دسترسی امن</small><h2>ورود به PDP One</h2></div><button onClick={()=>setLoginModal(false)}>×</button></header><p>با حسابی که هنگام نصب ساخته‌اید وارد شوید.</p><form onSubmit={submitLogin}><label className="full">نام کاربری<input name="username" required autoFocus autoComplete="username" /></label><label className="full">رمز عبور<input name="password" type="password" required autoComplete="current-password" /></label><footer className="full"><button type="button" onClick={()=>setLoginModal(false)}>انصراف</button><button className="primary" disabled={saving}>{saving ? "در حال ورود..." : "ورود"}</button></footer></form></section></div>}
+    {financeModal && <div className="modal-layer" onMouseDown={(e)=>e.currentTarget===e.target&&setFinanceModal(false)}><section className="modal" role="dialog" aria-modal="true"><header><div><small>ثبت مالی کنترل‌شده</small><h2>پیش‌نویس مطالبه جدید</h2></div><button onClick={()=>setFinanceModal(false)}>×</button></header><p>رکورد پس از ذخیره نیازمند بازبینی و تأیید واحد مالی است.</p><form onSubmit={submitReceivable}><label>کد قرارداد *<input name="contract_code" required autoFocus placeholder="PDP-1405-012" /></label><label>عنوان صورت‌وضعیت *<input name="statement_title" required placeholder="صورت‌وضعیت شماره ۶" /></label><label className="full">عنوان قرارداد *<input name="contract_title" required /></label><label className="full">کارفرما *<input name="employer" required /></label><label>مبلغ (ریال) *<input name="amount_rials" type="number" min="1" required inputMode="numeric" /></label><label>تاریخ سررسید *<input name="due_date" type="date" required /></label><div className="modal-note full"><b>i</b>ChatGPT و رابط وب فقط پیش‌نویس می‌سازند؛ تأیید مالی خودکار انجام نمی‌شود.</div><footer className="full"><button type="button" onClick={()=>setFinanceModal(false)}>انصراف</button><button className="primary" disabled={saving}>{saving ? "در حال ذخیره..." : "ثبت در پایگاه داده"}</button></footer></form></section></div>}
+    {receiptModal && selectedReceivable && <div className="modal-layer" onMouseDown={(e)=>e.currentTarget===e.target&&setReceiptModal(false)}><section className="modal compact" role="dialog" aria-modal="true"><header><div><small>ثبت دریافت کنترل‌شده</small><h2>دریافت وجه جدید</h2></div><button onClick={()=>setReceiptModal(false)}>×</button></header><p>{selectedReceivable.statement} · {selectedReceivable.contractId}</p><form onSubmit={submitPaymentReceipt}><label className="full">مبلغ دریافت (ریال) *<input name="amount_rials" type="number" min="1" required autoFocus inputMode="numeric" /></label><label className="full">تاریخ دریافت *<input name="received_date" type="date" required /></label><label className="full">شماره پیگیری بانکی<input name="tracking_code" /></label><label className="full">توضیحات<textarea name="note" rows={3} /></label><div className="modal-note full"><b>i</b>این دریافت تا تأیید واحد مالی، روی مبلغ وصول‌شده نهایی اثر نمی‌گذارد.</div><footer className="full"><button type="button" onClick={()=>setReceiptModal(false)}>انصراف</button><button className="primary" disabled={saving}>{saving ? "در حال ذخیره..." : "ثبت پیش‌نویس دریافت"}</button></footer></form></section></div>}
     {toast && <div className="toast"><b>✓</b>{toast}</div>}
   </main>;
 }
@@ -132,4 +291,4 @@ function SectionIntro({eyebrow,title,description,children}:{eyebrow:string;title
 
 function ContractTable({contracts,detailed=false}:{contracts:Contract[];detailed?:boolean}) { return <div className="table-wrap"><table><thead><tr><th>قرارداد و کارفرما</th><th>حوزه</th><th>مبلغ</th>{detailed&&<th>سررسید</th>}<th>پیشرفت</th><th>وضعیت</th><th /></tr></thead><tbody>{contracts.map(c=><tr key={c.id}><td><b>{c.title}</b><small>{c.id} · {c.employer}</small></td><td>{c.field}</td><td>{c.value}</td>{detailed&&<td>{c.due}</td>}<td><div className="mini-progress"><span><i style={{width:`${c.progress}%`}} /></span><em>{c.progress}٪</em></div></td><td><span className={statusClass(c.status)}>{c.status}</span></td><td>←</td></tr>)}</tbody></table>{!contracts.length&&<p className="empty">رکوردی پیدا نشد.</p>}</div>; }
 
-function ReceivablesTable({items,notify}:{items:Receivable[];notify:(message:string)=>void}) { return <div className="table-wrap"><table><thead><tr><th>قرارداد و کارفرما</th><th>صورت‌وضعیت</th><th>مبلغ</th><th>وصول‌شده</th><th>سررسید</th><th>وضعیت</th><th /></tr></thead><tbody>{items.map((item)=><tr key={item.id}><td><b>{item.title}</b><small>{item.contractId} · {item.employer}</small></td><td><b>{item.statement}</b><small>{item.id}</small></td><td className="money">{item.amount}</td><td className="money received">{item.received}</td><td>{item.due}</td><td><span className={financeStatusClass(item.status)}>{item.status}</span></td><td><button className="row-action" onClick={()=>notify(`پرونده مالی ${item.id} انتخاب شد`)} aria-label={`مشاهده ${item.id}`}>←</button></td></tr>)}</tbody></table>{!items.length&&<p className="empty">موردی با این فیلتر پیدا نشد.</p>}</div>; }
+function ReceivablesTable({items,onReceipt}:{items:Receivable[];onReceipt:(item:Receivable)=>void}) { return <div className="table-wrap"><table><thead><tr><th>قرارداد و کارفرما</th><th>صورت‌وضعیت</th><th>مبلغ</th><th>وصول‌شده</th><th>سررسید</th><th>وضعیت</th><th /></tr></thead><tbody>{items.map((item)=><tr key={item.id}><td><b>{item.title}</b><small>{item.contractId} · {item.employer}</small></td><td><b>{item.statement}</b><small>{item.id}</small></td><td className="money">{item.amount}</td><td className="money received">{item.received}</td><td>{item.due}</td><td><span className={financeStatusClass(item.status)}>{item.status}</span></td><td><button className="row-action" onClick={()=>onReceipt(item)} aria-label={`ثبت دریافت برای ${item.id}`}>＋</button></td></tr>)}</tbody></table>{!items.length&&<p className="empty">موردی با این فیلتر پیدا نشد.</p>}</div>; }
