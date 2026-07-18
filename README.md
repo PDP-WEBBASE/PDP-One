@@ -6,6 +6,8 @@
 
 - Persian RTL responsive dashboard and PWA manifest
 - Contract, finance and receivables, project, tender, and analysis demonstration flows
+- PostgreSQL-backed receivables and payment-receipt drafts with audited human approval
+- Authenticated finance API and browser session login
 - Django REST API foundation with PostgreSQL models
 - Redis/Celery background processing foundation
 - Tool-only MCP service for ChatGPT reads and draft writes
@@ -54,3 +56,5 @@ Do not expose the trial to the internet until passwords, allowed hosts, HTTPS, b
 The MCP endpoint is `/mcp`. It exposes read tools separately from draft-creation tools. For an internet-connected ChatGPT developer-mode test, expose Nginx through a temporary HTTPS tunnel and use the resulting URL plus `/mcp`.
 
 This integration does not use the OpenAI API; ChatGPT invokes the MCP tools from the user's ChatGPT workspace.
+
+Finance tools can search receivables, return the persisted financial summary, create receivable drafts, and create payment-receipt drafts. Financial confirmation remains a human-only action.
