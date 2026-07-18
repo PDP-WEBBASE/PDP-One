@@ -108,7 +108,7 @@ function Get-TailscaleContainerStatus {
     try { return ($statusText | ConvertFrom-Json) } catch { return $null }
 }
 
-Write-Host "PDP One - automatic ChatGPT connection 2026.07.18.9" -ForegroundColor Green
+Write-Host "PDP One - automatic ChatGPT connection 2026.07.18.10" -ForegroundColor Green
 if (-not (Get-Command docker -ErrorAction SilentlyContinue)) { throw "Docker command is unavailable." }
 if (-not (Test-DockerEngine)) { throw "Open Rancher Desktop and wait until the Moby engine is ready." }
 
@@ -187,17 +187,37 @@ $tsLog = Join-Path $logDir "tailscale-funnel.log"
 Write-Host "Starting the official Tailscale container through the regional registry cache ..." -ForegroundColor Cyan
 Remove-Item $tsOut, $tsErr, $tsLog -Force -ErrorAction SilentlyContinue
 $startLines = @()
-$previousErrorAction = $ErrorActionPreference
-try {
-    # Windows PowerShell 5.1 wraps normal native stderr progress (for example
-    # Docker "Pulling") as NativeCommandError when stderr is redirected.
-    $ErrorActionPreference = "Continue"
-    $startLines = @(& docker compose --profile tunnel up --detach --force-recreate tailscale 2>&1)
-    $tailscaleStartExitCode = $LASTEXITCODE
-} finally {
-    $ErrorActionPreference = $previousErrorAction
+$tailscaleStartExitCode = 1
+$configuredImage = Get-EnvValue -Path $EnvPath -Name "PDP_TAILSCALE_IMAGE"
+$imageCandidates = @(
+    $configuredImage,
+    "docker.arvancloud.ir/tailscale/tailscale:stable",
+    "tailscale/tailscale:stable",
+    "ghcr.io/tailscale/tailscale:stable"
+) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique
+
+foreach ($imageCandidate in $imageCandidates) {
+    Set-EnvValue -Path $EnvPath -Name "PDP_TAILSCALE_IMAGE" -Value $imageCandidate
+    foreach ($downloadAttempt in 1..2) {
+        Write-Host "Trying Tailscale image: $imageCandidate (attempt $downloadAttempt/2)" -ForegroundColor DarkCyan
+        $previousErrorAction = $ErrorActionPreference
+        try {
+            # Windows PowerShell 5.1 wraps normal native stderr progress (for
+            # example Docker "Pulling") as NativeCommandError when redirected.
+            $ErrorActionPreference = "Continue"
+            $attemptLines = @(& docker compose --profile tunnel up --detach --force-recreate tailscale 2>&1)
+            $tailscaleStartExitCode = $LASTEXITCODE
+        } finally {
+            $ErrorActionPreference = $previousErrorAction
+        }
+        $attemptLines | ForEach-Object { Write-Host ([string]$_) }
+        $startLines += "===== $imageCandidate attempt $downloadAttempt ====="
+        $startLines += $attemptLines
+        if ($tailscaleStartExitCode -eq 0) { break }
+        Start-Sleep -Seconds 3
+    }
+    if ($tailscaleStartExitCode -eq 0) { break }
 }
-$startLines | ForEach-Object { Write-Host ([string]$_) }
 [IO.File]::WriteAllText($tsOut, ($startLines | Out-String), [Text.UTF8Encoding]::new($false))
 
 if ($tailscaleStartExitCode -eq 0) {
