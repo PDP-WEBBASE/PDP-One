@@ -108,7 +108,7 @@ function Get-TailscaleContainerStatus {
     try { return ($statusText | ConvertFrom-Json) } catch { return $null }
 }
 
-Write-Host "PDP One - automatic ChatGPT connection 2026.07.18.11" -ForegroundColor Green
+Write-Host "PDP One - automatic ChatGPT connection 2026.07.18.12" -ForegroundColor Green
 if (-not (Get-Command docker -ErrorAction SilentlyContinue)) { throw "Docker command is unavailable." }
 if (-not (Test-DockerEngine)) { throw "Open Rancher Desktop and wait until the Moby engine is ready." }
 
@@ -151,7 +151,7 @@ if ([string]::IsNullOrWhiteSpace($trialAdminPassword) -or $trialAdminPassword.St
 }
 
 Write-Host "Starting PDP One and checking PostgreSQL ..." -ForegroundColor Cyan
-docker compose up --build --detach
+docker compose up --detach
 if ($LASTEXITCODE -ne 0) { throw "PDP One services failed to start." }
 
 $ready = $false
