@@ -85,7 +85,8 @@ function Test-PublicTunnel([string]$BaseUrl, $Process, [switch]$ServiceManaged) 
     if ([string]::IsNullOrWhiteSpace($BaseUrl)) { return $false }
     if (-not $ServiceManaged -and ($null -eq $Process -or $Process.HasExited)) { return $false }
 
-    foreach ($attempt in 1..3) {
+    $maximumAttempts = $(if ($ServiceManaged) { 10 } else { 3 })
+    foreach ($attempt in 1..$maximumAttempts) {
         try {
             $healthUrl = "$($BaseUrl.TrimEnd('/'))/healthz"
             $response = Invoke-WebRequest -UseBasicParsing -Uri $healthUrl -TimeoutSec 10
@@ -101,36 +102,13 @@ function Test-PublicTunnel([string]$BaseUrl, $Process, [switch]$ServiceManaged) 
     return $false
 }
 
-function Find-TailscaleCli {
-    $command = Get-Command tailscale.exe -ErrorAction SilentlyContinue
-    if ($command) { return $command.Source }
-    foreach ($candidate in @(
-        "C:\Program Files\Tailscale\tailscale.exe",
-        (Join-Path $env:LOCALAPPDATA "Tailscale\tailscale.exe")
-    )) {
-        if (Test-Path -LiteralPath $candidate) { return $candidate }
-    }
-    return $null
+function Get-TailscaleContainerStatus {
+    $statusText = (& docker compose --profile tunnel exec -T tailscale tailscale --socket=/tmp/tailscaled.sock status --json 2>$null | Out-String)
+    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($statusText)) { return $null }
+    try { return ($statusText | ConvertFrom-Json) } catch { return $null }
 }
 
-function Ensure-TailscaleCli {
-    $cli = Find-TailscaleCli
-    if ($cli) { return $cli }
-    if (-not (Get-Command winget -ErrorAction SilentlyContinue)) { return $null }
-
-    Write-Host "Installing Tailscale for a reliable free HTTPS Funnel ..." -ForegroundColor Cyan
-    winget install --id Tailscale.Tailscale --exact --source winget --silent --accept-package-agreements --accept-source-agreements --disable-interactivity
-    if ($LASTEXITCODE -ne 0) { return $null }
-
-    foreach ($attempt in 1..30) {
-        $cli = Find-TailscaleCli
-        if ($cli) { return $cli }
-        Start-Sleep -Seconds 2
-    }
-    return $null
-}
-
-Write-Host "PDP One - automatic ChatGPT connection 2026.07.18.5" -ForegroundColor Green
+Write-Host "PDP One - automatic ChatGPT connection 2026.07.18.6" -ForegroundColor Green
 if (-not (Get-Command docker -ErrorAction SilentlyContinue)) { throw "Docker command is unavailable." }
 if (-not (Test-DockerEngine)) { throw "Open Rancher Desktop and wait until the Moby engine is ready." }
 
@@ -183,63 +161,99 @@ $pgOut = $null
 $pgErr = $null
 $lrOut = $null
 $lrErr = $null
-$tailscaleCli = $null
-$tailscaleActive = $false
+$tailscaleContainerActive = $false
+$tsOut = Join-Path $logDir "tailscale.out.log"
+$tsErr = Join-Path $logDir "tailscale.err.log"
 $tsLog = Join-Path $logDir "tailscale-funnel.log"
 
-# Tailscale Funnel is the primary route because anonymous tunnel providers are
-# commonly blocked by managed DNS or regional firewalls.
-$tailscaleCli = Ensure-TailscaleCli
-if ($tailscaleCli) {
-    Write-Host "Preparing the free Tailscale HTTPS Funnel ..." -ForegroundColor Cyan
+# Tailscale Funnel is the primary route. It runs inside Docker so Windows
+# does not need the MSI package that some regional networks block.
+Write-Host "Starting the official Tailscale container through the regional registry cache ..." -ForegroundColor Cyan
+Remove-Item $tsOut, $tsErr, $tsLog -Force -ErrorAction SilentlyContinue
+$startLines = @()
+& docker compose --profile tunnel up --detach tailscale 2>&1 | Tee-Object -Variable startLines | Out-Host
+$tailscaleStartExitCode = $LASTEXITCODE
+[IO.File]::WriteAllText($tsOut, ($startLines | Out-String), [Text.UTF8Encoding]::new($false))
 
-    $isLoggedIn = $false
-    try {
-        $statusJson = (& $tailscaleCli status --json 2>$null | Out-String)
-        if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($statusJson)) {
-            $status = $statusJson | ConvertFrom-Json
-            $isLoggedIn = $status.BackendState -eq "Running"
-        }
-    } catch {
-        $isLoggedIn = $false
+if ($tailscaleStartExitCode -eq 0) {
+    $status = $null
+    foreach ($attempt in 1..30) {
+        $status = Get-TailscaleContainerStatus
+        if ($null -ne $status) { break }
+        Start-Sleep -Seconds 2
     }
 
+    $isLoggedIn = $null -ne $status -and $status.BackendState -eq "Running"
     if (-not $isLoggedIn) {
         Write-Host ""
-        Write-Host "One-time action: complete the Tailscale sign-in in the browser that opens." -ForegroundColor Yellow
-        & $tailscaleCli up
-        $isLoggedIn = $LASTEXITCODE -eq 0
+        Write-Host "One-time action: sign in to Tailscale in the browser that opens." -ForegroundColor Yellow
+        $loginOut = Join-Path $logDir "tailscale-login.out.log"
+        $loginErr = Join-Path $logDir "tailscale-login.err.log"
+        Remove-Item $loginOut, $loginErr -Force -ErrorAction SilentlyContinue
+        $dockerCommand = (Get-Command docker.exe -ErrorAction SilentlyContinue)
+        if (-not $dockerCommand) { $dockerCommand = Get-Command docker -ErrorAction Stop }
+        $loginArgs = @(
+            "compose", "--profile", "tunnel", "exec", "-T", "tailscale",
+            "tailscale", "--socket=/tmp/tailscaled.sock", "up", "--hostname=pdp-one-trial"
+        )
+        $loginProcess = Start-Process $dockerCommand.Source -ArgumentList $loginArgs -PassThru -WindowStyle Hidden -RedirectStandardOutput $loginOut -RedirectStandardError $loginErr
+        $loginUrl = Wait-ForUrl -Paths @($loginOut, $loginErr) -Pattern 'https://login\.tailscale\.com/[^\s]+' -Seconds 45
+        if ($loginUrl) {
+            Start-Process $loginUrl
+            Read-Host "Complete the one-time Tailscale sign-in in the browser, then press Enter here"
+        } else {
+            Write-Host "The sign-in URL was not detected. Tailscale logs will be included in diagnostics." -ForegroundColor Yellow
+        }
+
+        foreach ($attempt in 1..60) {
+            $status = Get-TailscaleContainerStatus
+            if ($null -ne $status -and $status.BackendState -eq "Running") {
+                $isLoggedIn = $true
+                break
+            }
+            Start-Sleep -Seconds 2
+        }
+        if (-not $loginProcess.HasExited) {
+            Stop-Process -Id $loginProcess.Id -Force -ErrorAction SilentlyContinue
+        }
+        if (Test-Path -LiteralPath $loginOut) { Add-Content -LiteralPath $tsOut -Value (Get-Content -LiteralPath $loginOut -Raw -ErrorAction SilentlyContinue) }
+        if (Test-Path -LiteralPath $loginErr) { Add-Content -LiteralPath $tsErr -Value (Get-Content -LiteralPath $loginErr -Raw -ErrorAction SilentlyContinue) }
     }
 
     if ($isLoggedIn) {
         foreach ($funnelAttempt in 1..2) {
             $funnelLines = @()
-            & $tailscaleCli funnel --bg --yes 8080 2>&1 | Tee-Object -Variable funnelLines | Out-Host
-            $funnelStatus = (& $tailscaleCli funnel status 2>&1 | Out-String)
-            $funnelText = (($funnelLines | Out-String) + "`r`n" + $funnelStatus)
+            & docker compose --profile tunnel exec -T tailscale tailscale --socket=/tmp/tailscaled.sock funnel --bg --yes 80 2>&1 | Tee-Object -Variable funnelLines | Out-Host
+            $funnelExitCode = $LASTEXITCODE
+            $funnelStatus = (& docker compose --profile tunnel exec -T tailscale tailscale --socket=/tmp/tailscaled.sock funnel status 2>&1 | Out-String)
+            $funnelText = (($funnelLines | Out-String) + [Environment]::NewLine + $funnelStatus)
             [IO.File]::WriteAllText($tsLog, $funnelText, [Text.UTF8Encoding]::new($false))
 
             $urlMatch = [regex]::Match($funnelText, 'https://[A-Za-z0-9.-]+\.ts\.net')
-            if ($urlMatch.Success) {
+            if ($funnelExitCode -eq 0 -and $urlMatch.Success) {
                 $candidateUrl = $urlMatch.Value.TrimEnd('/')
                 if (Test-PublicTunnel -BaseUrl $candidateUrl -Process $null -ServiceManaged) {
                     $publicBase = $candidateUrl
-                    $provider = "Tailscale Funnel"
-                    $tailscaleActive = $true
+                    $provider = "Tailscale Funnel (Docker)"
+                    $tailscaleContainerActive = $true
                     break
                 }
             }
 
             $approvalMatch = [regex]::Match($funnelText, 'https://login\.tailscale\.com/[^\s]+')
             if ($approvalMatch.Success -and $funnelAttempt -eq 1) {
-                Start-Process $approvalMatch.Value
-                Write-Host ""
-                Read-Host "Approve Funnel in the opened Tailscale page, then press Enter here"
+                Start-Process $approvalMatch.Value.TrimEnd('.', ')')
+                Read-Host "Approve public Funnel in the opened Tailscale page, then press Enter here"
             } else {
                 break
             }
         }
     }
+}
+
+if (-not $tailscaleContainerActive) {
+    $containerLogs = (& docker compose --profile tunnel logs --tail 100 tailscale 2>&1 | Out-String)
+    Add-Content -LiteralPath $tsErr -Value $containerLogs
 }
 
 if (-not $publicBase -and (Get-Command cloudflared -ErrorAction SilentlyContinue)) {
@@ -304,7 +318,7 @@ if (-not $publicBase) {
     }
 }
 
-if (-not $publicBase -or (-not $tailscaleActive -and ($null -eq $tunnelProcess -or $tunnelProcess.HasExited))) {
+if (-not $publicBase -or (-not $tailscaleContainerActive -and ($null -eq $tunnelProcess -or $tunnelProcess.HasExited))) {
     if ($null -ne $tunnelProcess -and -not $tunnelProcess.HasExited) {
         Stop-Process -Id $tunnelProcess.Id -Force -ErrorAction SilentlyContinue
     }
@@ -315,7 +329,7 @@ if (-not $publicBase -or (-not $tailscaleActive -and ($null -eq $tunnelProcess -
         "Local health: http://127.0.0.1:8080/healthz",
         ""
     )
-    foreach ($logFile in @($tsLog, $cfOut, $cfErr, $pgOut, $pgErr, $lrOut, $lrErr)) {
+    foreach ($logFile in @($tsOut, $tsErr, $tsLog, $cfOut, $cfErr, $pgOut, $pgErr, $lrOut, $lrErr)) {
         if (-not [string]::IsNullOrWhiteSpace($logFile) -and (Test-Path -LiteralPath $logFile)) {
             $diagnosticLines += "===== $([IO.Path]::GetFileName($logFile)) ====="
             $diagnosticLines += (Get-Content -LiteralPath $logFile -ErrorAction SilentlyContinue | Select-Object -Last 80)
@@ -364,14 +378,14 @@ Start-Process notepad.exe -ArgumentList $instructionPath
 Start-Process "https://chatgpt.com/plugins"
 
 try {
-    if ($tailscaleActive) {
+    if ($tailscaleContainerActive) {
         Read-Host "Press Enter to revoke the temporary Tailscale Funnel"
     } else {
         Wait-Process -Id $tunnelProcess.Id
     }
 } finally {
-    if ($tailscaleActive -and $tailscaleCli) {
-        & $tailscaleCli funnel reset *> $null
+    if ($tailscaleContainerActive) {
+        & docker compose --profile tunnel exec -T tailscale tailscale --socket=/tmp/tailscaled.sock funnel reset *> $null
     }
     if ($null -ne $tunnelProcess -and -not $tunnelProcess.HasExited) {
         Stop-Process -Id $tunnelProcess.Id -Force -ErrorAction SilentlyContinue
