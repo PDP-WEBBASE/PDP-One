@@ -331,5 +331,6 @@ $loginText = "PDP One local address: http://localhost:8080`r`nUsername: $adminUs
 
 Write-Host ""
 Write-Host "PDP One is ready: http://localhost:8080" -ForegroundColor Green
-Write-Host "To connect ChatGPT without an OpenAI API key, double-click CONNECT-CHATGPT.bat" -ForegroundColor Cyan
+Write-Host "Opening the automatic ChatGPT connection now. No OpenAI API key is used." -ForegroundColor Cyan
 Start-Process notepad.exe -ArgumentList $loginPath
+Start-Process -FilePath (Join-Path $ProjectRoot "CONNECT-CHATGPT.bat") -WorkingDirectory $ProjectRoot
