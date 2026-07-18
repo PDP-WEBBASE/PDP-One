@@ -1,3 +1,5 @@
+import os
+
 from django.contrib.auth import authenticate, login, logout
 from django.db.models import Count, Sum
 from django.middleware.csrf import get_token
@@ -7,20 +9,26 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework.status import HTTP_400_BAD_REQUEST
-from rest_framework.viewsets import GenericViewSet, ModelViewSet
+from rest_framework.viewsets import GenericViewSet
 from .models import AnalysisReport, AuditEvent, Contract, PaymentReceipt, Receivable
 from .serializers import AnalysisReportSerializer, ContractSerializer, PaymentReceiptSerializer, ReceivableSerializer
 
-class ContractViewSet(ModelViewSet):
+class DraftCreateReadViewSet(mixins.CreateModelMixin, mixins.RetrieveModelMixin, mixins.ListModelMixin, GenericViewSet):
+    """Create and read drafts; approval and destructive changes stay in the admin workflow."""
+
+
+class ContractViewSet(DraftCreateReadViewSet):
     queryset = Contract.objects.all().order_by("-created_at")
     serializer_class = ContractSerializer
     search_fields = ["code", "title", "employer", "field"]
     filterset_fields = ["status", "field"]
+    ordering_fields = ["created_at", "due_date", "value_rials", "progress"]
+
     def perform_create(self, serializer):
         contract = serializer.save(created_by=self.request.user, status=Contract.Status.DRAFT)
         AuditEvent.objects.create(actor=self.request.user.username, action="contract.create_draft", target_type="contract", target_id=str(contract.id), payload={"code": contract.code})
 
-class AnalysisReportViewSet(ModelViewSet):
+class AnalysisReportViewSet(DraftCreateReadViewSet):
     queryset = AnalysisReport.objects.all().order_by("-created_at")
     serializer_class = AnalysisReportSerializer
     search_fields = ["title", "summary"]
@@ -29,8 +37,17 @@ class AnalysisReportViewSet(ModelViewSet):
         AuditEvent.objects.create(actor=self.request.user.username, action="analysis.create_draft", target_type="analysis_report", target_id=str(report.id), payload={"source_count": len(report.source_record_ids)})
 
 
-class DraftCreateReadViewSet(mixins.CreateModelMixin, mixins.RetrieveModelMixin, mixins.ListModelMixin, GenericViewSet):
-    pass
+@api_view(["GET"])
+def system_status(request):
+    """Small authenticated diagnostic used by the MCP connection check."""
+    return Response({
+        "service": "PDP One",
+        "database": "connected",
+        "trial_mode": os.getenv("PDP_TRIAL_MODE", "false").lower() in {"1", "true", "yes"},
+        "contracts": Contract.objects.count(),
+        "receivables": Receivable.objects.count(),
+        "analysis_drafts": AnalysisReport.objects.count(),
+    })
 
 
 class ReceivableViewSet(DraftCreateReadViewSet):
