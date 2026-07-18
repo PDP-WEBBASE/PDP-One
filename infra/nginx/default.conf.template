@@ -1,0 +1,41 @@
+server {
+    listen 80;
+    server_name _;
+    client_max_body_size 50m;
+
+    location = /healthz {
+        access_log off;
+        add_header Content-Type text/plain;
+        return 200 "PDP One ready\n";
+    }
+
+    location /api/ {
+        proxy_pass http://backend:8000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $http_x_forwarded_proto;
+    }
+
+    # Trial-only capability URL. The random path is generated locally and is
+    # never committed. Closing the temporary tunnel revokes external access.
+    location = /mcp/${PDP_MCP_PATH_TOKEN} {
+        proxy_pass http://mcp:8010/mcp;
+        proxy_http_version 1.1;
+        proxy_buffering off;
+        proxy_read_timeout 300s;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $http_x_forwarded_proto;
+    }
+
+    location /mcp {
+        return 404;
+    }
+
+    location / {
+        proxy_pass http://web:3000;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    }
+}
