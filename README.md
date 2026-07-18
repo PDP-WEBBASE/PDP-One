@@ -34,6 +34,12 @@ powershell -ExecutionPolicy Bypass -File .\scripts\windows\Test-PDPOne.ps1
 powershell -ExecutionPolicy Bypass -File .\scripts\windows\Stop-PDPOne.ps1
 ```
 
+برای دریافت نسخه جدید بدون حذف تنظیمات و داده‌های موجود، آخرین ZIP مخزن را دریافت و فایل زیر را با دسترسی Administrator اجرا کنید:
+
+```text
+UPDATE-PDP-ONE.bat
+```
+
 ## Manual local trial
 
 1. Copy `.env.example` to `.env` and replace all placeholder secrets.
