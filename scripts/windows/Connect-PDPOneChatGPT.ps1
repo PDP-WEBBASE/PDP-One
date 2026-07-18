@@ -90,6 +90,50 @@ function Wait-ForUrl([string[]]$Paths, [string]$Pattern, [int]$Seconds = 35) {
     return $null
 }
 
+function Invoke-DockerWithTimeout {
+    param(
+        [string[]]$Arguments,
+        [int]$TimeoutSeconds = 35
+    )
+
+    $dockerCommand = Get-Command docker.exe -ErrorAction SilentlyContinue
+    if (-not $dockerCommand) { $dockerCommand = Get-Command docker -ErrorAction Stop }
+
+    $id = [Guid]::NewGuid().ToString("N")
+    $stdoutPath = Join-Path $env:TEMP ("pdp-one-docker-" + $id + ".out.log")
+    $stderrPath = Join-Path $env:TEMP ("pdp-one-docker-" + $id + ".err.log")
+    $process = $null
+
+    try {
+        $process = Start-Process -FilePath $dockerCommand.Source -ArgumentList $Arguments -PassThru -WindowStyle Hidden -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath
+        $finished = $process.WaitForExit($TimeoutSeconds * 1000)
+        $timedOut = -not $finished
+        if ($timedOut) {
+            Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+            Start-Sleep -Milliseconds 500
+        } else {
+            $process.WaitForExit()
+        }
+
+        $lines = @()
+        if (Test-Path -LiteralPath $stdoutPath) {
+            $lines += @(Get-Content -LiteralPath $stdoutPath -ErrorAction SilentlyContinue)
+        }
+        if (Test-Path -LiteralPath $stderrPath) {
+            $lines += @(Get-Content -LiteralPath $stderrPath -ErrorAction SilentlyContinue)
+        }
+
+        $exitCode = $(if ($timedOut) { 124 } else { $process.ExitCode })
+        return [pscustomobject]@{
+            ExitCode = $exitCode
+            TimedOut = $timedOut
+            Lines = $lines
+        }
+    } finally {
+        Remove-Item -LiteralPath $stdoutPath, $stderrPath -Force -ErrorAction SilentlyContinue
+    }
+}
+
 function Test-PublicTunnel([string]$BaseUrl, $Process, [switch]$ServiceManaged) {
     if ([string]::IsNullOrWhiteSpace($BaseUrl)) { return $false }
     if (-not $ServiceManaged -and ($null -eq $Process -or $Process.HasExited)) { return $false }
@@ -117,7 +161,7 @@ function Get-TailscaleContainerStatus {
     try { return ($statusText | ConvertFrom-Json) } catch { return $null }
 }
 
-Write-Host "PDP One - automatic ChatGPT connection 2026.07.19.14" -ForegroundColor Green
+Write-Host "PDP One - automatic ChatGPT connection 2026.07.19.15" -ForegroundColor Green
 if (-not (Get-Command docker -ErrorAction SilentlyContinue)) { throw "Docker command is unavailable." }
 if (-not (Test-DockerEngine)) { throw "Open Rancher Desktop and wait until the Moby engine is ready." }
 
@@ -290,9 +334,21 @@ if ($tailscaleStartExitCode -eq 0) {
             $previousErrorAction = $ErrorActionPreference
             try {
                 $ErrorActionPreference = "Continue"
-                $funnelLines = @(& docker compose --profile tunnel exec -T tailscale tailscale --socket=/tmp/tailscaled.sock funnel --bg --yes 80 2>&1)
-                $funnelExitCode = $LASTEXITCODE
-                $funnelStatusLines = @(& docker compose --profile tunnel exec -T tailscale tailscale --socket=/tmp/tailscaled.sock funnel status 2>&1)
+                $funnelResult = Invoke-DockerWithTimeout -Arguments @(
+                    "compose", "--profile", "tunnel", "exec", "-T", "tailscale",
+                    "tailscale", "--socket=/tmp/tailscaled.sock", "funnel", "--bg", "--yes", "80"
+                ) -TimeoutSeconds 35
+                $funnelLines = @($funnelResult.Lines)
+                $funnelExitCode = $funnelResult.ExitCode
+                if ($funnelResult.TimedOut) {
+                    $funnelLines += "Tailscale Funnel command timed out after 35 seconds; continuing automatically."
+                }
+
+                $funnelStatusResult = Invoke-DockerWithTimeout -Arguments @(
+                    "compose", "--profile", "tunnel", "exec", "-T", "tailscale",
+                    "tailscale", "--socket=/tmp/tailscaled.sock", "funnel", "status"
+                ) -TimeoutSeconds 20
+                $funnelStatusLines = @($funnelStatusResult.Lines)
             } finally {
                 $ErrorActionPreference = $previousErrorAction
             }
