@@ -81,6 +81,25 @@ function Wait-ForUrl([string[]]$Paths, [string]$Pattern, [int]$Seconds = 35) {
     return $null
 }
 
+function Test-PublicTunnel([string]$BaseUrl, $Process) {
+    if ([string]::IsNullOrWhiteSpace($BaseUrl) -or $null -eq $Process -or $Process.HasExited) {
+        return $false
+    }
+    foreach ($attempt in 1..3) {
+        try {
+            $healthUrl = "$($BaseUrl.TrimEnd('/'))/healthz"
+            $response = Invoke-WebRequest -UseBasicParsing -Uri $healthUrl -TimeoutSec 10
+            if ($response.StatusCode -eq 200 -and $response.Content -match "PDP One ready") {
+                return (-not $Process.HasExited)
+            }
+        } catch {
+            if ($Process.HasExited) { return $false }
+        }
+        Start-Sleep -Seconds 2
+    }
+    return $false
+}
+
 Write-Host "PDP One - automatic ChatGPT connection 2026.07.18.4" -ForegroundColor Green
 if (-not (Get-Command docker -ErrorAction SilentlyContinue)) { throw "Docker command is unavailable." }
 if (-not (Test-DockerEngine)) { throw "Open Rancher Desktop and wait until the Moby engine is ready." }
@@ -142,7 +161,7 @@ if (Get-Command cloudflared -ErrorAction SilentlyContinue) {
     Remove-Item $cfOut, $cfErr -Force -ErrorAction SilentlyContinue
     $tunnelProcess = Start-Process cloudflared -ArgumentList @("tunnel", "--url", "http://127.0.0.1:8080", "--no-autoupdate") -PassThru -WindowStyle Hidden -RedirectStandardOutput $cfOut -RedirectStandardError $cfErr
     $publicBase = Wait-ForUrl -Paths @($cfErr, $cfOut) -Pattern 'https://[a-z0-9-]+\.trycloudflare\.com' -Seconds 35
-    if ($publicBase -and -not $tunnelProcess.HasExited) {
+    if ($publicBase -and (Test-PublicTunnel -BaseUrl $publicBase -Process $tunnelProcess)) {
         $provider = "Cloudflare Quick Tunnel"
     } else {
         $publicBase = $null
