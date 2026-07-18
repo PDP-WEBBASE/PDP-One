@@ -34,8 +34,10 @@ function Find-Rdctl {
 function Start-RancherDesktopAndWait([int]$TimeoutSeconds = 240) {
     if (Test-DockerReady) { return $true }
 
-    Write-Host "Rancher Desktop is not ready. Starting it automatically ..." -ForegroundColor Yellow
     $rdctl = Find-Rdctl
+    $desktopExe = "C:\Program Files\Rancher Desktop\Rancher Desktop.exe"
+    Write-Host "Rancher Desktop is not ready. Starting it automatically ..." -ForegroundColor Yellow
+
     if ($rdctl) {
         $previousErrorAction = $ErrorActionPreference
         try {
@@ -45,25 +47,64 @@ function Start-RancherDesktopAndWait([int]$TimeoutSeconds = 240) {
             $ErrorActionPreference = $previousErrorAction
         }
     }
+    if (-not (Get-Process -Name "Rancher Desktop" -ErrorAction SilentlyContinue) -and
+        (Test-Path -LiteralPath $desktopExe)) {
+        Start-Process -FilePath $desktopExe -ArgumentList @(
+            "--containerEngine.name", "moby",
+            "--kubernetes.enabled=false"
+        )
+    }
 
-    if (-not (Get-Process -Name "Rancher Desktop" -ErrorAction SilentlyContinue)) {
-        $desktopExe = "C:\Program Files\Rancher Desktop\Rancher Desktop.exe"
-        if (Test-Path -LiteralPath $desktopExe) {
-            Start-Process -FilePath $desktopExe -ArgumentList @(
-                "--containerEngine.name", "moby",
-                "--kubernetes.enabled=false"
-            )
+    foreach ($attempt in 1..15) {
+        if (Test-DockerReady) {
+            Write-Host "Rancher Desktop and Moby are ready." -ForegroundColor Green
+            return $true
+        }
+        if (($attempt % 5) -eq 0) {
+            Write-Host "Initial Moby startup wait ... $($attempt * 3) seconds" -ForegroundColor DarkYellow
+        }
+        Start-Sleep -Seconds 3
+    }
+
+    Write-Host "The Rancher process is stale. Restarting Rancher Desktop and WSL automatically ..." -ForegroundColor Yellow
+    if ($rdctl) {
+        $previousErrorAction = $ErrorActionPreference
+        try {
+            $ErrorActionPreference = "Continue"
+            & $rdctl shutdown 2>&1 | Out-Host
+        } finally {
+            $ErrorActionPreference = $previousErrorAction
+        }
+        Start-Sleep -Seconds 8
+    }
+    Get-Process -Name "Rancher Desktop" -ErrorAction SilentlyContinue |
+        Stop-Process -Force -ErrorAction SilentlyContinue
+    & wsl.exe --shutdown | Out-Host
+    Start-Sleep -Seconds 5
+
+    if (Test-Path -LiteralPath $desktopExe) {
+        Start-Process -FilePath $desktopExe -ArgumentList @(
+            "--containerEngine.name", "moby",
+            "--kubernetes.enabled=false"
+        )
+    } elseif ($rdctl) {
+        $previousErrorAction = $ErrorActionPreference
+        try {
+            $ErrorActionPreference = "Continue"
+            & $rdctl start --application.start-in-background 2>&1 | Out-Host
+        } finally {
+            $ErrorActionPreference = $previousErrorAction
         }
     }
 
     $attempts = [Math]::Ceiling($TimeoutSeconds / 3)
     foreach ($attempt in 1..$attempts) {
         if (Test-DockerReady) {
-            Write-Host "Rancher Desktop and Moby are ready." -ForegroundColor Green
+            Write-Host "Rancher Desktop and Moby are ready after the automatic restart." -ForegroundColor Green
             return $true
         }
         if (($attempt % 5) -eq 0) {
-            Write-Host "Waiting for the Moby engine ... $($attempt * 3) seconds" -ForegroundColor DarkYellow
+            Write-Host "Waiting after automatic restart ... $($attempt * 3) seconds" -ForegroundColor DarkYellow
         }
         Start-Sleep -Seconds 3
     }
@@ -240,7 +281,7 @@ function Compact-RancherWslDisks {
 }
 
 $freeBefore = Get-FreeSystemDriveBytes
-Write-Host "PDP One safe disk cleanup 2026.07.18.2" -ForegroundColor Green
+Write-Host "PDP One safe disk cleanup 2026.07.18.3" -ForegroundColor Green
 Write-Host "Database volumes and private-file volumes are protected and will not be removed." -ForegroundColor DarkGreen
 Write-Host "Free space before cleanup: $(Format-Bytes $freeBefore)" -ForegroundColor Cyan
 
@@ -328,7 +369,10 @@ if (Test-Path -LiteralPath $downloads) {
     Write-Host "Download-package cleanup completed. Items recycled: $recycledCount" -ForegroundColor Green
 }
 
-if ($CompactWsl -and $dockerWasReady) {
+if ($CompactWsl) {
+    if (-not $dockerWasReady) {
+        Write-Host "Moby could not start with the critically low disk space. Attempting offline WSL compaction ..." -ForegroundColor Yellow
+    }
     Compact-RancherWslDisks
 }
 
