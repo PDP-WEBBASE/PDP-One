@@ -10,7 +10,7 @@ $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
 Set-StrictMode -Version Latest
 
-$InstallerVersion = "2026.07.18.15"
+$InstallerVersion = "2026.07.18.16"
 $ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 Set-Location $ProjectRoot
 
@@ -249,6 +249,8 @@ if (-not (Test-Path $EnvPath)) {
     $postgresPassword = New-RandomSecret 30
     $djangoSecret = New-RandomSecret 48
     $mcpToken = New-RandomSecret 48
+    $mcpPathToken = New-RandomSecret 32
+    $trialAdminPassword = New-RandomSecret 24
     $envTemplatePath = Join-Path $ProjectRoot ".env.example"
     if (Test-Path -LiteralPath $envTemplatePath) {
         $envContent = Get-Content -LiteralPath $envTemplatePath -Raw
@@ -269,17 +271,37 @@ DJANGO_CSRF_TRUSTED_ORIGINS=https://*.trycloudflare.com,https://*.pinggy-free.li
 REDIS_URL=redis://redis:6379/0
 PDP_API_URL=http://backend:8000/api/v1
 PDP_MCP_TOKEN=replace-with-a-long-random-token
+PDP_MCP_PATH_TOKEN=replace-with-a-random-path-token
+PDP_TRIAL_MODE=true
+PDP_TRIAL_ADMIN_USERNAME=pdp-admin
+PDP_TRIAL_ADMIN_PASSWORD=replace-with-a-random-password
 "@
     }
     $envContent = $envContent.Replace("POSTGRES_PASSWORD=change-me", "POSTGRES_PASSWORD=$postgresPassword")
     $envContent = $envContent.Replace("postgresql://pdp_one:change-me@db:5432/pdp_one", "postgresql://pdp_one:$postgresPassword@db:5432/pdp_one")
     $envContent = $envContent.Replace("DJANGO_SECRET_KEY=change-this-in-production", "DJANGO_SECRET_KEY=$djangoSecret")
     $envContent = $envContent.Replace("PDP_MCP_TOKEN=replace-with-a-long-random-token", "PDP_MCP_TOKEN=$mcpToken")
+    $envContent = $envContent.Replace("PDP_MCP_PATH_TOKEN=replace-with-a-random-path-token", "PDP_MCP_PATH_TOKEN=$mcpPathToken")
+    $envContent = $envContent.Replace("PDP_TRIAL_ADMIN_PASSWORD=replace-with-a-random-password", "PDP_TRIAL_ADMIN_PASSWORD=$trialAdminPassword")
     $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
     [IO.File]::WriteAllText($EnvPath, $envContent, $utf8NoBom)
     Write-Host "Secure configuration file created." -ForegroundColor Green
 } else {
     Write-Host "Existing .env file preserved." -ForegroundColor DarkYellow
+    $envContent = [IO.File]::ReadAllText($EnvPath)
+    if ($envContent -notmatch '(?m)^PDP_MCP_PATH_TOKEN=') {
+        $envContent = $envContent.TrimEnd() + "`r`nPDP_MCP_PATH_TOKEN=$(New-RandomSecret 32)`r`n"
+    }
+    if ($envContent -notmatch '(?m)^PDP_TRIAL_MODE=') {
+        $envContent = $envContent.TrimEnd() + "`r`nPDP_TRIAL_MODE=true`r`n"
+    }
+    if ($envContent -notmatch '(?m)^PDP_TRIAL_ADMIN_USERNAME=') {
+        $envContent = $envContent.TrimEnd() + "`r`nPDP_TRIAL_ADMIN_USERNAME=pdp-admin`r`n"
+    }
+    if ($envContent -notmatch '(?m)^PDP_TRIAL_ADMIN_PASSWORD=') {
+        $envContent = $envContent.TrimEnd() + "`r`nPDP_TRIAL_ADMIN_PASSWORD=$(New-RandomSecret 24)`r`n"
+    }
+    [IO.File]::WriteAllText($EnvPath, $envContent, [Text.UTF8Encoding]::new($false))
 }
 
 docker compose config --quiet
@@ -301,11 +323,13 @@ if (-not $backendReady) {
     throw "PDP One backend did not become ready in time. Review the log above."
 }
 
-if (-not $SkipAdministrator) {
-    Write-Host "Create the initial administrator account now." -ForegroundColor Yellow
-    docker compose exec backend python manage.py createsuperuser
-}
+$adminUser = ((Select-String -LiteralPath $EnvPath -Pattern '^PDP_TRIAL_ADMIN_USERNAME=(.*)).Matches.Groups[1].Value)
+$adminPassword = ((Select-String -LiteralPath $EnvPath -Pattern '^PDP_TRIAL_ADMIN_PASSWORD=(.*)).Matches.Groups[1].Value)
+$loginPath = Join-Path $ProjectRoot "PDP-ONE-LOCAL-LOGIN.txt"
+$loginText = "PDP One local address: http://localhost:8080`r`nUsername: $adminUser`r`nPassword: $adminPassword`r`n`r`nKeep this file private."
+[IO.File]::WriteAllText($loginPath, $loginText, [Text.UTF8Encoding]::new($false))
 
 Write-Host ""
 Write-Host "PDP One is ready: http://localhost:8080" -ForegroundColor Green
-Write-Host "To create a temporary internet link, double-click START-INTERNET-LINK.bat" -ForegroundColor Cyan
+Write-Host "To connect ChatGPT without an OpenAI API key, double-click CONNECT-CHATGPT.bat" -ForegroundColor Cyan
+Start-Process notepad.exe -ArgumentList $loginPath
