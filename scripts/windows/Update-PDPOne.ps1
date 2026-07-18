@@ -123,6 +123,15 @@ if (-not $ready) {
     throw "The updated application did not become ready in time. Review the log above."
 }
 
+$cleanupScript = Join-Path $InstalledRoot "scripts\windows\Clean-PDPOneDisk.ps1"
+if (Test-Path -LiteralPath $cleanupScript) {
+    try {
+        & powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File $cleanupScript -InstalledRoot $InstalledRoot -CurrentSourceRoot $SourceRoot
+    } catch {
+        Write-Host "Automatic disk cleanup could not complete, but the PDP One update succeeded." -ForegroundColor Yellow
+    }
+}
+
 Write-Host "" 
 Write-Host "PDP One was updated successfully: http://localhost:8080" -ForegroundColor Green
 Write-Host "Your existing secure settings and Docker data volumes were preserved." -ForegroundColor DarkGreen
