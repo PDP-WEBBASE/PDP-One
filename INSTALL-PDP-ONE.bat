@@ -8,7 +8,7 @@ if /I not "%~1"=="--elevated" (
     exit /b
 )
 
-findstr /c:"$InstallerVersion = \"2026.07.19.19\"" ".\scripts\windows\Install-PDPOne.ps1" >nul 2>&1
+findstr /c:"$InstallerVersion = \"2026.07.19.20\"" ".\scripts\windows\Install-PDPOne.ps1" >nul 2>&1
 if not "%errorlevel%"=="0" (
     echo This is an outdated or incomplete PDP One installer package.
     echo Download and extract the latest main branch before running the installer.
