@@ -122,11 +122,36 @@ function Invoke-DockerCleanup([string[]]$Arguments) {
     }
 }
 
+function Convert-ToComparablePath([string]$Path) {
+    if ([string]::IsNullOrWhiteSpace($Path)) { return $null }
+
+    try {
+        $cleanPath = [Environment]::ExpandEnvironmentVariables($Path.Trim().Trim([char]34).Trim())
+        if ([string]::IsNullOrWhiteSpace($cleanPath)) { return $null }
+
+        $fullPath = [IO.Path]::GetFullPath($cleanPath)
+        return $fullPath.TrimEnd(
+            [char[]]@(
+                [IO.Path]::DirectorySeparatorChar,
+                [IO.Path]::AltDirectorySeparatorChar
+            )
+        )
+    } catch {
+        return $null
+    }
+}
+
 function Test-ProtectedPath([string]$Candidate, [string[]]$ProtectedRoots) {
-    $candidateFull = [IO.Path]::GetFullPath($Candidate).TrimEnd('\')
+    $candidateFull = Convert-ToComparablePath -Path $Candidate
+    if ([string]::IsNullOrWhiteSpace($candidateFull)) {
+        # Fail closed: an unrecognized path must never be deleted.
+        return $true
+    }
+
     foreach ($root in $ProtectedRoots) {
-        if ([string]::IsNullOrWhiteSpace($root)) { continue }
-        $rootFull = [IO.Path]::GetFullPath($root).TrimEnd('\')
+        $rootFull = Convert-ToComparablePath -Path $root
+        if ([string]::IsNullOrWhiteSpace($rootFull)) { continue }
+
         if ($candidateFull.Equals($rootFull, [StringComparison]::OrdinalIgnoreCase)) { return $true }
         if ($candidateFull.StartsWith($rootFull + '\', [StringComparison]::OrdinalIgnoreCase)) { return $true }
         if ($rootFull.StartsWith($candidateFull + '\', [StringComparison]::OrdinalIgnoreCase)) { return $true }
@@ -281,7 +306,7 @@ function Compact-RancherWslDisks {
 }
 
 $freeBefore = Get-FreeSystemDriveBytes
-Write-Host "PDP One safe disk cleanup 2026.07.18.3" -ForegroundColor Green
+Write-Host "PDP One safe disk cleanup 2026.07.18.4" -ForegroundColor Green
 Write-Host "Database volumes and private-file volumes are protected and will not be removed." -ForegroundColor DarkGreen
 Write-Host "Free space before cleanup: $(Format-Bytes $freeBefore)" -ForegroundColor Cyan
 
@@ -323,6 +348,7 @@ if ($dockerWasReady) {
     Write-Host "Rancher Desktop could not be started; Docker cleanup was skipped." -ForegroundColor Yellow
 }
 
+try {
 $downloads = Join-Path ([Environment]::GetFolderPath("UserProfile")) "Downloads"
 if (Test-Path -LiteralPath $downloads) {
     Add-Type -AssemblyName Microsoft.VisualBasic
@@ -368,6 +394,14 @@ if (Test-Path -LiteralPath $downloads) {
 
     Write-Host "Download-package cleanup completed. Items recycled: $recycledCount" -ForegroundColor Green
 }
+
+} catch {
+    Write-Host "" 
+    Write-Host "Download-package cleanup encountered an invalid path and was skipped." -ForegroundColor Yellow
+    Write-Host "WSL disk compaction will continue; PDP One data remains protected." -ForegroundColor Yellow
+}
+
+Write-Host "Review the recycled PDP One packages, then empty Windows Recycle Bin to release their space." -ForegroundColor DarkYellow
 
 if ($CompactWsl) {
     if (-not $dockerWasReady) {
