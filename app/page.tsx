@@ -2,9 +2,12 @@
 
 import { FormEvent, useMemo, useState } from "react";
 
-type Page = "dashboard" | "contracts" | "projects" | "tenders" | "analysis";
+type Page = "dashboard" | "contracts" | "finance" | "projects" | "tenders" | "analysis";
 type Status = "فعال" | "در انتظار" | "بحرانی" | "پیش‌نویس";
 type Contract = { id: string; title: string; employer: string; field: string; value: string; progress: number; status: Status; due: string };
+type FinanceStatus = "معوق" | "سررسید نزدیک" | "در انتظار تأیید" | "وصول شده";
+type FinanceFilter = "همه" | FinanceStatus;
+type Receivable = { id: string; contractId: string; title: string; employer: string; statement: string; amount: string; received: string; due: string; status: FinanceStatus };
 
 const seedContracts: Contract[] = [
   { id: "PDP-1405-012", title: "مطالعات طرح جامع شهرک صنعتی صفادشت", employer: "شرکت شهرک‌های صنعتی تهران", field: "برنامه‌ریزی فضایی", value: "۱۲.۸ میلیارد", progress: 72, status: "فعال", due: "۲۸ مرداد ۱۴۰۵" },
@@ -13,9 +16,18 @@ const seedContracts: Contract[] = [
   { id: "PDP-1405-015", title: "مطالعات امکان‌سنجی نیروگاه خورشیدی", employer: "شرکت انرژی آفتاب", field: "انرژی", value: "۳.۶ میلیارد", progress: 16, status: "فعال", due: "۲۲ آبان ۱۴۰۵" },
 ];
 
+const seedReceivables: Receivable[] = [
+  { id: "FIN-1405-041", contractId: "PDP-1405-012", title: "مطالعات طرح جامع شهرک صنعتی صفادشت", employer: "شرکت شهرک‌های صنعتی تهران", statement: "صورت‌وضعیت شماره ۶", amount: "۵.۴ میلیارد", received: "۱.۲ میلیارد", due: "۲ تیر ۱۴۰۵", status: "معوق" },
+  { id: "FIN-1405-044", contractId: "PDP-1405-009", title: "طراحی معماری مجموعه اداری مرکزی", employer: "سازمان منطقه آزاد", statement: "صورت‌وضعیت شماره ۳", amount: "۳.۸ میلیارد", received: "—", due: "۳۱ تیر ۱۴۰۵", status: "سررسید نزدیک" },
+  { id: "FIN-1405-039", contractId: "PDP-1404-031", title: "خدمات مشاور تاسیسات مکانیکی بیمارستان", employer: "دانشگاه علوم پزشکی", statement: "صورت‌وضعیت شماره ۹", amount: "۴.۳ میلیارد", received: "—", due: "۱۸ خرداد ۱۴۰۵", status: "معوق" },
+  { id: "FIN-1405-046", contractId: "PDP-1405-015", title: "مطالعات امکان‌سنجی نیروگاه خورشیدی", employer: "شرکت انرژی آفتاب", statement: "پیش‌پرداخت مرحله اول", amount: "۱.۱ میلیارد", received: "—", due: "۸ مرداد ۱۴۰۵", status: "در انتظار تأیید" },
+  { id: "FIN-1405-035", contractId: "PDP-1405-012", title: "مطالعات طرح جامع شهرک صنعتی صفادشت", employer: "شرکت شهرک‌های صنعتی تهران", statement: "صورت‌وضعیت شماره ۵", amount: "۶.۲ میلیارد", received: "۶.۲ میلیارد", due: "۱۵ اردیبهشت ۱۴۰۵", status: "وصول شده" },
+];
+
 const nav: { id: Page; label: string; icon: string }[] = [
   { id: "dashboard", label: "داشبورد مدیریت", icon: "◫" },
   { id: "contracts", label: "قراردادها", icon: "▤" },
+  { id: "finance", label: "مالی و مطالبات", icon: "◈" },
   { id: "projects", label: "پروژه‌ها", icon: "◇" },
   { id: "tenders", label: "مناقصات و فرصت‌ها", icon: "◎" },
   { id: "analysis", label: "تحلیل‌های هوشمند", icon: "✦" },
@@ -29,6 +41,7 @@ const stats = [
 ];
 
 const statusClass = (status: Status) => `status ${status === "فعال" ? "ok" : status === "بحرانی" ? "danger" : status === "پیش‌نویس" ? "draft" : "waiting"}`;
+const financeStatusClass = (status: FinanceStatus) => `finance-status ${status === "وصول شده" ? "paid" : status === "معوق" ? "overdue" : status === "سررسید نزدیک" ? "soon" : "review"}`;
 
 export default function Home() {
   const [page, setPage] = useState<Page>("dashboard");
@@ -36,8 +49,14 @@ export default function Home() {
   const [modal, setModal] = useState(false);
   const [search, setSearch] = useState("");
   const [contracts, setContracts] = useState(seedContracts);
+  const [financeFilter, setFinanceFilter] = useState<FinanceFilter>("همه");
   const [toast, setToast] = useState("");
   const results = useMemo(() => contracts.filter((c) => !search || [c.id, c.title, c.employer, c.field].some((v) => v.includes(search))), [contracts, search]);
+  const receivables = useMemo(() => seedReceivables.filter((item) => {
+    const matchesFilter = financeFilter === "همه" || item.status === financeFilter;
+    const matchesSearch = !search || [item.id, item.contractId, item.title, item.employer, item.statement].some((value) => value.includes(search));
+    return matchesFilter && matchesSearch;
+  }), [financeFilter, search]);
 
   function navigate(next: Page) { setPage(next); setMenu(false); }
   function notify(message: string) { setToast(message); window.setTimeout(() => setToast(""), 2600); }
@@ -76,6 +95,20 @@ export default function Home() {
           <div className="toolbar"><label className="search wide"><span>⌕</span><input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="شماره، عنوان یا کارفرما..." /></label><div className="pills"><button className="selected">همه {contracts.length}</button><button>فعال</button><button>بحرانی</button><button>پیش‌نویس</button></div><button className="primary" onClick={() => setModal(true)}>＋ قرارداد جدید</button></div>
           <div className="panel table-panel"><ContractTable contracts={results} detailed /></div>
         </SectionIntro>}
+        {page === "finance" && <SectionIntro eyebrow="کنترل مالی پروژه‌ها" title="مالی و مطالبات" description="نمای یکپارچه صورت‌وضعیت‌ها، سررسیدها، مبالغ وصول‌شده و مطالبات نیازمند پیگیری.">
+          <section className="finance-stats">
+            <article className="finance-stat open"><span>کل مطالبات باز</span><b>۲۶.۴</b><small>میلیارد تومان</small><em>۷ پرونده در جریان</em></article>
+            <article className="finance-stat overdue"><span>مطالبات معوق</span><b>۹.۷</b><small>میلیارد تومان</small><em>۳ پرونده نیازمند اقدام</em></article>
+            <article className="finance-stat collected"><span>وصول شش‌ماهه</span><b>۴۸.۲</b><small>میلیارد تومان</small><em>۱۴.۸٪ رشد</em></article>
+            <article className="finance-stat upcoming"><span>سررسید نزدیک</span><b>۳</b><small>صورت‌وضعیت</small><em>تا هفت روز آینده</em></article>
+          </section>
+          <div className="finance-toolbar">
+            <label className="search wide"><span>⌕</span><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="قرارداد، کارفرما یا صورت‌وضعیت..." /></label>
+            <div className="pills" aria-label="فیلتر وضعیت مالی">{(["همه", "معوق", "سررسید نزدیک", "در انتظار تأیید", "وصول شده"] as FinanceFilter[]).map((filter) => <button key={filter} className={financeFilter === filter ? "selected" : ""} onClick={() => setFinanceFilter(filter)}>{filter}</button>)}</div>
+            <button className="primary" onClick={() => notify("گزارش مالی برای خروجی آماده شد")}>خروجی گزارش</button>
+          </div>
+          <div className="panel finance-panel"><ReceivablesTable items={receivables} notify={notify} /></div>
+        </SectionIntro>}
         {page === "projects" && <SectionIntro eyebrow="مدیریت پروژه" title="پروژه‌های جاری" description="پایش پیشرفت، تیم مسئول، مدارک و وضعیت مالی پروژه‌ها."><div className="cards-grid">{seedContracts.slice(0,3).map((item, i) => <article className="panel project-card" key={item.id}><div className="project-head"><b className={`project-icon i${i}`}>◇</b><span className={statusClass(item.status)}>{item.status}</span></div><small>{item.field}</small><h3>{item.title}</h3><p>{item.employer}</p><div className="progress"><div><b>پیشرفت پروژه</b><em>{item.progress}٪</em></div><span><i style={{width:`${item.progress}%`}} /></span></div><button onClick={() => notify(`پرونده ${item.id} انتخاب شد`)}>مشاهده پرونده ←</button></article>)}</div></SectionIntro>}
         {page === "tenders" && <SectionIntro eyebrow="پایش فرصت‌ها" title="مناقصات پیشنهادی برای PDP" description="آگهی‌های جمع‌آوری‌شده پس از حذف موارد تکراری و تطبیق با صلاحیت‌های شرکت."><div className="tender-stats"><article><b>۴۷</b><span>آگهی جدید امروز</span></article><article><b>۱۲</b><span>دارای تطابق بالا</span></article><article><b>۵</b><span>مهلت کمتر از ۷ روز</span></article></div><div className="panel opportunities">{["مطالعات توسعه منطقه ویژه اقتصادی","طراحی مجموعه آموزشی و ورزشی","مطالعات برنامه‌ریزی فضایی شهرستان"].map((item,i)=><article key={item}><div className="score"><b>{[92,84,78][i]}٪</b><span>تطابق</span></div><div><small>{["ستاد ایران","هزاره","پارس‌نماد"][i]}</small><h3>{item}</h3><p>{["سازمان منطقه ویژه اقتصادی","اداره کل نوسازی مدارس","سازمان مدیریت و برنامه‌ریزی"][i]}</p></div><div className="opp-action"><span>مهلت: {[3,6,9][i]} روز</span><button onClick={()=>notify("فرصت به فهرست بررسی افزوده شد")}>افزودن به بررسی</button></div></article>)}</div></SectionIntro>}
         {page === "analysis" && <SectionIntro eyebrow="مرکز هوشمندی" title="تحلیل‌های ChatGPT" description="تحلیل‌های ذخیره‌شده با ذکر داده‌های منبع، زمان تولید و وضعیت بازبینی انسانی."><div className="panel analysis-hero"><b>✦</b><div><span>اتصال آزمایشی</span><h3>از ChatGPT بخواهید داده‌های PDP One را تحلیل کند</h3><p>ابزار MCP اطلاعات مجاز را از API می‌خواند و نتیجه قابل بازبینی را در همین صفحه ذخیره می‌کند.</p></div><button className="primary" onClick={()=>notify("درخواست نمونه آماده شد")}>ساخت درخواست نمونه</button></div><div className="cards-grid">{["ریسک وصول مطالبات","فرصت مناقصه پیشنهادی","کنترل برنامه زمان‌بندی"].map((item,i)=><article className="panel report" key={item}><div><span>گزارش AI-{1405120+i}</span><em>بازبینی شده</em></div><h3>{item}</h3><p>{["سه قرارداد در مجموع ۹.۷ میلیارد تومان مطالبات با تأخیر بیش از ۳۰ روز دارند.","مناقصه مطالعات توسعه منطقه ویژه با صلاحیت‌های شرکت تطابق بالایی دارد.","دو پروژه در مسیر بحرانی قرار گرفته‌اند و یک تحویل کلیدی در هفت روز آینده دارند."][i]}</p><footer><span>منبع: {i+3} رکورد سامانه</span><button onClick={()=>notify(item)}>مشاهده گزارش ←</button></footer></article>)}</div></SectionIntro>}
@@ -90,11 +123,13 @@ export default function Home() {
 function Dashboard({contracts,navigate,notify}:{contracts:Contract[];navigate:(p:Page)=>void;notify:(m:string)=>void}) {
   return <><section className="welcome"><div><small>نمای کلی شرکت</small><h2>سلام، امروز چه چیزی نیاز به توجه دارد؟</h2><p>وضعیت قراردادها، مطالبات و فرصت‌های جدید بر اساس آخرین اطلاعات ثبت‌شده.</p></div><span><i /> آخرین به‌روزرسانی: ۱۹:۴۲</span></section>
     <section className="stats">{stats.map(([label,value,note,tone])=><article className={`stat ${tone}`} key={label}><header><span>{label}</span><i /></header><b>{value}</b><p>{note}</p></article>)}</section>
-    <section className="dashboard-grid"><article className="panel chart"><header><div><small>نمای مالی</small><h3>وصول مطالبات شش‌ماهه</h3></div><select><option>شش ماه اخیر</option></select></header><div className="chart-total"><b>۴۸.۲ میلیارد</b><span>٪۱۴.۸ رشد نسبت به دوره قبل</span></div><div className="bars">{[42,58,51,74,62,86].map((h,i)=><div key={i}><span><i style={{height:`${h}%`}} /></span><small>{["بهمن","اسفند","فروردین","اردیبهشت","خرداد","تیر"][i]}</small></div>)}</div></article>
+    <section className="dashboard-grid"><article className="panel chart"><header><div><small>نمای مالی</small><h3>وصول مطالبات شش‌ماهه</h3></div><button onClick={()=>navigate("finance")}>جزئیات مالی ←</button></header><div className="chart-total"><b>۴۸.۲ میلیارد</b><span>٪۱۴.۸ رشد نسبت به دوره قبل</span></div><div className="bars">{[42,58,51,74,62,86].map((h,i)=><div key={i}><span><i style={{height:`${h}%`}} /></span><small>{["بهمن","اسفند","فروردین","اردیبهشت","خرداد","تیر"][i]}</small></div>)}</div></article>
     <article className="panel alerts"><header><div><small>اقدام لازم</small><h3>موارد نیازمند توجه</h3></div><button onClick={()=>notify("همه اعلان‌ها در نسخه بعدی نمایش داده می‌شود")}>مشاهده همه</button></header>{["مهلت ارسال پیشنهاد مناقصه قزوین","صورت‌وضعیت شماره ۶ تأیید نشده است","بیمه‌نامه قرارداد بیمارستان رو به انقضاست"].map((x,i)=><button className="alert" key={x} onClick={()=>notify(x)}><i className={`dot d${i}`} /><span><b>{x}</b><small>{["تا ۲ روز دیگر · واحد مناقصات","پروژه صفادشت · ۱۸ روز تأخیر","۵ مرداد ۱۴۰۵ · واحد قراردادها"][i]}</small></span><em>{["فوری","پیگیری","هشدار"][i]}</em></button>)}</article></section>
-    <section className="dashboard-grid lower"><article className="panel contracts"><header><div><small>عملکرد اجرایی</small><h3>قراردادهای در جریان</h3></div><button onClick={()=>navigate("contracts")}>همه قراردادها ←</button></header><ContractTable contracts={contracts.slice(0,3)} /></article><article className="panel insights"><header><div><small>✦ تحلیل ChatGPT</small><h3>بینش‌های تازه</h3></div><em>فعال</em></header><div className="insight warning"><b>ریسک وصول مطالبات</b><p>سه قرارداد، مطالبات با تأخیر بیش از ۳۰ روز دارند.</p><button onClick={()=>navigate("analysis")}>مشاهده تحلیل و منابع ←</button></div><div className="insight success"><b>فرصت مناقصه پیشنهادی</b><p>یک فرصت جدید با صلاحیت‌های شرکت تطابق بالایی دارد.</p><button onClick={()=>navigate("tenders")}>بررسی فرصت ←</button></div></article></section></>;
+    <section className="dashboard-grid lower"><article className="panel contracts"><header><div><small>عملکرد اجرایی</small><h3>قراردادهای در جریان</h3></div><button onClick={()=>navigate("contracts")}>همه قراردادها ←</button></header><ContractTable contracts={contracts.slice(0,3)} /></article><article className="panel insights"><header><div><small>✦ تحلیل ChatGPT</small><h3>بینش‌های تازه</h3></div><em>فعال</em></header><div className="insight warning"><b>ریسک وصول مطالبات</b><p>سه قرارداد، مطالبات با تأخیر بیش از ۳۰ روز دارند.</p><button onClick={()=>navigate("finance")}>مشاهده مطالبات و منابع ←</button></div><div className="insight success"><b>فرصت مناقصه پیشنهادی</b><p>یک فرصت جدید با صلاحیت‌های شرکت تطابق بالایی دارد.</p><button onClick={()=>navigate("tenders")}>بررسی فرصت ←</button></div></article></section></>;
 }
 
 function SectionIntro({eyebrow,title,description,children}:{eyebrow:string;title:string;description:string;children:React.ReactNode}) { return <><section className="intro"><small>{eyebrow}</small><h2>{title}</h2><p>{description}</p></section>{children}</>; }
 
 function ContractTable({contracts,detailed=false}:{contracts:Contract[];detailed?:boolean}) { return <div className="table-wrap"><table><thead><tr><th>قرارداد و کارفرما</th><th>حوزه</th><th>مبلغ</th>{detailed&&<th>سررسید</th>}<th>پیشرفت</th><th>وضعیت</th><th /></tr></thead><tbody>{contracts.map(c=><tr key={c.id}><td><b>{c.title}</b><small>{c.id} · {c.employer}</small></td><td>{c.field}</td><td>{c.value}</td>{detailed&&<td>{c.due}</td>}<td><div className="mini-progress"><span><i style={{width:`${c.progress}%`}} /></span><em>{c.progress}٪</em></div></td><td><span className={statusClass(c.status)}>{c.status}</span></td><td>←</td></tr>)}</tbody></table>{!contracts.length&&<p className="empty">رکوردی پیدا نشد.</p>}</div>; }
+
+function ReceivablesTable({items,notify}:{items:Receivable[];notify:(message:string)=>void}) { return <div className="table-wrap"><table><thead><tr><th>قرارداد و کارفرما</th><th>صورت‌وضعیت</th><th>مبلغ</th><th>وصول‌شده</th><th>سررسید</th><th>وضعیت</th><th /></tr></thead><tbody>{items.map((item)=><tr key={item.id}><td><b>{item.title}</b><small>{item.contractId} · {item.employer}</small></td><td><b>{item.statement}</b><small>{item.id}</small></td><td className="money">{item.amount}</td><td className="money received">{item.received}</td><td>{item.due}</td><td><span className={financeStatusClass(item.status)}>{item.status}</span></td><td><button className="row-action" onClick={()=>notify(`پرونده مالی ${item.id} انتخاب شد`)} aria-label={`مشاهده ${item.id}`}>←</button></td></tr>)}</tbody></table>{!items.length&&<p className="empty">موردی با این فیلتر پیدا نشد.</p>}</div>; }
