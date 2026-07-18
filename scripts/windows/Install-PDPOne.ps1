@@ -10,7 +10,7 @@ $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
 Set-StrictMode -Version Latest
 
-$InstallerVersion = "2026.07.19.19"
+$InstallerVersion = "2026.07.19.20"
 $ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 Set-Location $ProjectRoot
 
@@ -50,6 +50,31 @@ function Get-EnvValue([string]$Path, [string]$Name) {
         Select-Object -Last 1
     if ($null -eq $match) { return $null }
     return $match.Matches[0].Groups[1].Value.Trim()
+}
+
+function Ensure-LocalCsrfOrigins([string]$Path) {
+    $content = [IO.File]::ReadAllText($Path)
+    $name = "DJANGO_CSRF_TRUSTED_ORIGINS"
+    $pattern = "(?m)^$([regex]::Escape($name))=(.*)$"
+    $match = [regex]::Match($content, $pattern)
+    $origins = @()
+    if ($match.Success) {
+        $origins = @($match.Groups[1].Value.Split(',') | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+    }
+
+    foreach ($requiredOrigin in @("http://localhost:8080", "http://127.0.0.1:8080", "https://*.ts.net")) {
+        if ($origins -notcontains $requiredOrigin) {
+            $origins += $requiredOrigin
+        }
+    }
+
+    $newLine = "$name=$($origins -join ',')"
+    if ($match.Success) {
+        $content = [regex]::Replace($content, $pattern, $newLine)
+    } else {
+        $content = $content.TrimEnd() + "`r`n$newLine`r`n"
+    }
+    [IO.File]::WriteAllText($Path, $content, [Text.UTF8Encoding]::new($false))
 }
 
 function Find-PdpPostgresVolume {
@@ -403,7 +428,7 @@ DATABASE_URL=postgresql://pdp_one:change-me@db:5432/pdp_one
 DJANGO_SECRET_KEY=change-this-in-production
 DJANGO_DEBUG=false
 DJANGO_ALLOWED_HOSTS=localhost,127.0.0.1,backend,nginx,.trycloudflare.com,.pinggy-free.link,.pinggy.link
-DJANGO_CSRF_TRUSTED_ORIGINS=https://*.trycloudflare.com,https://*.pinggy-free.link,https://*.pinggy.link
+DJANGO_CSRF_TRUSTED_ORIGINS=http://localhost:8080,http://127.0.0.1:8080,https://*.ts.net,https://*.trycloudflare.com,https://*.pinggy-free.link,https://*.pinggy.link
 REDIS_URL=redis://redis:6379/0
 PDP_API_URL=http://backend:8000/api/v1
 PDP_MCP_TOKEN=replace-with-a-long-random-token
@@ -439,6 +464,8 @@ PDP_TRIAL_ADMIN_PASSWORD=replace-with-a-random-password
     }
     [IO.File]::WriteAllText($EnvPath, $envContent, [Text.UTF8Encoding]::new($false))
 }
+
+Ensure-LocalCsrfOrigins -Path $EnvPath
 
 $postgresImage = "$containerRegistry/postgres:17-alpine"
 $postgresVolumeName = Find-PdpPostgresVolume
