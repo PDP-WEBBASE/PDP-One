@@ -9,6 +9,33 @@ Set-StrictMode -Version Latest
 
 $SourceRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 
+function Get-FreeSystemDriveBytes {
+    $driveName = $env:SystemDrive.TrimEnd(':')
+    return (Get-PSDrive -Name $driveName).Free
+}
+
+function Invoke-SafeDockerCacheCleanup([string]$Reason) {
+    Write-Host $Reason -ForegroundColor Cyan
+    Write-Host "Persistent database, Redis and private-file volumes are protected." -ForegroundColor DarkGreen
+
+    $previousErrorAction = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = "Continue"
+        & docker builder prune --all --force 2>&1 | Out-Host
+        & docker image prune --force 2>&1 | Out-Host
+    } finally {
+        $ErrorActionPreference = $previousErrorAction
+    }
+}
+
+function Protect-LowDiskBeforeBuild {
+    $freeBytes = Get-FreeSystemDriveBytes
+    Write-Host ("Free system-drive space before build: {0:N2} GB" -f ($freeBytes / 1GB)) -ForegroundColor Cyan
+    if ($freeBytes -lt 12GB) {
+        Invoke-SafeDockerCacheCleanup -Reason "Low disk space detected. Removing unused build cache before the build ..."
+    }
+}
+
 function Test-DockerEngine {
     cmd /c "docker info >nul 2>&1"
     return $LASTEXITCODE -eq 0
@@ -162,9 +189,11 @@ Ensure-TrialConnectionSettings -Path (Join-Path $InstalledRoot ".env")
 docker compose config --quiet
 if ($LASTEXITCODE -ne 0) { throw "Docker Compose configuration is invalid. The existing data was not deleted." }
 
+Protect-LowDiskBeforeBuild
 Write-Host "Building and starting the updated PDP One services ..." -ForegroundColor Cyan
 docker compose up --build --detach
 if ($LASTEXITCODE -ne 0) { throw "PDP One services failed to start after the update." }
+Invoke-SafeDockerCacheCleanup -Reason "Updated images are ready. Removing build cache that is no longer needed at runtime ..."
 
 $ready = $false
 foreach ($attempt in 1..60) {
