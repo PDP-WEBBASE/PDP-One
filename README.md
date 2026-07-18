@@ -51,7 +51,7 @@ Do not use the temporary trial link as a permanent production deployment. The ra
 
 ## ChatGPT connection
 
-Double-click `CONNECT-CHATGPT.bat`. It starts or updates the services, verifies health, creates a free temporary HTTPS tunnel, copies the tokenized MCP URL to the clipboard, opens the ChatGPT app settings and writes the exact connection fields to `PDP-ONE-CHATGPT-CONNECTION.txt`.
+Double-click `CONNECT-CHATGPT.bat`. It starts or updates the services, verifies health, launches the official Tailscale container through the configured registry cache, creates a free temporary HTTPS Funnel, copies the tokenized MCP URL to the clipboard, opens the ChatGPT app settings and writes the exact connection fields to `PDP-ONE-CHATGPT-CONNECTION.txt`. On the first run only, complete the Tailscale account and Funnel approval pages opened by the script; the device identity is then preserved in a local Docker volume.
 
 This integration does not use the OpenAI API; ChatGPT invokes the MCP tools from the user's ChatGPT workspace.
 
