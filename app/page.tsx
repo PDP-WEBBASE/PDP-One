@@ -13,6 +13,7 @@ type ApiReceivable = { id: string; reference_code: string; contract_code: string
 type FinanceSummary = { openAmount: string; overdueAmount: string; collectedAmount: string; dueSoonCount: number; openCount: number };
 
 const seedContracts: Contract[] = [
+  { id: "TEST-1405-001", title: "قرارداد آزمایشی مطالعات و طراحی دفتر مرکزی", employer: "شرکت نمونه آزمایشی", field: "معماری", value: "۱.۲۵ میلیارد", progress: 0, status: "پیش‌نویس", due: "۳۰ آذر ۱۴۰۵" },
   { id: "PDP-1405-012", title: "مطالعات طرح جامع شهرک صنعتی صفادشت", employer: "شرکت شهرک‌های صنعتی تهران", field: "برنامه‌ریزی فضایی", value: "۱۲.۸ میلیارد", progress: 72, status: "فعال", due: "۲۸ مرداد ۱۴۰۵" },
   { id: "PDP-1405-009", title: "طراحی معماری مجموعه اداری مرکزی", employer: "سازمان منطقه آزاد", field: "معماری", value: "۸.۴ میلیارد", progress: 48, status: "در انتظار", due: "۱۲ شهریور ۱۴۰۵" },
   { id: "PDP-1404-031", title: "خدمات مشاور تاسیسات مکانیکی بیمارستان", employer: "دانشگاه علوم پزشکی", field: "تاسیسات", value: "۵.۹ میلیارد", progress: 89, status: "بحرانی", due: "۵ مرداد ۱۴۰۵" },
