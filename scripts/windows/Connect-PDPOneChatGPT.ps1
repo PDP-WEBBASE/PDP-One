@@ -1,0 +1,197 @@
+#requires -Version 5.1
+#requires -RunAsAdministrator
+[CmdletBinding()]
+param()
+
+$ErrorActionPreference = "Stop"
+$ProgressPreference = "SilentlyContinue"
+Set-StrictMode -Version Latest
+
+function New-RandomSecret([int]$Bytes = 36) {
+    $buffer = New-Object byte[] $Bytes
+    $generator = [System.Security.Cryptography.RandomNumberGenerator]::Create()
+    try { $generator.GetBytes($buffer) } finally { $generator.Dispose() }
+    return [Convert]::ToBase64String($buffer).TrimEnd('=').Replace('+', '-').Replace('/', '_')
+}
+
+function Test-DockerEngine {
+    cmd /c "docker info >nul 2>&1"
+    return $LASTEXITCODE -eq 0
+}
+
+function Find-InstalledProjectRoot {
+    $sourceRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
+    if (Test-Path -LiteralPath (Join-Path $sourceRoot ".env")) { return $sourceRoot }
+
+    $containerId = docker ps -a `
+        --filter "label=com.docker.compose.project=pdp-one" `
+        --filter "label=com.docker.compose.service=nginx" `
+        --format "{{.ID}}" 2>$null | Select-Object -First 1
+    if ([string]::IsNullOrWhiteSpace($containerId)) {
+        throw "PDP One installation was not found. Run INSTALL-PDP-ONE.bat first."
+    }
+    $inspect = @((docker inspect $containerId | ConvertFrom-Json))[0]
+    $root = $inspect.Config.Labels.'com.docker.compose.project.working_dir'
+    if ([string]::IsNullOrWhiteSpace($root) -or -not (Test-Path -LiteralPath $root)) {
+        throw "The installed PDP One folder could not be found."
+    }
+    return (Resolve-Path -LiteralPath $root).Path
+}
+
+function Get-EnvValue([string]$Path, [string]$Name) {
+    $match = Select-String -LiteralPath $Path -Pattern "^$([regex]::Escape($Name))=(.*)$" | Select-Object -Last 1
+    if ($null -eq $match) { return $null }
+    return $match.Matches[0].Groups[1].Value.Trim()
+}
+
+function Set-EnvValue([string]$Path, [string]$Name, [string]$Value) {
+    $content = [IO.File]::ReadAllText($Path)
+    $pattern = "(?m)^$([regex]::Escape($Name))=.*$"
+    if ([regex]::IsMatch($content, $pattern)) {
+        $content = [regex]::Replace($content, $pattern, "$Name=$Value")
+    } else {
+        $content = $content.TrimEnd() + "`r`n$Name=$Value`r`n"
+    }
+    [IO.File]::WriteAllText($Path, $content, [Text.UTF8Encoding]::new($false))
+}
+
+function Wait-ForUrl([string]$Path, [string]$Pattern, [int]$Seconds = 35) {
+    foreach ($attempt in 1..$Seconds) {
+        if (Test-Path -LiteralPath $Path) {
+            $text = Get-Content -LiteralPath $Path -Raw -ErrorAction SilentlyContinue
+            $match = [regex]::Match([string]$text, $Pattern)
+            if ($match.Success) { return $match.Value.TrimEnd('/', '.', ')') }
+        }
+        Start-Sleep -Seconds 1
+    }
+    return $null
+}
+
+Write-Host "PDP One - automatic ChatGPT connection" -ForegroundColor Green
+if (-not (Get-Command docker -ErrorAction SilentlyContinue)) { throw "Docker command is unavailable." }
+if (-not (Test-DockerEngine)) { throw "Open Rancher Desktop and wait until the Moby engine is ready." }
+
+$ProjectRoot = Find-InstalledProjectRoot
+Set-Location $ProjectRoot
+$EnvPath = Join-Path $ProjectRoot ".env"
+if (-not (Test-Path -LiteralPath $EnvPath)) { throw "The secure .env file is missing." }
+
+$mcpPathToken = Get-EnvValue -Path $EnvPath -Name "PDP_MCP_PATH_TOKEN"
+if ([string]::IsNullOrWhiteSpace($mcpPathToken) -or $mcpPathToken -eq "replace-with-a-random-path-token") {
+    $mcpPathToken = New-RandomSecret 32
+    Set-EnvValue -Path $EnvPath -Name "PDP_MCP_PATH_TOKEN" -Value $mcpPathToken
+}
+Set-EnvValue -Path $EnvPath -Name "PDP_TRIAL_MODE" -Value "true"
+$trialAdminUser = Get-EnvValue -Path $EnvPath -Name "PDP_TRIAL_ADMIN_USERNAME"
+if ([string]::IsNullOrWhiteSpace($trialAdminUser)) {
+    $trialAdminUser = "pdp-admin"
+    Set-EnvValue -Path $EnvPath -Name "PDP_TRIAL_ADMIN_USERNAME" -Value $trialAdminUser
+}
+$trialAdminPassword = Get-EnvValue -Path $EnvPath -Name "PDP_TRIAL_ADMIN_PASSWORD"
+if ([string]::IsNullOrWhiteSpace($trialAdminPassword) -or $trialAdminPassword.StartsWith("replace-with-")) {
+    $trialAdminPassword = New-RandomSecret 24
+    Set-EnvValue -Path $EnvPath -Name "PDP_TRIAL_ADMIN_PASSWORD" -Value $trialAdminPassword
+}
+
+Write-Host "Starting PDP One and checking PostgreSQL ..." -ForegroundColor Cyan
+docker compose up --build --detach
+if ($LASTEXITCODE -ne 0) { throw "PDP One services failed to start." }
+
+$ready = $false
+foreach ($attempt in 1..75) {
+    try {
+        $response = Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:8080/healthz" -TimeoutSec 5
+        if ($response.StatusCode -eq 200) { $ready = $true; break }
+    } catch { Start-Sleep -Seconds 2 }
+}
+if (-not $ready) {
+    docker compose logs --tail 100 nginx backend mcp
+    throw "PDP One did not become healthy."
+}
+
+$logDir = Join-Path $ProjectRoot "work\chatgpt-connection"
+New-Item -ItemType Directory -Force -Path $logDir | Out-Null
+$tunnelProcess = $null
+$publicBase = $null
+$provider = $null
+
+if (Get-Command cloudflared -ErrorAction SilentlyContinue) {
+    Write-Host "Creating a free temporary HTTPS address with Cloudflare ..." -ForegroundColor Cyan
+    $cfOut = Join-Path $logDir "cloudflared.out.log"
+    $cfErr = Join-Path $logDir "cloudflared.err.log"
+    Remove-Item $cfOut, $cfErr -Force -ErrorAction SilentlyContinue
+    $tunnelProcess = Start-Process cloudflared -ArgumentList @("tunnel", "--url", "http://127.0.0.1:8080", "--no-autoupdate") -PassThru -WindowStyle Hidden -RedirectStandardOutput $cfOut -RedirectStandardError $cfErr
+    $publicBase = Wait-ForUrl -Path $cfErr -Pattern 'https://[a-z0-9-]+\.trycloudflare\.com' -Seconds 35
+    if ($publicBase) { $provider = "Cloudflare Quick Tunnel" }
+    else {
+        Stop-Process -Id $tunnelProcess.Id -Force -ErrorAction SilentlyContinue
+        $tunnelProcess = $null
+    }
+}
+
+if (-not $publicBase) {
+    $ssh = Get-Command ssh.exe -ErrorAction SilentlyContinue
+    if (-not $ssh) { throw "Neither Cloudflare Quick Tunnel nor Windows OpenSSH is available." }
+    Write-Host "Cloudflare is unavailable; using the free Pinggy fallback ..." -ForegroundColor Yellow
+    $pgOut = Join-Path $logDir "pinggy.out.log"
+    $pgErr = Join-Path $logDir "pinggy.err.log"
+    Remove-Item $pgOut, $pgErr -Force -ErrorAction SilentlyContinue
+    $arguments = @(
+        "-p", "443", "-T", "-o", "StrictHostKeyChecking=accept-new", "-o", "ConnectTimeout=20",
+        "-o", "ServerAliveInterval=30", "-o", "ServerAliveCountMax=3", "-o", "ExitOnForwardFailure=yes",
+        "-R", "0:127.0.0.1:8080", "free.pinggy.io"
+    )
+    $tunnelProcess = Start-Process $ssh.Source -ArgumentList $arguments -PassThru -WindowStyle Hidden -RedirectStandardOutput $pgOut -RedirectStandardError $pgErr
+    foreach ($path in @($pgOut, $pgErr)) {
+        if (-not $publicBase) { $publicBase = Wait-ForUrl -Path $path -Pattern 'https://[A-Za-z0-9.-]*pinggy[^\s\x1b]*' -Seconds 20 }
+    }
+    if ($publicBase) { $provider = "Pinggy free tunnel" }
+}
+
+if (-not $publicBase -or $null -eq $tunnelProcess -or $tunnelProcess.HasExited) {
+    throw "A temporary HTTPS address could not be created. Check the internet connection and run this file again."
+}
+
+$mcpEndpoint = "$($publicBase.TrimEnd('/'))/mcp/$mcpPathToken"
+$instructionPath = Join-Path $ProjectRoot "PDP-ONE-CHATGPT-CONNECTION.txt"
+$instructions = @"
+PDP One - ChatGPT connection
+================================
+
+Name: PDP One
+Description: Private trial connector for contracts, receivables and management analysis.
+MCP URL: $mcpEndpoint
+Authentication: No Authentication
+Tunnel: $provider
+
+ChatGPT Business setup (one-time manual confirmation):
+1. Open https://chatgpt.com/plugins
+2. Enable Developer mode for the workspace if it is not enabled.
+3. Create a new app/connector.
+4. Enter the name, description and MCP URL shown above.
+5. Choose No Authentication, scan the tools, and confirm Create/Save.
+
+The URL works only while this window and Rancher Desktop remain open.
+Closing this window revokes the temporary internet connection.
+No OpenAI API key is used by PDP One.
+"@
+[IO.File]::WriteAllText($instructionPath, $instructions, [Text.UTF8Encoding]::new($false))
+Set-Clipboard -Value $mcpEndpoint
+
+Write-Host "" 
+Write-Host "PDP One is connected to the internet." -ForegroundColor Green
+Write-Host "MCP URL (already copied to clipboard):" -ForegroundColor Cyan
+Write-Host $mcpEndpoint -ForegroundColor White
+Write-Host "" 
+Write-Host "ChatGPT setup instructions were opened in Notepad." -ForegroundColor Green
+Write-Host "Keep this window open. Press Ctrl+C to revoke the link." -ForegroundColor Yellow
+Start-Process notepad.exe -ArgumentList $instructionPath
+Start-Process "https://chatgpt.com/plugins"
+
+try {
+    Wait-Process -Id $tunnelProcess.Id
+} finally {
+    if ($null -ne $tunnelProcess -and -not $tunnelProcess.HasExited) {
+        Stop-Process -Id $tunnelProcess.Id -Force -ErrorAction SilentlyContinue
+    }
+}
