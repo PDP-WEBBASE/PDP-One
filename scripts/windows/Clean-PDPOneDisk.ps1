@@ -220,7 +220,7 @@ function Compact-RancherWslDisks {
     $previousErrorAction = $ErrorActionPreference
     try {
         $ErrorActionPreference = "Continue"
-        & wsl.exe -d rancher-desktop -u root -- sh -lc "fstrim -av || true" 2>&1 | Out-Host
+        & wsl.exe -d rancher-desktop -u root -- sh -lc 'for path in / /mnt/wsl/rancher-desktop-data/data; do if [ -e "$path" ]; then fstrim -v "$path" || true; fi; done' 2>&1 | Out-Host
     } finally {
         $ErrorActionPreference = $previousErrorAction
     }
@@ -309,7 +309,7 @@ function Compact-RancherWslDisks {
 }
 
 $freeBefore = Get-FreeSystemDriveBytes
-Write-Host "PDP One safe disk cleanup 2026.07.18.5" -ForegroundColor Green
+Write-Host "PDP One safe disk cleanup 2026.07.18.6" -ForegroundColor Green
 Write-Host "Database volumes and private-file volumes are protected and will not be removed." -ForegroundColor DarkGreen
 Write-Host "Free space before cleanup: $(Format-Bytes $freeBefore)" -ForegroundColor Cyan
 
