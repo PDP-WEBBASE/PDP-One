@@ -21,8 +21,18 @@ async def api(method: str, path: str, **kwargs: Any) -> Any:
     headers = {"Authorization": f"Bearer {TOKEN}", "Accept": "application/json"}
     async with httpx.AsyncClient(timeout=30) as client:
         response = await client.request(method, f"{API_URL}/{path.lstrip('/')}", headers=headers, **kwargs)
-        response.raise_for_status()
+        try:
+            response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            raise RuntimeError(f"PDP One API request failed with HTTP {exc.response.status_code}.") from exc
         return response.json()
+
+@mcp.tool(
+    description="Check whether PDP One, its PostgreSQL database, and the trial dataset are reachable.",
+    annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, openWorldHint=False, idempotentHint=True),
+)
+async def get_system_status() -> dict:
+    return await api("GET", "system-status/")
 
 @mcp.tool(
     description="Use this when the user wants to find PDP One contracts by code, title, employer, or field.",
