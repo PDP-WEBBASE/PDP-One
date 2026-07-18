@@ -30,7 +30,7 @@ services:
         PDP_DOCKER_REGISTRY: ${PDP_DOCKER_REGISTRY:-docker.arvancloud.ir/library}
     restart: unless-stopped
     env_file: .env
-    command: sh -c "python manage.py migrate && gunicorn config.wsgi:application --bind 0.0.0.0:8000 --workers 3"
+    command: sh -c "python manage.py migrate && python manage.py ensure_trial_admin && python manage.py seed_trial_data && gunicorn config.wsgi:application --bind 0.0.0.0:8000 --workers 3"
     volumes:
       - private_files:/data/private
     depends_on:
@@ -85,10 +85,13 @@ services:
   nginx:
     image: ${PDP_DOCKER_REGISTRY:-docker.arvancloud.ir/library}/nginx:1.27-alpine
     restart: unless-stopped
+    environment:
+      PDP_MCP_PATH_TOKEN: ${PDP_MCP_PATH_TOKEN:-trial-path-not-configured}
+      NGINX_ENVSUBST_FILTER: PDP_MCP_PATH_TOKEN
     ports:
       - "8080:80"
     volumes:
-      - ./infra/nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./infra/nginx/default.conf.template:/etc/nginx/templates/default.conf.template:ro
     depends_on: [web, backend, mcp]
 
 volumes:
