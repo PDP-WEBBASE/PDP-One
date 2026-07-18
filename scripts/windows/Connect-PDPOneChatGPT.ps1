@@ -81,26 +81,56 @@ function Wait-ForUrl([string[]]$Paths, [string]$Pattern, [int]$Seconds = 35) {
     return $null
 }
 
-function Test-PublicTunnel([string]$BaseUrl, $Process) {
-    if ([string]::IsNullOrWhiteSpace($BaseUrl) -or $null -eq $Process -or $Process.HasExited) {
-        return $false
-    }
+function Test-PublicTunnel([string]$BaseUrl, $Process, [switch]$ServiceManaged) {
+    if ([string]::IsNullOrWhiteSpace($BaseUrl)) { return $false }
+    if (-not $ServiceManaged -and ($null -eq $Process -or $Process.HasExited)) { return $false }
+
     foreach ($attempt in 1..3) {
         try {
             $healthUrl = "$($BaseUrl.TrimEnd('/'))/healthz"
             $response = Invoke-WebRequest -UseBasicParsing -Uri $healthUrl -TimeoutSec 10
             if ($response.StatusCode -eq 200 -and $response.Content -match "PDP One ready") {
+                if ($ServiceManaged) { return $true }
                 return (-not $Process.HasExited)
             }
         } catch {
-            if ($Process.HasExited) { return $false }
+            if (-not $ServiceManaged -and $null -ne $Process -and $Process.HasExited) { return $false }
         }
         Start-Sleep -Seconds 2
     }
     return $false
 }
 
-Write-Host "PDP One - automatic ChatGPT connection 2026.07.18.4" -ForegroundColor Green
+function Find-TailscaleCli {
+    $command = Get-Command tailscale.exe -ErrorAction SilentlyContinue
+    if ($command) { return $command.Source }
+    foreach ($candidate in @(
+        "C:\Program Files\Tailscale\tailscale.exe",
+        (Join-Path $env:LOCALAPPDATA "Tailscale\tailscale.exe")
+    )) {
+        if (Test-Path -LiteralPath $candidate) { return $candidate }
+    }
+    return $null
+}
+
+function Ensure-TailscaleCli {
+    $cli = Find-TailscaleCli
+    if ($cli) { return $cli }
+    if (-not (Get-Command winget -ErrorAction SilentlyContinue)) { return $null }
+
+    Write-Host "Installing Tailscale for a reliable free HTTPS Funnel ..." -ForegroundColor Cyan
+    winget install --id Tailscale.Tailscale --exact --source winget --silent --accept-package-agreements --accept-source-agreements --disable-interactivity
+    if ($LASTEXITCODE -ne 0) { return $null }
+
+    foreach ($attempt in 1..30) {
+        $cli = Find-TailscaleCli
+        if ($cli) { return $cli }
+        Start-Sleep -Seconds 2
+    }
+    return $null
+}
+
+Write-Host "PDP One - automatic ChatGPT connection 2026.07.18.5" -ForegroundColor Green
 if (-not (Get-Command docker -ErrorAction SilentlyContinue)) { throw "Docker command is unavailable." }
 if (-not (Test-DockerEngine)) { throw "Open Rancher Desktop and wait until the Moby engine is ready." }
 
