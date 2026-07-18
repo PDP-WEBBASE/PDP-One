@@ -108,7 +108,7 @@ function Get-TailscaleContainerStatus {
     try { return ($statusText | ConvertFrom-Json) } catch { return $null }
 }
 
-Write-Host "PDP One - automatic ChatGPT connection 2026.07.18.10" -ForegroundColor Green
+Write-Host "PDP One - automatic ChatGPT connection 2026.07.18.11" -ForegroundColor Green
 if (-not (Get-Command docker -ErrorAction SilentlyContinue)) { throw "Docker command is unavailable." }
 if (-not (Test-DockerEngine)) { throw "Open Rancher Desktop and wait until the Moby engine is ready." }
 
@@ -245,16 +245,20 @@ if ($tailscaleStartExitCode -eq 0) {
         $loginUrl = Wait-ForUrl -Paths @($loginOut, $loginErr) -Pattern 'https://login\.tailscale\.com/[^\s]+' -Seconds 45
         if ($loginUrl) {
             Start-Process $loginUrl
-            Read-Host "Complete the one-time Tailscale sign-in in the browser, then press Enter here"
+            Write-Host "The browser is open. Complete Tailscale sign-in; this window will continue automatically." -ForegroundColor Yellow
         } else {
             Write-Host "The sign-in URL was not detected. Tailscale logs will be included in diagnostics." -ForegroundColor Yellow
         }
 
-        foreach ($attempt in 1..60) {
+        foreach ($attempt in 1..90) {
             $status = Get-TailscaleContainerStatus
             if ($null -ne $status -and $status.BackendState -eq "Running") {
                 $isLoggedIn = $true
+                Write-Host "Tailscale sign-in detected successfully." -ForegroundColor Green
                 break
+            }
+            if (($attempt % 5) -eq 0) {
+                Write-Host "Waiting for Tailscale sign-in ... $($attempt * 2) seconds" -ForegroundColor DarkYellow
             }
             Start-Sleep -Seconds 2
         }
@@ -297,7 +301,13 @@ if ($tailscaleStartExitCode -eq 0) {
             $approvalMatch = [regex]::Match($funnelText, 'https://login\.tailscale\.com/[^\s]+')
             if ($approvalMatch.Success -and $funnelAttempt -eq 1) {
                 Start-Process ($approvalMatch.Value.TrimEnd('.', ')'))
-                Read-Host "Approve public Funnel in the opened Tailscale page, then press Enter here"
+                Write-Host "Approve public Funnel in the browser. Retrying automatically ..." -ForegroundColor Yellow
+                foreach ($approvalWait in 1..30) {
+                    if (($approvalWait % 5) -eq 0) {
+                        Write-Host "Waiting for Funnel approval ... $($approvalWait * 2) seconds" -ForegroundColor DarkYellow
+                    }
+                    Start-Sleep -Seconds 2
+                }
             } else {
                 break
             }
