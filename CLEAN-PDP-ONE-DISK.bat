@@ -9,7 +9,16 @@ if not "%errorlevel%"=="0" (
   exit /b
 )
 
-powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\windows\Clean-PDPOneDisk.ps1" -CurrentSourceRoot "%~dp0" -CompactWsl
+echo Cleanup package: %~dp0
+findstr /c:"PDP One safe disk cleanup 2026.07.18.5" "%~dp0scripts\windows\Clean-PDPOneDisk.ps1" >nul 2>&1
+if not "%errorlevel%"=="0" (
+  echo This is an outdated or incomplete PDP One cleanup package.
+  echo Download and extract the latest main branch, then run CLEAN-PDP-ONE-DISK.bat there.
+  pause
+  exit /b 2
+)
+
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\windows\Clean-PDPOneDisk.ps1" -CurrentSourceRoot "%~dp0." -CompactWsl
 set "PDP_ONE_EXIT=%errorlevel%"
 pause
 exit /b %PDP_ONE_EXIT%
