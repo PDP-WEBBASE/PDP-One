@@ -81,7 +81,7 @@ function Wait-ForUrl([string[]]$Paths, [string]$Pattern, [int]$Seconds = 35) {
     return $null
 }
 
-Write-Host "PDP One - automatic ChatGPT connection 2026.07.18.3" -ForegroundColor Green
+Write-Host "PDP One - automatic ChatGPT connection 2026.07.18.4" -ForegroundColor Green
 if (-not (Get-Command docker -ErrorAction SilentlyContinue)) { throw "Docker command is unavailable." }
 if (-not (Test-DockerEngine)) { throw "Open Rancher Desktop and wait until the Moby engine is ready." }
 
@@ -128,6 +128,12 @@ New-Item -ItemType Directory -Force -Path $logDir | Out-Null
 $tunnelProcess = $null
 $publicBase = $null
 $provider = $null
+$cfOut = $null
+$cfErr = $null
+$pgOut = $null
+$pgErr = $null
+$lrOut = $null
+$lrErr = $null
 
 if (Get-Command cloudflared -ErrorAction SilentlyContinue) {
     Write-Host "Creating a free temporary HTTPS address with Cloudflare ..." -ForegroundColor Cyan
@@ -136,9 +142,13 @@ if (Get-Command cloudflared -ErrorAction SilentlyContinue) {
     Remove-Item $cfOut, $cfErr -Force -ErrorAction SilentlyContinue
     $tunnelProcess = Start-Process cloudflared -ArgumentList @("tunnel", "--url", "http://127.0.0.1:8080", "--no-autoupdate") -PassThru -WindowStyle Hidden -RedirectStandardOutput $cfOut -RedirectStandardError $cfErr
     $publicBase = Wait-ForUrl -Paths @($cfErr, $cfOut) -Pattern 'https://[a-z0-9-]+\.trycloudflare\.com' -Seconds 35
-    if ($publicBase) { $provider = "Cloudflare Quick Tunnel" }
-    else {
-        Stop-Process -Id $tunnelProcess.Id -Force -ErrorAction SilentlyContinue
+    if ($publicBase -and -not $tunnelProcess.HasExited) {
+        $provider = "Cloudflare Quick Tunnel"
+    } else {
+        $publicBase = $null
+        if ($null -ne $tunnelProcess -and -not $tunnelProcess.HasExited) {
+            Stop-Process -Id $tunnelProcess.Id -Force -ErrorAction SilentlyContinue
+        }
         $tunnelProcess = $null
     }
 }
@@ -157,7 +167,11 @@ if (-not $publicBase) {
     )
     $tunnelProcess = Start-Process $ssh.Source -ArgumentList $arguments -PassThru -WindowStyle Hidden -RedirectStandardOutput $pgOut -RedirectStandardError $pgErr
     $publicBase = Wait-ForUrl -Paths @($pgOut, $pgErr) -Pattern 'https://[A-Za-z0-9.-]*pinggy[^\s\x1b]*' -Seconds 35
-    if ($publicBase) { $provider = "Pinggy free tunnel" }
+    if ($publicBase -and -not $tunnelProcess.HasExited) {
+        $provider = "Pinggy free tunnel"
+    } else {
+        $publicBase = $null
+    }
 }
 
 if (-not $publicBase) {
@@ -176,7 +190,11 @@ if (-not $publicBase) {
     )
     $tunnelProcess = Start-Process $ssh.Source -ArgumentList $lrArguments -PassThru -WindowStyle Hidden -RedirectStandardOutput $lrOut -RedirectStandardError $lrErr
     $publicBase = Wait-ForUrl -Paths @($lrOut, $lrErr) -Pattern 'https://[A-Za-z0-9.-]+(?:lhr\.life|localhost\.run)' -Seconds 40
-    if ($publicBase) { $provider = "localhost.run free tunnel" }
+    if ($publicBase -and -not $tunnelProcess.HasExited) {
+        $provider = "localhost.run free tunnel"
+    } else {
+        $publicBase = $null
+    }
 }
 
 if (-not $publicBase -or $null -eq $tunnelProcess -or $tunnelProcess.HasExited) {
