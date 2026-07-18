@@ -86,7 +86,36 @@ if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
     throw "Docker is unavailable. Start Rancher Desktop and try again."
 }
 if (-not (Test-DockerEngine)) {
-    throw "The container engine is not ready. Open Rancher Desktop, wait until Moby is running, then try again."
+    Write-Host "The container engine is not ready. Starting Rancher Desktop automatically ..." -ForegroundColor Yellow
+    $rdctl = Get-Command rdctl.exe -ErrorAction SilentlyContinue
+    if ($rdctl) {
+        $previousErrorAction = $ErrorActionPreference
+        try {
+            $ErrorActionPreference = "Continue"
+            & $rdctl.Source start --application.start-in-background 2>&1 | Out-Host
+        } finally {
+            $ErrorActionPreference = $previousErrorAction
+        }
+    }
+    if (-not (Get-Process -Name "Rancher Desktop" -ErrorAction SilentlyContinue)) {
+        $desktopExe = "C:\Program Files\Rancher Desktop\Rancher Desktop.exe"
+        if (Test-Path -LiteralPath $desktopExe) {
+            Start-Process -FilePath $desktopExe -ArgumentList @(
+                "--containerEngine.name", "moby",
+                "--kubernetes.enabled=false"
+            )
+        }
+    }
+    foreach ($attempt in 1..100) {
+        if (Test-DockerEngine) { break }
+        if (($attempt % 5) -eq 0) {
+            Write-Host "Waiting for Moby ... $($attempt * 3) seconds" -ForegroundColor DarkYellow
+        }
+        Start-Sleep -Seconds 3
+    }
+    if (-not (Test-DockerEngine)) {
+        throw "Rancher Desktop could not start automatically. Open it and wait for Moby, then run the updater again."
+    }
 }
 
 $InstalledRoot = Find-InstalledProjectRoot
