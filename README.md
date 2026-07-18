@@ -42,7 +42,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\windows\Stop-PDPOne.ps1
 UPDATE-PDP-ONE.bat
 ```
 
-برای پاک‌سازی فوری فضای نسخه‌های قبلی، فایل زیر را با دسترسی Administrator اجرا کنید:
+برای پاک‌سازی فوری فضای نسخه‌های قبلی، فایل زیر را با دسترسی Administrator اجرا کنید. این عملیات Rancher Desktop را خودکار راه‌اندازی می‌کند، کش Docker را پاک می‌کند و برای بازگرداندن واقعی فضای درایو ویندوز، دیسک WSL را به‌صورت کنترل‌شده Compact می‌کند؛ در پایان Rancher و PDP One دوباره راه‌اندازی می‌شوند:
 
 ```text
 CLEAN-PDP-ONE-DISK.bat
