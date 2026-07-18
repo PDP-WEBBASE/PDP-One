@@ -9,6 +9,10 @@ param(
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 
+if ([string]::IsNullOrWhiteSpace($CurrentSourceRoot)) {
+    $CurrentSourceRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
+}
+
 function Test-DockerReady {
     cmd /c "docker info >nul 2>&1"
     return $LASTEXITCODE -eq 0
@@ -241,6 +245,22 @@ Write-Host "Database volumes and private-file volumes are protected and will not
 Write-Host "Free space before cleanup: $(Format-Bytes $freeBefore)" -ForegroundColor Cyan
 
 $dockerWasReady = Start-RancherDesktopAndWait
+if ($dockerWasReady -and [string]::IsNullOrWhiteSpace($InstalledRoot)) {
+    $containerId = docker ps -a --filter "label=com.docker.compose.project=pdp-one" --filter "label=com.docker.compose.service=nginx" --format "{{.ID}}" 2>$null |
+        Select-Object -First 1
+    if (-not [string]::IsNullOrWhiteSpace($containerId)) {
+        try {
+            $inspect = @((docker inspect $containerId | ConvertFrom-Json))[0]
+            $detectedRoot = $inspect.Config.Labels.'com.docker.compose.project.working_dir'
+            if (-not [string]::IsNullOrWhiteSpace($detectedRoot) -and (Test-Path -LiteralPath $detectedRoot)) {
+                $InstalledRoot = (Resolve-Path -LiteralPath $detectedRoot).Path
+                Write-Host "Detected PDP One installation: $InstalledRoot" -ForegroundColor DarkGreen
+            }
+        } catch {
+            Write-Host "The installed project folder could not be detected; persistent Docker volumes remain protected." -ForegroundColor Yellow
+        }
+    }
+}
 if ($dockerWasReady) {
     Write-Host ""
     Write-Host "Docker usage before cleanup:" -ForegroundColor Cyan
