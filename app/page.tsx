@@ -3,12 +3,14 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
 
 type Page = "dashboard" | "contracts" | "finance" | "projects" | "tenders" | "analysis";
-type Status = "فعال" | "در انتظار" | "بحرانی" | "پیش‌نویس";
+type Status = "فعال" | "در انتظار" | "بحرانی" | "پیش‌نویس" | "خاتمه‌یافته";
 type Contract = { id: string; title: string; employer: string; field: string; value: string; progress: number; status: Status; due: string };
+type DataMode = "loading" | "live" | "auth" | "demo";
+type ApiContract = { id: string; code: string; title: string; employer: string; field: string; value_rials: string | null; progress: number; due_date: string | null; status_label: Status };
 type FinanceStatus = "پیش‌نویس" | "باز" | "معوق" | "سررسید نزدیک" | "در انتظار تأیید" | "وصول شده" | "لغوشده";
 type FinanceFilter = "همه" | FinanceStatus;
 type Receivable = { recordId?: string; id: string; contractId: string; title: string; employer: string; statement: string; amount: string; received: string; due: string; status: FinanceStatus };
-type FinanceMode = "loading" | "live" | "auth" | "demo";
+type FinanceMode = DataMode;
 type ApiReceivable = { id: string; reference_code: string; contract_code: string; contract_title: string; employer: string; statement_title: string; amount_rials: string; received_rials: string; due_date: string; status_label: FinanceStatus };
 type FinanceSummary = { openAmount: string; overdueAmount: string; collectedAmount: string; dueSoonCount: number; openCount: number };
 
@@ -46,7 +48,7 @@ const stats = [
   ["پروژه پرریسک", "۳", "نیازمند تصمیم", "red"],
 ];
 
-const statusClass = (status: Status) => `status ${status === "فعال" ? "ok" : status === "بحرانی" ? "danger" : status === "پیش‌نویس" ? "draft" : "waiting"}`;
+const statusClass = (status: Status) => `status ${status === "فعال" ? "ok" : status === "بحرانی" ? "danger" : status === "پیش‌نویس" || status === "خاتمه‌یافته" ? "draft" : "waiting"}`;
 const financeStatusClass = (status: FinanceStatus) => `finance-status ${status === "وصول شده" ? "paid" : status === "معوق" ? "overdue" : status === "سررسید نزدیک" ? "soon" : status === "پیش‌نویس" || status === "لغوشده" ? "draft" : "review"}`;
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "/api/v1";
 const numberFa = new Intl.NumberFormat("fa-IR", { maximumFractionDigits: 1 });
@@ -59,6 +61,19 @@ function displayRials(value: string) {
 
 function billionValue(value: string | number) {
   return numberFa.format(Number(value) / 10_000_000_000);
+}
+
+function mapApiContract(item: ApiContract): Contract {
+  return {
+    id: item.code,
+    title: item.title,
+    employer: item.employer,
+    field: item.field || "—",
+    value: displayRials(item.value_rials || "0"),
+    progress: Number(item.progress),
+    status: item.status_label,
+    due: item.due_date ? dateFa.format(new Date(`${item.due_date}T12:00:00`)) : "تعیین نشده",
+  };
 }
 
 function mapApiReceivable(item: ApiReceivable): Receivable {
@@ -88,6 +103,8 @@ export default function Home() {
   const [modal, setModal] = useState(false);
   const [search, setSearch] = useState("");
   const [contracts, setContracts] = useState(seedContracts);
+  const [contractMode, setContractMode] = useState<DataMode>("loading");
+  const [contractRefresh, setContractRefresh] = useState(0);
   const [financeFilter, setFinanceFilter] = useState<FinanceFilter>("همه");
   const [financeRecords, setFinanceRecords] = useState(seedReceivables);
   const [financeSummary, setFinanceSummary] = useState(demoFinanceSummary);
@@ -105,6 +122,34 @@ export default function Home() {
     const matchesSearch = !search || [item.id, item.contractId, item.title, item.employer, item.statement].some((value) => value.includes(search));
     return matchesFilter && matchesSearch;
   }), [financeFilter, financeRecords, search]);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function loadContracts() {
+      setContractMode("loading");
+      try {
+        const response = await fetch(`${API_BASE}/contracts/?ordering=-created_at`, { credentials: "include", headers: { Accept: "application/json" } });
+        if (response.status === 401 || response.status === 403) {
+          if (!cancelled) setContractMode("auth");
+          return;
+        }
+        if (!response.ok || !(response.headers.get("content-type") || "").includes("application/json")) throw new Error("api-unavailable");
+        const payload = await response.json();
+        const items: ApiContract[] = Array.isArray(payload) ? payload : payload.results || [];
+        if (!cancelled) {
+          setContracts(items.map(mapApiContract));
+          setContractMode("live");
+        }
+      } catch {
+        if (!cancelled) {
+          setContracts(seedContracts);
+          setContractMode("demo");
+        }
+      }
+    }
+    loadContracts();
+    return () => { cancelled = true; };
+  }, [contractRefresh]);
 
   useEffect(() => {
     if (page !== "finance") return;
@@ -142,15 +187,40 @@ export default function Home() {
 
   function navigate(next: Page) { setPage(next); setMenu(false); }
   function notify(message: string) { setToast(message); window.setTimeout(() => setToast(""), 2600); }
-  function submit(event: FormEvent<HTMLFormElement>) {
+  async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
-    setContracts((items) => [{
-      id: `PDP-1405-${String(items.length + 16).padStart(3, "0")}`,
-      title: String(form.get("title")), employer: String(form.get("employer")), field: String(form.get("field")),
-      value: `${String(form.get("value") || "—")} میلیارد`, progress: 0, status: "پیش‌نویس", due: "تعیین نشده",
-    }, ...items]);
-    setModal(false); setPage("contracts"); notify("پیش‌نویس قرارداد ثبت شد");
+    if (contractMode === "auth") { setModal(false); setLoginModal(true); return; }
+    if (contractMode !== "live") {
+      setContracts((items) => [{
+        id: String(form.get("code") || `TEST-${items.length + 1}`),
+        title: String(form.get("title")), employer: String(form.get("employer")), field: String(form.get("field")),
+        value: `${String(form.get("value") || "—")} میلیارد`, progress: 0, status: "پیش‌نویس", due: "نمونه نمایشی",
+      }, ...items]);
+      setModal(false); setPage("contracts"); notify("نمونه موقت قرارداد در نسخه نمایشی اضافه شد");
+      return;
+    }
+    setSaving(true);
+    try {
+      const token = await csrfToken();
+      const billionTomans = Number(String(form.get("value") || "0").replace(",", "."));
+      const response = await fetch(`${API_BASE}/contracts/`, {
+        method: "POST", credentials: "include",
+        headers: { "Content-Type": "application/json", "X-CSRFToken": token, Accept: "application/json" },
+        body: JSON.stringify({
+          code: form.get("code"), title: form.get("title"), employer: form.get("employer"), field: form.get("field"),
+          value_rials: billionTomans ? Math.round(billionTomans * 10_000_000_000) : null,
+          due_date: form.get("due_date") || null, progress: 0,
+        }),
+      });
+      const payload = await response.json();
+      if (response.status === 401 || response.status === 403) { setModal(false); setLoginModal(true); throw new Error("ابتدا وارد سامانه شوید"); }
+      if (!response.ok) throw new Error(payload.code?.[0] || "اطلاعات قرارداد معتبر نیست یا کد قرارداد تکراری است");
+      setContracts((items) => [mapApiContract(payload), ...items]);
+      setModal(false); setPage("contracts"); notify("قرارداد به‌صورت پیش‌نویس در PostgreSQL ثبت شد");
+    } catch (error) {
+      notify(error instanceof Error ? error.message : "ثبت قرارداد انجام نشد");
+    } finally { setSaving(false); }
   }
 
   async function submitLogin(event: FormEvent<HTMLFormElement>) {
@@ -166,7 +236,7 @@ export default function Home() {
       });
       const payload = await response.json();
       if (!response.ok) throw new Error(payload.detail || "ورود انجام نشد.");
-      setLoginModal(false); setFinanceRefresh((value) => value + 1); notify(`ورود ${payload.username} موفق بود`);
+      setLoginModal(false); setFinanceRefresh((value) => value + 1); setContractRefresh((value) => value + 1); notify(`ورود ${payload.username} موفق بود`);
     } catch (error) {
       notify(error instanceof Error && error.message !== "session-unavailable" ? error.message : "ارتباط با سرور ورود برقرار نشد");
     } finally { setSaving(false); }
@@ -227,6 +297,11 @@ export default function Home() {
     setSelectedReceivable(item); setReceiptModal(true);
   }
 
+  function openContractForm() {
+    if (contractMode === "auth") { setLoginModal(true); return; }
+    setModal(true);
+  }
+
   const title = nav.find((item) => item.id === page)?.label;
 
   return <main className="shell">
@@ -243,12 +318,13 @@ export default function Home() {
     <section className="workspace">
       <header className="topbar">
         <div className="page-title"><button className="hamburger" onClick={() => setMenu(true)}>☰</button><div><h1>{title}</h1><span>جمعه، ۲۶ تیر ۱۴۰۵</span></div></div>
-        <div className="actions"><label className="search"><span>⌕</span><input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="جست‌وجو در سامانه..." /></label><button className="bell">♢<i /></button><button className="primary" onClick={() => setModal(true)}>＋ ثبت قرارداد</button></div>
+        <div className="actions"><label className="search"><span>⌕</span><input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="جست‌وجو در سامانه..." /></label><button className="bell">♢<i /></button><button className="primary" onClick={openContractForm}>＋ ثبت قرارداد</button></div>
       </header>
       <div className="content">
         {page === "dashboard" && <Dashboard contracts={results} navigate={navigate} notify={notify} />}
         {page === "contracts" && <SectionIntro eyebrow="مدیریت قراردادها" title="پرونده قراردادهای شرکت" description="جست‌وجو، کنترل پیشرفت و پیگیری تعهدات قراردادی در یک نمای یکپارچه.">
-          <div className="toolbar"><label className="search wide"><span>⌕</span><input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="شماره، عنوان یا کارفرما..." /></label><div className="pills"><button className="selected">همه {contracts.length}</button><button>فعال</button><button>بحرانی</button><button>پیش‌نویس</button></div><button className="primary" onClick={() => setModal(true)}>＋ قرارداد جدید</button></div>
+          <div className={`connection-banner ${contractMode}`}><i />{contractMode === "live" ? "متصل به قراردادهای واقعی PostgreSQL" : contractMode === "auth" ? "برای مشاهده و ثبت قراردادهای واقعی وارد سامانه شوید" : contractMode === "loading" ? "در حال بررسی اتصال به سرور..." : "نسخه نمایشی؛ قراردادهای واقعی در سرور شرکت نگهداری می‌شوند"}{contractMode === "auth" && <button onClick={() => setLoginModal(true)}>ورود کاربر</button>}</div>
+          <div className="toolbar"><label className="search wide"><span>⌕</span><input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="شماره، عنوان یا کارفرما..." /></label><div className="pills"><button className="selected">همه {contracts.length}</button><button>فعال</button><button>بحرانی</button><button>پیش‌نویس</button></div><button className="primary" onClick={openContractForm}>＋ قرارداد جدید</button></div>
           <div className="panel table-panel"><ContractTable contracts={results} detailed /></div>
         </SectionIntro>}
         {page === "finance" && <SectionIntro eyebrow="کنترل مالی پروژه‌ها" title="مالی و مطالبات" description="نمای یکپارچه صورت‌وضعیت‌ها، سررسیدها، مبالغ وصول‌شده و مطالبات نیازمند پیگیری.">
@@ -272,7 +348,7 @@ export default function Home() {
       </div>
     </section>
 
-    {modal && <div className="modal-layer" onMouseDown={(e)=>e.currentTarget===e.target&&setModal(false)}><section className="modal" role="dialog" aria-modal="true"><header><div><small>ثبت سریع</small><h2>پیش‌نویس قرارداد جدید</h2></div><button onClick={()=>setModal(false)}>×</button></header><p>اطلاعات اولیه را وارد کنید. تأیید نهایی بعداً از داخل پرونده انجام می‌شود.</p><form onSubmit={submit}><label className="full">عنوان قرارداد *<input name="title" required autoFocus placeholder="مثلاً مطالعات طرح جامع..." /></label><label className="full">کارفرما *<input name="employer" required placeholder="نام دستگاه یا شرکت کارفرما" /></label><label>حوزه تخصصی<select name="field"><option>معماری</option><option>برنامه‌ریزی فضایی</option><option>تاسیسات</option><option>انرژی</option></select></label><label>مبلغ اولیه (میلیارد تومان)<input name="value" inputMode="decimal" placeholder="۰" /></label><div className="modal-note full"><b>i</b>این رکورد با وضعیت پیش‌نویس ثبت می‌شود و اثر مالی ندارد.</div><footer className="full"><button type="button" onClick={()=>setModal(false)}>انصراف</button><button className="primary">ثبت پیش‌نویس</button></footer></form></section></div>}
+    {modal && <div className="modal-layer" onMouseDown={(e)=>e.currentTarget===e.target&&setModal(false)}><section className="modal" role="dialog" aria-modal="true"><header><div><small>ثبت کنترل‌شده</small><h2>پیش‌نویس قرارداد جدید</h2></div><button onClick={()=>setModal(false)}>×</button></header><p>اطلاعات اولیه را وارد کنید. تأیید نهایی بعداً از داخل پرونده انجام می‌شود.</p><form onSubmit={submit}><label>کد قرارداد *<input name="code" required autoFocus placeholder="PDP-1405-020" /></label><label>تاریخ پایان<input name="due_date" type="date" /></label><label className="full">عنوان قرارداد *<input name="title" required placeholder="مثلاً مطالعات طرح جامع..." /></label><label className="full">کارفرما *<input name="employer" required placeholder="نام دستگاه یا شرکت کارفرما" /></label><label>حوزه تخصصی<select name="field"><option>معماری</option><option>برنامه‌ریزی فضایی</option><option>تاسیسات</option><option>انرژی</option></select></label><label>مبلغ اولیه (میلیارد تومان)<input name="value" inputMode="decimal" placeholder="۰" /></label><div className="modal-note full"><b>i</b>این رکورد با وضعیت پیش‌نویس ثبت می‌شود و اثر مالی ندارد.</div><footer className="full"><button type="button" onClick={()=>setModal(false)}>انصراف</button><button className="primary" disabled={saving}>{saving ? "در حال ذخیره..." : contractMode === "live" ? "ثبت در پایگاه داده" : "ثبت نمونه نمایشی"}</button></footer></form></section></div>}
     {loginModal && <div className="modal-layer" onMouseDown={(e)=>e.currentTarget===e.target&&setLoginModal(false)}><section className="modal compact" role="dialog" aria-modal="true"><header><div><small>دسترسی امن</small><h2>ورود به PDP One</h2></div><button onClick={()=>setLoginModal(false)}>×</button></header><p>با حسابی که هنگام نصب ساخته‌اید وارد شوید.</p><form onSubmit={submitLogin}><label className="full">نام کاربری<input name="username" required autoFocus autoComplete="username" /></label><label className="full">رمز عبور<input name="password" type="password" required autoComplete="current-password" /></label><footer className="full"><button type="button" onClick={()=>setLoginModal(false)}>انصراف</button><button className="primary" disabled={saving}>{saving ? "در حال ورود..." : "ورود"}</button></footer></form></section></div>}
     {financeModal && <div className="modal-layer" onMouseDown={(e)=>e.currentTarget===e.target&&setFinanceModal(false)}><section className="modal" role="dialog" aria-modal="true"><header><div><small>ثبت مالی کنترل‌شده</small><h2>پیش‌نویس مطالبه جدید</h2></div><button onClick={()=>setFinanceModal(false)}>×</button></header><p>رکورد پس از ذخیره نیازمند بازبینی و تأیید واحد مالی است.</p><form onSubmit={submitReceivable}><label>کد قرارداد *<input name="contract_code" required autoFocus placeholder="PDP-1405-012" /></label><label>عنوان صورت‌وضعیت *<input name="statement_title" required placeholder="صورت‌وضعیت شماره ۶" /></label><label className="full">عنوان قرارداد *<input name="contract_title" required /></label><label className="full">کارفرما *<input name="employer" required /></label><label>مبلغ (ریال) *<input name="amount_rials" type="number" min="1" required inputMode="numeric" /></label><label>تاریخ سررسید *<input name="due_date" type="date" required /></label><div className="modal-note full"><b>i</b>ChatGPT و رابط وب فقط پیش‌نویس می‌سازند؛ تأیید مالی خودکار انجام نمی‌شود.</div><footer className="full"><button type="button" onClick={()=>setFinanceModal(false)}>انصراف</button><button className="primary" disabled={saving}>{saving ? "در حال ذخیره..." : "ثبت در پایگاه داده"}</button></footer></form></section></div>}
     {receiptModal && selectedReceivable && <div className="modal-layer" onMouseDown={(e)=>e.currentTarget===e.target&&setReceiptModal(false)}><section className="modal compact" role="dialog" aria-modal="true"><header><div><small>ثبت دریافت کنترل‌شده</small><h2>دریافت وجه جدید</h2></div><button onClick={()=>setReceiptModal(false)}>×</button></header><p>{selectedReceivable.statement} · {selectedReceivable.contractId}</p><form onSubmit={submitPaymentReceipt}><label className="full">مبلغ دریافت (ریال) *<input name="amount_rials" type="number" min="1" required autoFocus inputMode="numeric" /></label><label className="full">تاریخ دریافت *<input name="received_date" type="date" required /></label><label className="full">شماره پیگیری بانکی<input name="tracking_code" /></label><label className="full">توضیحات<textarea name="note" rows={3} /></label><div className="modal-note full"><b>i</b>این دریافت تا تأیید واحد مالی، روی مبلغ وصول‌شده نهایی اثر نمی‌گذارد.</div><footer className="full"><button type="button" onClick={()=>setReceiptModal(false)}>انصراف</button><button className="primary" disabled={saving}>{saving ? "در حال ذخیره..." : "ثبت پیش‌نویس دریافت"}</button></footer></form></section></div>}
