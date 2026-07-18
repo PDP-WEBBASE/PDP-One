@@ -161,7 +161,7 @@ function Get-TailscaleContainerStatus {
     try { return ($statusText | ConvertFrom-Json) } catch { return $null }
 }
 
-Write-Host "PDP One - automatic ChatGPT connection 2026.07.19.16" -ForegroundColor Green
+Write-Host "PDP One - automatic ChatGPT connection 2026.07.19.17" -ForegroundColor Green
 if (-not (Get-Command docker -ErrorAction SilentlyContinue)) { throw "Docker command is unavailable." }
 if (-not (Test-DockerEngine)) { throw "Open Rancher Desktop and wait until the Moby engine is ready." }
 
@@ -358,7 +358,12 @@ if ($tailscaleStartExitCode -eq 0) {
             [IO.File]::WriteAllText($tsLog, $funnelText, [Text.UTF8Encoding]::new($false))
 
             $urlMatch = [regex]::Match($funnelText, 'https://[A-Za-z0-9.-]+\.ts\.net')
-            if ($funnelExitCode -eq 0 -and $urlMatch.Success) {
+            # Some Tailscale versions keep the successful `funnel --bg`
+            # process attached even after Funnel is active. In that case our
+            # safety timeout returns 124, while `funnel status` is the
+            # authoritative confirmation that the public route is running.
+            $statusConfirmsFunnel = $funnelStatus -match '(?i)Funnel on|proxy http://127\.0\.0\.1:80|Available on the internet'
+            if ($urlMatch.Success -and ($funnelExitCode -eq 0 -or $statusConfirmsFunnel)) {
                 $candidateUrl = $urlMatch.Value.TrimEnd('/')
                 $selfCheckSucceeded = Test-PublicTunnel -BaseUrl $candidateUrl -Process $null -ServiceManaged
                 if (-not $selfCheckSucceeded) {
