@@ -2,7 +2,8 @@
 [CmdletBinding()]
 param(
     [string]$InstalledRoot = "",
-    [string]$CurrentSourceRoot = ""
+    [string]$CurrentSourceRoot = "",
+    [switch]$CompactWsl
 )
 
 $ErrorActionPreference = "Stop"
@@ -11,6 +12,58 @@ Set-StrictMode -Version Latest
 function Test-DockerReady {
     cmd /c "docker info >nul 2>&1"
     return $LASTEXITCODE -eq 0
+}
+
+function Find-Rdctl {
+    $command = Get-Command rdctl.exe -ErrorAction SilentlyContinue
+    if ($command) { return $command.Source }
+
+    $base = "C:\Program Files\Rancher Desktop"
+    if (Test-Path -LiteralPath $base) {
+        $match = Get-ChildItem -LiteralPath $base -Filter "rdctl.exe" -File -Recurse -ErrorAction SilentlyContinue |
+            Select-Object -First 1
+        if ($match) { return $match.FullName }
+    }
+    return $null
+}
+
+function Start-RancherDesktopAndWait([int]$TimeoutSeconds = 240) {
+    if (Test-DockerReady) { return $true }
+
+    Write-Host "Rancher Desktop is not ready. Starting it automatically ..." -ForegroundColor Yellow
+    $rdctl = Find-Rdctl
+    if ($rdctl) {
+        $previousErrorAction = $ErrorActionPreference
+        try {
+            $ErrorActionPreference = "Continue"
+            & $rdctl start --application.start-in-background 2>&1 | Out-Host
+        } finally {
+            $ErrorActionPreference = $previousErrorAction
+        }
+    }
+
+    if (-not (Get-Process -Name "Rancher Desktop" -ErrorAction SilentlyContinue)) {
+        $desktopExe = "C:\Program Files\Rancher Desktop\Rancher Desktop.exe"
+        if (Test-Path -LiteralPath $desktopExe) {
+            Start-Process -FilePath $desktopExe -ArgumentList @(
+                "--containerEngine.name", "moby",
+                "--kubernetes.enabled=false"
+            )
+        }
+    }
+
+    $attempts = [Math]::Ceiling($TimeoutSeconds / 3)
+    foreach ($attempt in 1..$attempts) {
+        if (Test-DockerReady) {
+            Write-Host "Rancher Desktop and Moby are ready." -ForegroundColor Green
+            return $true
+        }
+        if (($attempt % 5) -eq 0) {
+            Write-Host "Waiting for the Moby engine ... $($attempt * 3) seconds" -ForegroundColor DarkYellow
+        }
+        Start-Sleep -Seconds 3
+    }
+    return $false
 }
 
 function Invoke-DockerCleanup([string[]]$Arguments) {
@@ -52,10 +105,143 @@ function Send-DirectoryToRecycleBin([string]$Path) {
     )
 }
 
-Write-Host "PDP One safe disk cleanup" -ForegroundColor Green
-Write-Host "Database volumes and private-file volumes are protected and will not be removed." -ForegroundColor DarkGreen
+function Get-WslVhdPath([string]$DistributionName) {
+    $keys = Get-ChildItem -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Lxss" -ErrorAction SilentlyContinue
+    foreach ($key in $keys) {
+        if ($key.GetValue("DistributionName") -eq $DistributionName) {
+            $basePath = [Environment]::ExpandEnvironmentVariables([string]$key.GetValue("BasePath"))
+            $candidate = Join-Path $basePath "ext4.vhdx"
+            if (Test-Path -LiteralPath $candidate) { return $candidate }
+        }
+    }
+    return $null
+}
 
-if ((Get-Command docker -ErrorAction SilentlyContinue) -and (Test-DockerReady)) {
+function Get-FreeSystemDriveBytes {
+    $driveName = $env:SystemDrive.TrimEnd(':')
+    return (Get-PSDrive -Name $driveName).Free
+}
+
+function Format-Bytes([long]$Bytes) {
+    return "{0:N2} GB" -f ($Bytes / 1GB)
+}
+
+function Compact-RancherWslDisks {
+    Write-Host ""
+    Write-Host "Preparing Rancher Desktop WSL disk compaction ..." -ForegroundColor Cyan
+    Write-Host "PDP One will be temporarily unavailable during this step." -ForegroundColor Yellow
+
+    if (-not [string]::IsNullOrWhiteSpace($InstalledRoot) -and
+        (Test-Path -LiteralPath (Join-Path $InstalledRoot "docker-compose.yml"))) {
+        Push-Location $InstalledRoot
+        try {
+            $previousErrorAction = $ErrorActionPreference
+            $ErrorActionPreference = "Continue"
+            & docker compose stop 2>&1 | Out-Host
+            $ErrorActionPreference = $previousErrorAction
+        } finally {
+            Pop-Location
+        }
+    }
+
+    $previousErrorAction = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = "Continue"
+        & wsl.exe -d rancher-desktop -u root -- sh -lc "fstrim -av || true" 2>&1 | Out-Host
+    } finally {
+        $ErrorActionPreference = $previousErrorAction
+    }
+
+    $rdctl = Find-Rdctl
+    if ($rdctl) {
+        $previousErrorAction = $ErrorActionPreference
+        try {
+            $ErrorActionPreference = "Continue"
+            & $rdctl shutdown 2>&1 | Out-Host
+        } finally {
+            $ErrorActionPreference = $previousErrorAction
+        }
+        Start-Sleep -Seconds 8
+    } else {
+        Get-Process -Name "Rancher Desktop" -ErrorAction SilentlyContinue |
+            Stop-Process -Force -ErrorAction SilentlyContinue
+    }
+
+    & wsl.exe --shutdown | Out-Host
+    Start-Sleep -Seconds 5
+
+    $distributionNames = @("rancher-desktop-data", "rancher-desktop")
+    foreach ($distributionName in $distributionNames) {
+        $vhdPath = Get-WslVhdPath -DistributionName $distributionName
+        if ([string]::IsNullOrWhiteSpace($vhdPath)) {
+            Write-Host "No VHDX file found for $distributionName; skipping." -ForegroundColor DarkYellow
+            continue
+        }
+
+        $beforeSize = (Get-Item -LiteralPath $vhdPath).Length
+        Write-Host "Compacting $distributionName ($((Format-Bytes $beforeSize))) ..." -ForegroundColor Cyan
+
+        $previousErrorAction = $ErrorActionPreference
+        try {
+            $ErrorActionPreference = "Continue"
+            & wsl.exe --manage $distributionName --set-sparse false 2>&1 | Out-Host
+        } finally {
+            $ErrorActionPreference = $previousErrorAction
+        }
+
+        $diskpartScript = Join-Path $env:TEMP ("pdp-one-compact-" + [Guid]::NewGuid().ToString("N") + ".txt")
+        try {
+            $quotedVhdPath = [char]34 + $vhdPath + [char]34
+            [IO.File]::WriteAllLines(
+                $diskpartScript,
+                @(
+                    ("select vdisk file=" + $quotedVhdPath),
+                    "compact vdisk",
+                    "exit"
+                ),
+                [Text.Encoding]::ASCII
+            )
+            & diskpart.exe /s $diskpartScript | Out-Host
+        } finally {
+            Remove-Item -LiteralPath $diskpartScript -Force -ErrorAction SilentlyContinue
+        }
+
+        $previousErrorAction = $ErrorActionPreference
+        try {
+            $ErrorActionPreference = "Continue"
+            & wsl.exe --manage $distributionName --set-sparse true 2>&1 | Out-Host
+        } finally {
+            $ErrorActionPreference = $previousErrorAction
+        }
+
+        $afterSize = (Get-Item -LiteralPath $vhdPath).Length
+        Write-Host "VHDX size: $(Format-Bytes $beforeSize) -> $(Format-Bytes $afterSize)" -ForegroundColor Green
+    }
+
+    Write-Host "Restarting Rancher Desktop and PDP One ..." -ForegroundColor Cyan
+    if (-not (Start-RancherDesktopAndWait -TimeoutSeconds 300)) {
+        Write-Host "Compaction completed, but Rancher Desktop did not restart automatically. Open it manually." -ForegroundColor Yellow
+        return
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($InstalledRoot) -and
+        (Test-Path -LiteralPath (Join-Path $InstalledRoot "docker-compose.yml"))) {
+        Push-Location $InstalledRoot
+        try {
+            & docker compose up --detach | Out-Host
+        } finally {
+            Pop-Location
+        }
+    }
+}
+
+$freeBefore = Get-FreeSystemDriveBytes
+Write-Host "PDP One safe disk cleanup 2026.07.18.2" -ForegroundColor Green
+Write-Host "Database volumes and private-file volumes are protected and will not be removed." -ForegroundColor DarkGreen
+Write-Host "Free space before cleanup: $(Format-Bytes $freeBefore)" -ForegroundColor Cyan
+
+$dockerWasReady = Start-RancherDesktopAndWait
+if ($dockerWasReady) {
     Write-Host ""
     Write-Host "Docker usage before cleanup:" -ForegroundColor Cyan
     & docker system df | Out-Host
@@ -73,7 +259,7 @@ if ((Get-Command docker -ErrorAction SilentlyContinue) -and (Test-DockerReady)) 
     Write-Host "Docker usage after cleanup:" -ForegroundColor Cyan
     & docker system df | Out-Host
 } else {
-    Write-Host "Docker is not ready; package cleanup will continue." -ForegroundColor Yellow
+    Write-Host "Rancher Desktop could not be started; Docker cleanup was skipped." -ForegroundColor Yellow
 }
 
 $downloads = Join-Path ([Environment]::GetFolderPath("UserProfile")) "Downloads"
@@ -122,5 +308,13 @@ if (Test-Path -LiteralPath $downloads) {
     Write-Host "Download-package cleanup completed. Items recycled: $recycledCount" -ForegroundColor Green
 }
 
+if ($CompactWsl -and $dockerWasReady) {
+    Compact-RancherWslDisks
+}
+
+$freeAfter = Get-FreeSystemDriveBytes
+$reclaimed = $freeAfter - $freeBefore
 Write-Host ""
+Write-Host "Free space after cleanup: $(Format-Bytes $freeAfter)" -ForegroundColor Green
+Write-Host "Space returned to Windows in this run: $(Format-Bytes $reclaimed)" -ForegroundColor Green
 Write-Host "Cleanup completed. PDP One databases and persistent volumes were not touched." -ForegroundColor Green
