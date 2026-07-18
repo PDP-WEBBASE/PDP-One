@@ -9,7 +9,7 @@ if not "%errorlevel%"=="0" (
   exit /b
 )
 
-powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\windows\Clean-PDPOneDisk.ps1"
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\windows\Clean-PDPOneDisk.ps1" -CompactWsl
 set "PDP_ONE_EXIT=%errorlevel%"
 pause
 exit /b %PDP_ONE_EXIT%
