@@ -126,3 +126,5 @@ if (-not $ready) {
 Write-Host "" 
 Write-Host "PDP One was updated successfully: http://localhost:8080" -ForegroundColor Green
 Write-Host "Your existing secure settings and Docker data volumes were preserved." -ForegroundColor DarkGreen
+Write-Host "Opening the automatic ChatGPT connection now. No OpenAI API key is used." -ForegroundColor Cyan
+Start-Process -FilePath (Join-Path $InstalledRoot "CONNECT-CHATGPT.bat") -WorkingDirectory $InstalledRoot
