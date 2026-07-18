@@ -70,7 +70,10 @@ function Wait-ForUrl([string[]]$Paths, [string]$Pattern, [int]$Seconds = 35) {
             }
 
             if ([string]::IsNullOrWhiteSpace($text)) { continue }
-            $match = [regex]::Match($text, $Pattern)
+            # SSH tunnel providers often insert ANSI colour codes inside the URL.
+            $cleanText = [regex]::Replace($text, "$([char]27)\\[[0-9;?]*[ -/]*[@-~]", "")
+            $cleanText = $cleanText.Replace("`b", "")
+            $match = [regex]::Match($cleanText, $Pattern)
             if ($match.Success) { return $match.Value.TrimEnd('/', '.', ')') }
         }
         Start-Sleep -Seconds 1
@@ -78,7 +81,7 @@ function Wait-ForUrl([string[]]$Paths, [string]$Pattern, [int]$Seconds = 35) {
     return $null
 }
 
-Write-Host "PDP One - automatic ChatGPT connection 2026.07.18.2" -ForegroundColor Green
+Write-Host "PDP One - automatic ChatGPT connection 2026.07.18.3" -ForegroundColor Green
 if (-not (Get-Command docker -ErrorAction SilentlyContinue)) { throw "Docker command is unavailable." }
 if (-not (Test-DockerEngine)) { throw "Open Rancher Desktop and wait until the Moby engine is ready." }
 
@@ -157,8 +160,46 @@ if (-not $publicBase) {
     if ($publicBase) { $provider = "Pinggy free tunnel" }
 }
 
+if (-not $publicBase) {
+    if ($null -ne $tunnelProcess -and -not $tunnelProcess.HasExited) {
+        Stop-Process -Id $tunnelProcess.Id -Force -ErrorAction SilentlyContinue
+    }
+    $tunnelProcess = $null
+    Write-Host "Pinggy is unavailable; using the free localhost.run fallback ..." -ForegroundColor Yellow
+    $lrOut = Join-Path $logDir "localhost-run.out.log"
+    $lrErr = Join-Path $logDir "localhost-run.err.log"
+    Remove-Item $lrOut, $lrErr -Force -ErrorAction SilentlyContinue
+    $lrArguments = @(
+        "-p", "443", "-T", "-o", "StrictHostKeyChecking=accept-new", "-o", "ConnectTimeout=20",
+        "-o", "ServerAliveInterval=30", "-o", "ServerAliveCountMax=3", "-o", "ExitOnForwardFailure=yes",
+        "-R", "80:127.0.0.1:8080", "nokey@localhost.run"
+    )
+    $tunnelProcess = Start-Process $ssh.Source -ArgumentList $lrArguments -PassThru -WindowStyle Hidden -RedirectStandardOutput $lrOut -RedirectStandardError $lrErr
+    $publicBase = Wait-ForUrl -Paths @($lrOut, $lrErr) -Pattern 'https://[A-Za-z0-9.-]+(?:lhr\.life|localhost\.run)' -Seconds 40
+    if ($publicBase) { $provider = "localhost.run free tunnel" }
+}
+
 if (-not $publicBase -or $null -eq $tunnelProcess -or $tunnelProcess.HasExited) {
-    throw "A temporary HTTPS address could not be created. Check the internet connection and run this file again."
+    if ($null -ne $tunnelProcess -and -not $tunnelProcess.HasExited) {
+        Stop-Process -Id $tunnelProcess.Id -Force -ErrorAction SilentlyContinue
+    }
+    $diagnosticPath = Join-Path $ProjectRoot "PDP-ONE-TUNNEL-DIAGNOSTICS.txt"
+    $diagnosticLines = @(
+        "PDP One tunnel diagnostics",
+        "Generated: $(Get-Date -Format s)",
+        "Local health: http://127.0.0.1:8080/healthz",
+        ""
+    )
+    foreach ($logFile in @($cfOut, $cfErr, $pgOut, $pgErr, $lrOut, $lrErr)) {
+        if (-not [string]::IsNullOrWhiteSpace($logFile) -and (Test-Path -LiteralPath $logFile)) {
+            $diagnosticLines += "===== $([IO.Path]::GetFileName($logFile)) ====="
+            $diagnosticLines += (Get-Content -LiteralPath $logFile -ErrorAction SilentlyContinue | Select-Object -Last 80)
+            $diagnosticLines += ""
+        }
+    }
+    [IO.File]::WriteAllLines($diagnosticPath, $diagnosticLines, [Text.UTF8Encoding]::new($false))
+    Start-Process notepad.exe -ArgumentList $diagnosticPath
+    throw "All free HTTPS tunnel providers are blocked or unavailable. Diagnostics were opened in Notepad."
 }
 
 $mcpEndpoint = "$($publicBase.TrimEnd('/'))/mcp/$mcpPathToken"
