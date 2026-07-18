@@ -108,7 +108,7 @@ function Get-TailscaleContainerStatus {
     try { return ($statusText | ConvertFrom-Json) } catch { return $null }
 }
 
-Write-Host "PDP One - automatic ChatGPT connection 2026.07.18.7" -ForegroundColor Green
+Write-Host "PDP One - automatic ChatGPT connection 2026.07.18.8" -ForegroundColor Green
 if (-not (Get-Command docker -ErrorAction SilentlyContinue)) { throw "Docker command is unavailable." }
 if (-not (Test-DockerEngine)) { throw "Open Rancher Desktop and wait until the Moby engine is ready." }
 
@@ -187,7 +187,7 @@ $tsLog = Join-Path $logDir "tailscale-funnel.log"
 Write-Host "Starting the official Tailscale container through the regional registry cache ..." -ForegroundColor Cyan
 Remove-Item $tsOut, $tsErr, $tsLog -Force -ErrorAction SilentlyContinue
 $startLines = @()
-& docker compose --profile tunnel up --detach tailscale 2>&1 | Tee-Object -Variable startLines | Out-Host
+& docker compose --profile tunnel up --detach --force-recreate tailscale 2>&1 | Tee-Object -Variable startLines | Out-Host
 $tailscaleStartExitCode = $LASTEXITCODE
 [IO.File]::WriteAllText($tsOut, ($startLines | Out-String), [Text.UTF8Encoding]::new($false))
 
