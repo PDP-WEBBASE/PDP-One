@@ -3,7 +3,53 @@ from datetime import date
 from django.contrib.auth import get_user_model
 from rest_framework.test import APIClient, APITestCase
 
-from core.models import AuditEvent, PaymentReceipt, Receivable
+from core.models import AnalysisReport, AuditEvent, Contract, PaymentReceipt, Receivable
+
+
+class ContractApiTests(APITestCase):
+    def setUp(self):
+        self.user = get_user_model().objects.create_user(username="contract-manager", password="Strong-test-password-42")
+        self.client.force_authenticate(self.user)
+
+    def test_new_contract_is_always_an_audited_draft(self):
+        response = self.client.post("/api/v1/contracts/", {
+            "code": "TEST-1405-001",
+            "title": "قرارداد آزمایشی مطالعات و طراحی دفتر مرکزی",
+            "employer": "شرکت نمونه آزمایشی",
+            "field": "معماری",
+            "value_rials": "12500000000",
+            "progress": 0,
+            "due_date": "2026-12-21",
+            "status": "active",
+        }, format="json")
+        self.assertEqual(response.status_code, 201, response.data)
+        self.assertEqual(response.data["status"], Contract.Status.DRAFT)
+        self.assertTrue(AuditEvent.objects.filter(action="contract.create_draft", target_id=response.data["id"]).exists())
+
+    def test_contract_api_does_not_allow_delete_or_approval_updates(self):
+        contract = Contract.objects.create(code="TEST-LOCKED-001", title="آزمون کنترل", employer="نمونه")
+        self.assertEqual(self.client.patch(f"/api/v1/contracts/{contract.id}/", {"status": "active"}, format="json").status_code, 405)
+        self.assertEqual(self.client.delete(f"/api/v1/contracts/{contract.id}/").status_code, 405)
+
+    def test_system_status_reports_database_counts(self):
+        Contract.objects.create(code="TEST-STATUS-001", title="آزمون سلامت", employer="نمونه")
+        response = self.client.get("/api/v1/system-status/")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["database"], "connected")
+        self.assertEqual(response.data["contracts"], 1)
+
+    def test_analysis_api_is_draft_only(self):
+        response = self.client.post("/api/v1/analysis-reports/", {
+            "title": "تحلیل آزمایشی",
+            "summary": "این خروجی فقط پیش‌نویس است.",
+            "source_record_ids": [],
+            "review_status": "published",
+        }, format="json")
+        self.assertEqual(response.status_code, 201, response.data)
+        report = AnalysisReport.objects.get(pk=response.data["id"])
+        self.assertEqual(report.review_status, AnalysisReport.ReviewStatus.AI_DRAFT)
+        self.assertEqual(self.client.patch(f"/api/v1/analysis-reports/{report.id}/", {"review_status": "published"}, format="json").status_code, 405)
+        self.assertEqual(self.client.delete(f"/api/v1/analysis-reports/{report.id}/").status_code, 405)
 
 
 class FinanceApiTests(APITestCase):
