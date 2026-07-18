@@ -117,7 +117,7 @@ function Get-TailscaleContainerStatus {
     try { return ($statusText | ConvertFrom-Json) } catch { return $null }
 }
 
-Write-Host "PDP One - automatic ChatGPT connection 2026.07.19.13" -ForegroundColor Green
+Write-Host "PDP One - automatic ChatGPT connection 2026.07.19.14" -ForegroundColor Green
 if (-not (Get-Command docker -ErrorAction SilentlyContinue)) { throw "Docker command is unavailable." }
 if (-not (Test-DockerEngine)) { throw "Open Rancher Desktop and wait until the Moby engine is ready." }
 
@@ -142,11 +142,16 @@ if ([string]::IsNullOrWhiteSpace($allowedHosts)) {
 Set-EnvValue -Path $EnvPath -Name "DJANGO_ALLOWED_HOSTS" -Value $allowedHosts
 
 $trustedOrigins = Get-EnvValue -Path $EnvPath -Name "DJANGO_CSRF_TRUSTED_ORIGINS"
-if ([string]::IsNullOrWhiteSpace($trustedOrigins)) {
-    $trustedOrigins = "https://*.ts.net"
-} elseif (@($trustedOrigins.Split(',') | ForEach-Object { $_.Trim() }) -notcontains "https://*.ts.net") {
-    $trustedOrigins = $trustedOrigins.TrimEnd(',') + ",https://*.ts.net"
+$trustedOriginValues = @()
+if (-not [string]::IsNullOrWhiteSpace($trustedOrigins)) {
+    $trustedOriginValues = @($trustedOrigins.Split(',') | ForEach-Object { $_.Trim() } | Where-Object { $_ })
 }
+foreach ($requiredOrigin in @("http://localhost:8080", "http://127.0.0.1:8080", "https://*.ts.net")) {
+    if ($trustedOriginValues -notcontains $requiredOrigin) {
+        $trustedOriginValues += $requiredOrigin
+    }
+}
+$trustedOrigins = $trustedOriginValues -join ","
 Set-EnvValue -Path $EnvPath -Name "DJANGO_CSRF_TRUSTED_ORIGINS" -Value $trustedOrigins
 $trialAdminUser = Get-EnvValue -Path $EnvPath -Name "PDP_TRIAL_ADMIN_USERNAME"
 if ([string]::IsNullOrWhiteSpace($trialAdminUser)) {
