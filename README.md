@@ -36,8 +36,16 @@ powershell -ExecutionPolicy Bypass -File .\scripts\windows\Stop-PDPOne.ps1
 
 برای دریافت نسخه جدید بدون حذف تنظیمات و داده‌های موجود، آخرین ZIP مخزن را دریافت و فایل زیر را با دسترسی Administrator اجرا کنید:
 
+به‌روزرسان پس از موفقیت، کش Build و ایمیج‌های بلااستفاده Docker و بسته‌های قدیمی PDP One در Downloads را پاک‌سازی می‌کند. پایگاه داده، فایل‌های خصوصی و Docker Volumeهای ماندگار حذف نمی‌شوند.
+
 ```text
 UPDATE-PDP-ONE.bat
+```
+
+برای پاک‌سازی فوری فضای نسخه‌های قبلی، فایل زیر را با دسترسی Administrator اجرا کنید:
+
+```text
+CLEAN-PDP-ONE-DISK.bat
 ```
 
 ## Manual local trial
