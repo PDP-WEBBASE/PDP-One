@@ -94,7 +94,24 @@ services:
       - ./infra/nginx/default.conf.template:/etc/nginx/templates/default.conf.template:ro
     depends_on: [web, backend, mcp]
 
+  tailscale:
+    profiles: ["tunnel"]
+    image: ${PDP_TAILSCALE_IMAGE:-docker.arvancloud.ir/tailscale/tailscale:stable}
+    restart: unless-stopped
+    network_mode: "service:nginx"
+    entrypoint: ["/usr/local/bin/tailscaled"]
+    command:
+      - "--state=/var/lib/tailscale/tailscaled.state"
+      - "--socket=/tmp/tailscaled.sock"
+      - "--tun=userspace-networking"
+    volumes:
+      - tailscale_state:/var/lib/tailscale
+    depends_on:
+      nginx:
+        condition: service_started
+
 volumes:
   postgres_data:
   redis_data:
   private_files:
+  tailscale_state:
