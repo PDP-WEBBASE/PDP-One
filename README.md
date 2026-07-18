@@ -6,7 +6,7 @@
 
 - Persian RTL responsive dashboard and PWA manifest
 - Contract, finance and receivables, project, tender, and analysis demonstration flows
-- PostgreSQL-backed receivables and payment-receipt drafts with audited human approval
+- PostgreSQL-backed contract, receivable, payment-receipt and analysis drafts with audit events
 - Authenticated finance API and browser session login
 - Django REST API foundation with PostgreSQL models
 - Redis/Celery background processing foundation
@@ -15,19 +15,17 @@
 
 ## Windows trial — automated
 
-PowerShell را در پوشه پروژه باز کنید و اجرا کنید:
+فایل `INSTALL-PDP-ONE.bat` را با دسترسی Administrator اجرا کنید. نصب‌کننده، موتور کانتینر سازگار با Docker، Cloudflared و پیش‌نیازهای Windows/WSL2 را بررسی می‌کند، رمزهای تصادفی می‌سازد، داده آزمایشی مشخص ایجاد می‌کند و سرویس‌ها را بالا می‌آورد.
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\windows\Install-PDPOne.ps1
 ```
 
-این اسکریپت Git، Docker Desktop و Cloudflared را در صورت نیاز با Winget نصب می‌کند، رمزهای تصادفی می‌سازد، کانتینرها را بالا می‌آورد و مدیر اولیه را ایجاد می‌کند.
-
 پس از نصب:
 
 ```powershell
-# لینک موقت اینترنتی
-powershell -ExecutionPolicy Bypass -File .\scripts\windows\Start-PDPOneTunnel.ps1
+# لینک موقت اینترنتی و اتصال خودکار تا مرحله تأیید ChatGPT
+.\CONNECT-CHATGPT.bat
 
 # کنترل سلامت
 powershell -ExecutionPolicy Bypass -File .\scripts\windows\Test-PDPOne.ps1
@@ -49,12 +47,14 @@ UPDATE-PDP-ONE.bat
 3. Open `http://localhost:8080`.
 4. Create the first administrator with `docker compose exec backend python manage.py createsuperuser`.
 
-Do not expose the trial to the internet until passwords, allowed hosts, HTTPS, backup destination, and test-only data are confirmed.
+Do not use the temporary trial link as a permanent production deployment. The random URL path and ephemeral HTTPS tunnel are suitable for the controlled trial only.
 
 ## ChatGPT connection
 
-The MCP endpoint is `/mcp`. It exposes read tools separately from draft-creation tools. For an internet-connected ChatGPT developer-mode test, expose Nginx through a temporary HTTPS tunnel and use the resulting URL plus `/mcp`.
+Double-click `CONNECT-CHATGPT.bat`. It starts or updates the services, verifies health, creates a free temporary HTTPS tunnel, copies the tokenized MCP URL to the clipboard, opens the ChatGPT app settings and writes the exact connection fields to `PDP-ONE-CHATGPT-CONNECTION.txt`.
 
 This integration does not use the OpenAI API; ChatGPT invokes the MCP tools from the user's ChatGPT workspace.
 
-Finance tools can search receivables, return the persisted financial summary, create receivable drafts, and create payment-receipt drafts. Financial confirmation remains a human-only action.
+The connector can check system health, search contracts and receivables, return persisted management/finance summaries, and create contract, receivable, receipt and analysis drafts. Approval, deletion and financial finalization remain human-only actions.
+
+No OpenAI API key is used. The unavoidable final action is confirming the custom app inside the authenticated ChatGPT Business workspace. See [docs/chatgpt-connection.md](docs/chatgpt-connection.md).
