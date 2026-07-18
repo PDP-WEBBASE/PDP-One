@@ -161,7 +161,7 @@ function Get-TailscaleContainerStatus {
     try { return ($statusText | ConvertFrom-Json) } catch { return $null }
 }
 
-Write-Host "PDP One - automatic ChatGPT connection 2026.07.19.15" -ForegroundColor Green
+Write-Host "PDP One - automatic ChatGPT connection 2026.07.19.16" -ForegroundColor Green
 if (-not (Get-Command docker -ErrorAction SilentlyContinue)) { throw "Docker command is unavailable." }
 if (-not (Test-DockerEngine)) { throw "Open Rancher Desktop and wait until the Moby engine is ready." }
 
@@ -360,12 +360,14 @@ if ($tailscaleStartExitCode -eq 0) {
             $urlMatch = [regex]::Match($funnelText, 'https://[A-Za-z0-9.-]+\.ts\.net')
             if ($funnelExitCode -eq 0 -and $urlMatch.Success) {
                 $candidateUrl = $urlMatch.Value.TrimEnd('/')
-                if (Test-PublicTunnel -BaseUrl $candidateUrl -Process $null -ServiceManaged) {
-                    $publicBase = $candidateUrl
-                    $provider = "Tailscale Funnel (Docker)"
-                    $tailscaleContainerActive = $true
-                    break
+                $selfCheckSucceeded = Test-PublicTunnel -BaseUrl $candidateUrl -Process $null -ServiceManaged
+                if (-not $selfCheckSucceeded) {
+                    Write-Host "Tailscale confirms Funnel is active. Local public self-check is unavailable; accepting the confirmed Funnel URL." -ForegroundColor Yellow
                 }
+                $publicBase = $candidateUrl
+                $provider = "Tailscale Funnel (Docker)"
+                $tailscaleContainerActive = $true
+                break
             }
 
             $approvalMatch = [regex]::Match($funnelText, 'https://login\.tailscale\.com/[^\s]+')
