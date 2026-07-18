@@ -9,9 +9,9 @@ param(
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 
-if ([string]::IsNullOrWhiteSpace($CurrentSourceRoot)) {
-    $CurrentSourceRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
-}
+# Always derive the protected source root from this script's real location.
+# This avoids malformed quoted paths ending in a backslash from batch files.
+$CurrentSourceRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 
 function Test-DockerReady {
     cmd /c "docker info >nul 2>&1"
@@ -150,7 +150,10 @@ function Test-ProtectedPath([string]$Candidate, [string[]]$ProtectedRoots) {
 
     foreach ($root in $ProtectedRoots) {
         $rootFull = Convert-ToComparablePath -Path $root
-        if ([string]::IsNullOrWhiteSpace($rootFull)) { continue }
+        if ([string]::IsNullOrWhiteSpace($rootFull)) {
+            # A malformed protected root makes directory deletion unsafe.
+            return $true
+        }
 
         if ($candidateFull.Equals($rootFull, [StringComparison]::OrdinalIgnoreCase)) { return $true }
         if ($candidateFull.StartsWith($rootFull + '\', [StringComparison]::OrdinalIgnoreCase)) { return $true }
@@ -306,7 +309,7 @@ function Compact-RancherWslDisks {
 }
 
 $freeBefore = Get-FreeSystemDriveBytes
-Write-Host "PDP One safe disk cleanup 2026.07.18.4" -ForegroundColor Green
+Write-Host "PDP One safe disk cleanup 2026.07.18.5" -ForegroundColor Green
 Write-Host "Database volumes and private-file volumes are protected and will not be removed." -ForegroundColor DarkGreen
 Write-Host "Free space before cleanup: $(Format-Bytes $freeBefore)" -ForegroundColor Cyan
 
