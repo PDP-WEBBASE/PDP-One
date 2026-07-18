@@ -183,8 +183,66 @@ $pgOut = $null
 $pgErr = $null
 $lrOut = $null
 $lrErr = $null
+$tailscaleCli = $null
+$tailscaleActive = $false
+$tsLog = Join-Path $logDir "tailscale-funnel.log"
 
-if (Get-Command cloudflared -ErrorAction SilentlyContinue) {
+# Tailscale Funnel is the primary route because anonymous tunnel providers are
+# commonly blocked by managed DNS or regional firewalls.
+$tailscaleCli = Ensure-TailscaleCli
+if ($tailscaleCli) {
+    Write-Host "Preparing the free Tailscale HTTPS Funnel ..." -ForegroundColor Cyan
+
+    $isLoggedIn = $false
+    try {
+        $statusJson = (& $tailscaleCli status --json 2>$null | Out-String)
+        if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($statusJson)) {
+            $status = $statusJson | ConvertFrom-Json
+            $isLoggedIn = $status.BackendState -eq "Running"
+        }
+    } catch {
+        $isLoggedIn = $false
+    }
+
+    if (-not $isLoggedIn) {
+        Write-Host ""
+        Write-Host "One-time action: complete the Tailscale sign-in in the browser that opens." -ForegroundColor Yellow
+        & $tailscaleCli up
+        $isLoggedIn = $LASTEXITCODE -eq 0
+    }
+
+    if ($isLoggedIn) {
+        foreach ($funnelAttempt in 1..2) {
+            $funnelLines = @()
+            & $tailscaleCli funnel --bg --yes 8080 2>&1 | Tee-Object -Variable funnelLines | Out-Host
+            $funnelStatus = (& $tailscaleCli funnel status 2>&1 | Out-String)
+            $funnelText = (($funnelLines | Out-String) + "`r`n" + $funnelStatus)
+            [IO.File]::WriteAllText($tsLog, $funnelText, [Text.UTF8Encoding]::new($false))
+
+            $urlMatch = [regex]::Match($funnelText, 'https://[A-Za-z0-9.-]+\.ts\.net')
+            if ($urlMatch.Success) {
+                $candidateUrl = $urlMatch.Value.TrimEnd('/')
+                if (Test-PublicTunnel -BaseUrl $candidateUrl -Process $null -ServiceManaged) {
+                    $publicBase = $candidateUrl
+                    $provider = "Tailscale Funnel"
+                    $tailscaleActive = $true
+                    break
+                }
+            }
+
+            $approvalMatch = [regex]::Match($funnelText, 'https://login\.tailscale\.com/[^\s]+')
+            if ($approvalMatch.Success -and $funnelAttempt -eq 1) {
+                Start-Process $approvalMatch.Value
+                Write-Host ""
+                Read-Host "Approve Funnel in the opened Tailscale page, then press Enter here"
+            } else {
+                break
+            }
+        }
+    }
+}
+
+if (-not $publicBase -and (Get-Command cloudflared -ErrorAction SilentlyContinue)) {
     Write-Host "Creating a free temporary HTTPS address with Cloudflare ..." -ForegroundColor Cyan
     $cfOut = Join-Path $logDir "cloudflared.out.log"
     $cfErr = Join-Path $logDir "cloudflared.err.log"
