@@ -108,7 +108,7 @@ function Get-TailscaleContainerStatus {
     try { return ($statusText | ConvertFrom-Json) } catch { return $null }
 }
 
-Write-Host "PDP One - automatic ChatGPT connection 2026.07.18.6" -ForegroundColor Green
+Write-Host "PDP One - automatic ChatGPT connection 2026.07.18.7" -ForegroundColor Green
 if (-not (Get-Command docker -ErrorAction SilentlyContinue)) { throw "Docker command is unavailable." }
 if (-not (Test-DockerEngine)) { throw "Open Rancher Desktop and wait until the Moby engine is ready." }
 
@@ -123,6 +123,22 @@ if ([string]::IsNullOrWhiteSpace($mcpPathToken) -or $mcpPathToken -eq "replace-w
     Set-EnvValue -Path $EnvPath -Name "PDP_MCP_PATH_TOKEN" -Value $mcpPathToken
 }
 Set-EnvValue -Path $EnvPath -Name "PDP_TRIAL_MODE" -Value "true"
+
+$allowedHosts = Get-EnvValue -Path $EnvPath -Name "DJANGO_ALLOWED_HOSTS"
+if ([string]::IsNullOrWhiteSpace($allowedHosts)) {
+    $allowedHosts = "localhost,127.0.0.1,backend,nginx,.ts.net"
+} elseif (@($allowedHosts.Split(',') | ForEach-Object { $_.Trim() }) -notcontains ".ts.net") {
+    $allowedHosts = $allowedHosts.TrimEnd(',') + ",.ts.net"
+}
+Set-EnvValue -Path $EnvPath -Name "DJANGO_ALLOWED_HOSTS" -Value $allowedHosts
+
+$trustedOrigins = Get-EnvValue -Path $EnvPath -Name "DJANGO_CSRF_TRUSTED_ORIGINS"
+if ([string]::IsNullOrWhiteSpace($trustedOrigins)) {
+    $trustedOrigins = "https://*.ts.net"
+} elseif (@($trustedOrigins.Split(',') | ForEach-Object { $_.Trim() }) -notcontains "https://*.ts.net") {
+    $trustedOrigins = $trustedOrigins.TrimEnd(',') + ",https://*.ts.net"
+}
+Set-EnvValue -Path $EnvPath -Name "DJANGO_CSRF_TRUSTED_ORIGINS" -Value $trustedOrigins
 $trialAdminUser = Get-EnvValue -Path $EnvPath -Name "PDP_TRIAL_ADMIN_USERNAME"
 if ([string]::IsNullOrWhiteSpace($trialAdminUser)) {
     $trialAdminUser = "pdp-admin"
@@ -242,7 +258,7 @@ if ($tailscaleStartExitCode -eq 0) {
 
             $approvalMatch = [regex]::Match($funnelText, 'https://login\.tailscale\.com/[^\s]+')
             if ($approvalMatch.Success -and $funnelAttempt -eq 1) {
-                Start-Process $approvalMatch.Value.TrimEnd('.', ')')
+                Start-Process ($approvalMatch.Value.TrimEnd('.', ')'))
                 Read-Host "Approve public Funnel in the opened Tailscale page, then press Enter here"
             } else {
                 break
