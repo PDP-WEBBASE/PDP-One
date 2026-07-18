@@ -10,7 +10,7 @@ $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
 Set-StrictMode -Version Latest
 
-$InstallerVersion = "2026.07.19.18"
+$InstallerVersion = "2026.07.19.19"
 $ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 Set-Location $ProjectRoot
 
@@ -152,6 +152,33 @@ function Repair-PostgresCredential {
     }
 
     Write-Host "Existing PostgreSQL data was recovered successfully." -ForegroundColor Green
+}
+
+function Get-FreeSystemDriveBytes {
+    $driveName = $env:SystemDrive.TrimEnd(':')
+    return (Get-PSDrive -Name $driveName).Free
+}
+
+function Invoke-SafeDockerCacheCleanup([string]$Reason) {
+    Write-Host $Reason -ForegroundColor Cyan
+    Write-Host "Persistent database, Redis and private-file volumes are protected." -ForegroundColor DarkGreen
+
+    $previousErrorAction = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = "Continue"
+        & docker builder prune --all --force 2>&1 | Out-Host
+        & docker image prune --force 2>&1 | Out-Host
+    } finally {
+        $ErrorActionPreference = $previousErrorAction
+    }
+}
+
+function Protect-LowDiskBeforeBuild {
+    $freeBytes = Get-FreeSystemDriveBytes
+    Write-Host ("Free system-drive space before build: {0:N2} GB" -f ($freeBytes / 1GB)) -ForegroundColor Cyan
+    if ($freeBytes -lt 12GB) {
+        Invoke-SafeDockerCacheCleanup -Reason "Low disk space detected. Removing unused build cache before the build ..."
+    }
 }
 
 function Add-RancherPaths {
@@ -425,9 +452,11 @@ if (Test-PostgresDataVolume -VolumeName $postgresVolumeName -ImageName $postgres
 docker compose config --quiet
 if ($LASTEXITCODE -ne 0) { throw "Docker Compose configuration is invalid." }
 
+Protect-LowDiskBeforeBuild
 Write-Host "Downloading and building services. The first run may take several minutes ..." -ForegroundColor Cyan
 docker compose up --build --detach
 if ($LASTEXITCODE -ne 0) { throw "PDP One services failed to start." }
+Invoke-SafeDockerCacheCleanup -Reason "Build completed. Removing build cache that is no longer needed at runtime ..."
 
 Write-Host "Waiting for the application ..." -ForegroundColor Yellow
 $backendReady = $false
@@ -441,12 +470,25 @@ if (-not $backendReady) {
     throw "PDP One backend did not become ready in time. Review the log above."
 }
 
-$adminSyncScript = 'import os; from django.contrib.auth import get_user_model; User = get_user_model(); username = os.environ["PDP_TRIAL_ADMIN_USERNAME"]; password = os.environ["PDP_TRIAL_ADMIN_PASSWORD"]; user, _ = User.objects.get_or_create(username=username); user.set_password(password); user.is_active = True; user.is_staff = True; user.is_superuser = True; user.save()'
+$adminSyncScript = @(
+    'import os',
+    'from django.contrib.auth import get_user_model',
+    'User = get_user_model()',
+    'username = os.environ["PDP_TRIAL_ADMIN_USERNAME"]',
+    'password = os.environ["PDP_TRIAL_ADMIN_PASSWORD"]',
+    'user, _ = User.objects.get_or_create(username=username)',
+    'user.set_password(password)',
+    'user.is_active = True',
+    'user.is_staff = True',
+    'user.is_superuser = True',
+    'user.save()'
+) -join "`n"
 $previousErrorAction = $ErrorActionPreference
 try {
     $ErrorActionPreference = "Continue"
-    & docker compose exec -T backend python manage.py shell -c $adminSyncScript 2>&1 | Out-Host
+    $adminSyncOutput = ($adminSyncScript | & docker compose exec -T backend python manage.py shell 2>&1)
     $adminSyncCode = $LASTEXITCODE
+    $adminSyncOutput | Out-Host
 } finally {
     $ErrorActionPreference = $previousErrorAction
 }
