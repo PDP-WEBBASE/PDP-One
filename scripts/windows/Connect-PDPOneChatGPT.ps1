@@ -304,7 +304,7 @@ if (-not $publicBase) {
     }
 }
 
-if (-not $publicBase -or $null -eq $tunnelProcess -or $tunnelProcess.HasExited) {
+if (-not $publicBase -or (-not $tailscaleActive -and ($null -eq $tunnelProcess -or $tunnelProcess.HasExited))) {
     if ($null -ne $tunnelProcess -and -not $tunnelProcess.HasExited) {
         Stop-Process -Id $tunnelProcess.Id -Force -ErrorAction SilentlyContinue
     }
@@ -315,7 +315,7 @@ if (-not $publicBase -or $null -eq $tunnelProcess -or $tunnelProcess.HasExited) 
         "Local health: http://127.0.0.1:8080/healthz",
         ""
     )
-    foreach ($logFile in @($cfOut, $cfErr, $pgOut, $pgErr, $lrOut, $lrErr)) {
+    foreach ($logFile in @($tsLog, $cfOut, $cfErr, $pgOut, $pgErr, $lrOut, $lrErr)) {
         if (-not [string]::IsNullOrWhiteSpace($logFile) -and (Test-Path -LiteralPath $logFile)) {
             $diagnosticLines += "===== $([IO.Path]::GetFileName($logFile)) ====="
             $diagnosticLines += (Get-Content -LiteralPath $logFile -ErrorAction SilentlyContinue | Select-Object -Last 80)
@@ -364,8 +364,15 @@ Start-Process notepad.exe -ArgumentList $instructionPath
 Start-Process "https://chatgpt.com/plugins"
 
 try {
-    Wait-Process -Id $tunnelProcess.Id
+    if ($tailscaleActive) {
+        Read-Host "Press Enter to revoke the temporary Tailscale Funnel"
+    } else {
+        Wait-Process -Id $tunnelProcess.Id
+    }
 } finally {
+    if ($tailscaleActive -and $tailscaleCli) {
+        & $tailscaleCli funnel reset *> $null
+    }
     if ($null -ne $tunnelProcess -and -not $tunnelProcess.HasExited) {
         Stop-Process -Id $tunnelProcess.Id -Force -ErrorAction SilentlyContinue
     }
