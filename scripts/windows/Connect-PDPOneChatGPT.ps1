@@ -161,7 +161,7 @@ function Get-TailscaleContainerStatus {
     try { return ($statusText | ConvertFrom-Json) } catch { return $null }
 }
 
-Write-Host "PDP One - automatic ChatGPT connection 2026.07.19.17" -ForegroundColor Green
+Write-Host "PDP One - automatic ChatGPT connection 2026.07.19.18" -ForegroundColor Green
 if (-not (Get-Command docker -ErrorAction SilentlyContinue)) { throw "Docker command is unavailable." }
 if (-not (Test-DockerEngine)) { throw "Open Rancher Desktop and wait until the Moby engine is ready." }
 
@@ -170,11 +170,11 @@ Set-Location $ProjectRoot
 $EnvPath = Join-Path $ProjectRoot ".env"
 if (-not (Test-Path -LiteralPath $EnvPath)) { throw "The secure .env file is missing." }
 
-$mcpPathToken = Get-EnvValue -Path $EnvPath -Name "PDP_MCP_PATH_TOKEN"
-if ([string]::IsNullOrWhiteSpace($mcpPathToken) -or $mcpPathToken -eq "replace-with-a-random-path-token") {
-    $mcpPathToken = New-RandomSecret 32
-    Set-EnvValue -Path $EnvPath -Name "PDP_MCP_PATH_TOKEN" -Value $mcpPathToken
-}
+# Each temporary connection receives a fresh private MCP path. This revokes
+# URLs from previous runs and prevents an accidentally shared screenshot or
+# instruction file from remaining usable.
+$mcpPathToken = New-RandomSecret 32
+Set-EnvValue -Path $EnvPath -Name "PDP_MCP_PATH_TOKEN" -Value $mcpPathToken
 Set-EnvValue -Path $EnvPath -Name "PDP_TRIAL_MODE" -Value "true"
 
 $allowedHosts = Get-EnvValue -Path $EnvPath -Name "DJANGO_ALLOWED_HOSTS"
@@ -517,8 +517,8 @@ Set-Clipboard -Value $mcpEndpoint
 
 Write-Host "" 
 Write-Host "PDP One is connected to the internet." -ForegroundColor Green
-Write-Host "MCP URL (already copied to clipboard):" -ForegroundColor Cyan
-Write-Host $mcpEndpoint -ForegroundColor White
+Write-Host "The private MCP URL was copied to the clipboard and saved in the instruction file." -ForegroundColor Cyan
+Write-Host "For security, the private URL is not displayed in this window." -ForegroundColor Yellow
 Write-Host "" 
 Write-Host "ChatGPT setup instructions were opened in Notepad." -ForegroundColor Green
 Write-Host "Keep this window open. Press Ctrl+C to revoke the link." -ForegroundColor Yellow
