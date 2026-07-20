@@ -1,4 +1,10 @@
-# PDP One v1.0.1-trial
+# PDP One v1.0.2-trial
+
+## Windows PowerShell 5.1 / Docker stderr repair
+
+- prevents Docker's normal `Unable to find image ... locally` progress message from being promoted to a terminating `RemoteException`
+- invokes the base-backup and isolated-restore scripts directly so genuine exceptions still reach the safe Desktop report
+- retains the dual SHA-256-verified archive destinations introduced in v1.0.1
 
 ## Portable backup repair
 
