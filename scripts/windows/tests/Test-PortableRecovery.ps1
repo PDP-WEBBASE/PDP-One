@@ -43,5 +43,10 @@ try {
     $redacted = ConvertTo-PDPOneRedactedText ("Authorization: Bearer " + $fakeGithubToken)
     Assert-True ($redacted -notmatch 'ghp_') 'Secret redaction failed.'
     Assert-True ((ConvertTo-PDPOneResponseText ([Text.Encoding]::UTF8.GetBytes('healthy'))) -eq 'healthy') 'Byte response decoding failed.'
+
+    $portableBackupScript = [IO.File]::ReadAllText((Join-Path $root 'New-PDPOnePortableBackup.ps1'))
+    Assert-True ($portableBackupScript.Contains("D:\BackUp PDP-0NE-14050429-01")) 'The required automatic local archive path is missing.'
+    Assert-True ($portableBackupScript.Contains('copies_sha256_verified')) 'Portable backup copies are not recorded as hash-verified.'
+    Assert-True ($portableBackupScript.Contains('failed-safely')) 'Portable backup does not emit a safe failure report.'
     Write-Host 'Portable recovery, approval compatibility, and redaction tests passed.' -ForegroundColor Green
 } finally { Remove-Item -LiteralPath $temporary -Recurse -Force -ErrorAction SilentlyContinue }

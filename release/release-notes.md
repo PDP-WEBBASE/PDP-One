@@ -1,4 +1,11 @@
-# PDP One v1.0.0-trial
+# PDP One v1.0.1-trial
+
+## Portable backup repair
+
+- preserves and displays the redacted root cause when base backup or isolated restore verification fails
+- writes `PDP-ONE-PORTABLE-BACKUP-REPORT.json` on both success and safe failure
+- automatically writes a second SHA-256-verified `.pdpone` copy to `D:\BackUp PDP-0NE-14050429-01`
+- finalizes destination files atomically so incomplete `.partial` files are never treated as valid backups
 
 This fixed trial release includes BACKLOG-001 stable automated deployment, the Health Gate and Approval Gate compatibility fixes, portable encrypted disaster-recovery backups, and one-file Windows restore orchestration.
 
