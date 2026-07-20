@@ -20,7 +20,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\windows\Install-PDPOne.ps1
 
 بازیابی پس از نصب مجدد کامل Windows:
 
-1. روی سیستم سالم، `CREATE-PDP-ONE-PORTABLE-BACKUP.bat` را اجرا و فایل رمز‌شده `.pdpone` را خارج از درایو Windows نگه‌داری کنید.
+1. روی سیستم سالم، `CREATE-PDP-ONE-PORTABLE-BACKUP.bat` را اجرا کنید؛ فایل رمز‌شده `.pdpone` هم در مقصد خارجی انتخابی و هم در `D:\BackUp PDP-0NE-14050429-01` ذخیره و با SHA-256 کنترل می‌شود.
 2. روی Windows جدید، Source همین Release و فایل `.pdpone` را در دسترس قرار دهید.
 3. `RESTORE-PDP-ONE.bat` را اجرا کنید. اگر فعال‌سازی WSL نیازمند Restart بود، پس از ورود مجدد همان BAT را دوباره اجرا کنید.
 
