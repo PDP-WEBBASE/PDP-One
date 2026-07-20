@@ -1,6 +1,6 @@
 # وضعیت BACKLOG-001
 
-وضعیت این سند: پیاده‌سازی Branch و تست/Preview؛ Production هنوز تغییر نکرده است.
+وضعیت این سند: BACKLOG-001 روی Commit تأییدشده Deploy و Health نهایی آن موفق شده است. این سند همراه قابلیت بازیابی کامل برای ادغام در `main` آماده شده است.
 
 ## ممیزی مرجع
 
@@ -23,8 +23,10 @@
 - Audit و Gap analysis: انجام‌شده
 - Backup اولیه و Restore verification: انجام‌شده
 - Branch جداگانه: انجام‌شده
-- کد Startup/Token/Agent/Backup/Updater/Rollback: آماده روی Branch، هنوز روی لپ‌تاپ Deploy نشده
-- تست‌های مستقل کد و Security: در حال تکمیل
-- Preview: پس از CI ساخته می‌شود
-- اقدام اولیه یک‌باره Agent: هنوز اجرا نشده
-- Backup نهایی، Deploy، Restart واقعی Windows و Failure injection واقعی: تا تأیید Preview ممنوع و اجرا‌نشده
+- کد Startup/Token/Agent/Backup/Updater/Rollback: Deploy شده
+- تست‌های مستقل کد و Security: موفق برای Release تأییدشده
+- Preview و تأیید صریح: انجام‌شده
+- اقدام اولیه یک‌باره Agent: انجام‌شده
+- Backup نهایی، Restore ایزوله، Deploy و Health نهایی: انجام‌شده
+- Repairهای Health Gate 1.1 و Approval Gate 1.2.1: در Source پایدار ادغام شده‌اند
+- Backup رمز‌شده قابل‌انتقال و Restore یک‌مرحله‌ای: برای Release ثابت اضافه شده‌اند
