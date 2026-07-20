@@ -1,7 +1,10 @@
 #requires -Version 5.1
 #requires -RunAsAdministrator
 [CmdletBinding()]
-param([Parameter(Mandatory = $true)][string]$BackupPath)
+param(
+    [Parameter(Mandatory = $true)][string]$BackupPath,
+    [string]$PortableEnvironmentPath = ''
+)
 
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
@@ -10,7 +13,7 @@ Set-StrictMode -Version Latest
 
 $reportPath = Join-Path $BackupPath "backup-report.json"
 if (-not (Test-Path -LiteralPath $reportPath)) { throw "Backup report is missing." }
-$report = Get-Content -LiteralPath $reportPath -Raw | ConvertFrom-Json
+$report = Get-Content -LiteralPath $reportPath -Raw -Encoding UTF8 | ConvertFrom-Json
 foreach ($entry in $report.file_sha256.PSObject.Properties) {
     $path = Join-Path $BackupPath $entry.Name
     if (-not (Test-Path -LiteralPath $path)) { throw "Backup member $($entry.Name) is missing." }
@@ -20,7 +23,11 @@ foreach ($entry in $report.file_sha256.PSObject.Properties) {
 
 $temporaryEnv = Join-Path $env:TEMP ("pdp-one-env-check-" + [Guid]::NewGuid().ToString("N"))
 try {
-    Unprotect-PDPOneSecretFile -InputPath (Join-Path $BackupPath "environment.dpapi") -OutputPath $temporaryEnv
+    if ($PortableEnvironmentPath) {
+        Copy-Item -LiteralPath $PortableEnvironmentPath -Destination $temporaryEnv -Force
+    } else {
+        Unprotect-PDPOneSecretFile -InputPath (Join-Path $BackupPath "environment.dpapi") -OutputPath $temporaryEnv
+    }
     if ((Get-Item -LiteralPath $temporaryEnv).Length -lt 64) { throw "The protected environment backup is invalid." }
 } finally { Remove-Item -LiteralPath $temporaryEnv -Force -ErrorAction SilentlyContinue }
 
@@ -49,7 +56,7 @@ try {
     if ($LASTEXITCODE -ne 0) { throw "File archive validation failed." }
     $report.restore_verified = $true
     $report | Add-Member -NotePropertyName restore_verified_at -NotePropertyValue ((Get-Date).ToUniversalTime().ToString("o")) -Force
-    $report | Add-Member -NotePropertyName restore_test -NotePropertyValue ([ordered]@{ isolated_database = $true; migrations = [int]$migrationCount; contracts = [int]$contractCount; archives = $true; protected_environment = $true }) -Force
+    $report | Add-Member -NotePropertyName restore_test -NotePropertyValue ([ordered]@{ isolated_database = $true; migrations = [int]$migrationCount; contracts = [int]$contractCount; archives = $true; protected_environment = $true; portable_environment = [bool]$PortableEnvironmentPath }) -Force
     $report | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $reportPath -Encoding UTF8
     Write-Host "Backup restore verification succeeded in an isolated database." -ForegroundColor Green
 } finally {
