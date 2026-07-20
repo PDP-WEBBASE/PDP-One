@@ -18,6 +18,14 @@
 powershell -ExecutionPolicy Bypass -File .\scripts\windows\Install-PDPOne.ps1
 ```
 
+بازیابی پس از نصب مجدد کامل Windows:
+
+1. روی سیستم سالم، `CREATE-PDP-ONE-PORTABLE-BACKUP.bat` را اجرا و فایل رمز‌شده `.pdpone` را خارج از درایو Windows نگه‌داری کنید.
+2. روی Windows جدید، Source همین Release و فایل `.pdpone` را در دسترس قرار دهید.
+3. `RESTORE-PDP-ONE.bat` را اجرا کنید. اگر فعال‌سازی WSL نیازمند Restart بود، پس از ورود مجدد همان BAT را دوباره اجرا کنید.
+
+Passphrase در GitHub، گزارش یا Backup ذخیره نمی‌شود و بدون آن Restore ممکن نیست.
+
 راه‌اندازی عامل محلی یک اقدام یک‌باره است:
 
 ```text
@@ -43,3 +51,4 @@ Branch → Tests/Security → Preview → توقف برای تأیید صریح
 - [راهنمای Deploy و عامل محلی](docs/backlog-001-deployment.md)
 - [راهنمای بازیابی و Rollback](docs/recovery.md)
 - [وضعیت BACKLOG-001](docs/backlog-001-status.md)
+- [Backup قابل‌انتقال و بازیابی کامل Windows](docs/bare-metal-recovery.md)
