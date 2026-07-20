@@ -3,6 +3,7 @@
 [CmdletBinding()]
 param(
     [string]$OutputDirectory = '',
+    [string]$LocalArchiveDirectory = 'D:\BackUp PDP-0NE-14050429-01',
     [switch]$AllowSystemDrive,
     [int]$KdfIterations = 310000
 )
@@ -25,14 +26,53 @@ function Read-ConfirmedPassphrase {
     return $first
 }
 
+function Assert-PDPOneWritableDirectory([string]$Path, [string]$Purpose) {
+    try {
+        New-Item -ItemType Directory -Path $Path -Force | Out-Null
+        $resolved = (Resolve-Path -LiteralPath $Path).Path
+        $probe = Join-Path $resolved ('.pdp-one-write-test-' + [Guid]::NewGuid().ToString('N'))
+        [IO.File]::WriteAllText($probe, 'write-test', [Text.Encoding]::ASCII)
+        Remove-Item -LiteralPath $probe -Force
+        return $resolved
+    } catch {
+        throw "$Purpose is not writable: $Path. $($_.Exception.Message)"
+    }
+}
+
+function Copy-PDPOneVerifiedArchive([string]$SourcePath, [string]$DestinationDirectory, [string]$FileName, [string]$ExpectedHash) {
+    $destination = Join-Path $DestinationDirectory $FileName
+    $temporary = "$destination.partial"
+    Remove-Item -LiteralPath $temporary -Force -ErrorAction SilentlyContinue
+    try {
+        Copy-Item -LiteralPath $SourcePath -Destination $temporary -Force
+        $actual = (Get-FileHash -LiteralPath $temporary -Algorithm SHA256).Hash.ToLowerInvariant()
+        if ($actual -ne $ExpectedHash) { throw "Portable archive copy failed SHA-256 verification: $DestinationDirectory" }
+        Move-Item -LiteralPath $temporary -Destination $destination -Force
+        return $destination
+    } finally {
+        Remove-Item -LiteralPath $temporary -Force -ErrorAction SilentlyContinue
+    }
+}
+
+function Get-PDPOneChildFailure([object[]]$Output, [string]$Fallback) {
+    $lines = @($Output | ForEach-Object { [string]$_ } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+    if ($lines.Count -eq 0) { return $Fallback }
+    $tail = @($lines | Select-Object -Last 25) -join "`n"
+    return "$Fallback`n$(ConvertTo-PDPOneRedactedText $tail)"
+}
+
 if (-not $OutputDirectory) { $OutputDirectory = Read-Host 'Enter an external-drive or network folder for the encrypted backup' }
 if ([string]::IsNullOrWhiteSpace($OutputDirectory)) { throw 'An output directory is required.' }
-New-Item -ItemType Directory -Path $OutputDirectory -Force | Out-Null
-$OutputDirectory = (Resolve-Path -LiteralPath $OutputDirectory).Path
+$OutputDirectory = Assert-PDPOneWritableDirectory -Path $OutputDirectory -Purpose 'The external backup directory'
+$LocalArchiveDirectory = Assert-PDPOneWritableDirectory -Path $LocalArchiveDirectory -Purpose 'The automatic local archive directory'
 $systemRoot = [IO.Path]::GetPathRoot($env:SystemDrive + '\')
 $outputRoot = [IO.Path]::GetPathRoot($OutputDirectory)
 if (-not $AllowSystemDrive -and [string]::Equals($systemRoot, $outputRoot, [StringComparison]::OrdinalIgnoreCase)) {
     throw 'Portable disaster-recovery backup must be stored off the Windows system drive. Use an external drive/network path.'
+}
+$localRoot = [IO.Path]::GetPathRoot($LocalArchiveDirectory)
+if (-not $AllowSystemDrive -and [string]::Equals($systemRoot, $localRoot, [StringComparison]::OrdinalIgnoreCase)) {
+    throw 'The automatic local portable archive must not be stored on the Windows system drive.'
 }
 
 $ProjectRoot = Get-PDPOneProjectRoot
@@ -44,19 +84,30 @@ $packageRoot = Join-Path $stage 'package'
 $sourceStage = Join-Path $stage 'source'
 $plainZip = Join-Path $stage 'portable-backup.zip'
 $outputName = "PDP-One-Portable-Backup-$timestamp.pdpone"
-$outputPath = Join-Path $OutputDirectory $outputName
+$encryptedStage = Join-Path $stage $outputName
 $passphrase = Read-ConfirmedPassphrase
+$currentStep = 'initialization'
+$createdArchives = @()
 
 try {
+    $currentStep = 'secure-staging'
     New-Item -ItemType Directory -Path $packageRoot -Force | Out-Null
     & icacls.exe $stage /inheritance:r /grant:r "${env:USERNAME}:(OI)(CI)F" 'SYSTEM:(OI)(CI)F' 'Administrators:(OI)(CI)F' *> $null
 
-    $backupOutput = @(& powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'New-PDPOneBackup.ps1') -Kind manual -DeploymentId "portable-$timestamp")
-    if ($LASTEXITCODE -ne 0) { throw 'Base backup creation failed.' }
-    $backupPath = [string]$backupOutput[-1]
-    & powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'Test-PDPOneBackupRestore.ps1') -BackupPath $backupPath
-    if ($LASTEXITCODE -ne 0) { throw 'Base backup isolated restore verification failed.' }
+    $currentStep = 'base-backup'
+    $backupOutput = @(& powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'New-PDPOneBackup.ps1') -Kind manual -DeploymentId "portable-$timestamp" 2>&1)
+    $backupExitCode = $LASTEXITCODE
+    if ($backupExitCode -ne 0) { throw (Get-PDPOneChildFailure -Output $backupOutput -Fallback 'Base backup creation failed.') }
+    $backupPath = @($backupOutput | ForEach-Object { [string]$_ } | Where-Object { Test-Path -LiteralPath $_ -PathType Container -ErrorAction SilentlyContinue } | Select-Object -Last 1)
+    if ($backupPath.Count -ne 1) { throw (Get-PDPOneChildFailure -Output $backupOutput -Fallback 'Base backup completed without returning a valid backup directory.') }
+    $backupPath = [string]$backupPath[0]
 
+    $currentStep = 'isolated-restore-verification'
+    $verifyOutput = @(& powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'Test-PDPOneBackupRestore.ps1') -BackupPath $backupPath 2>&1)
+    $verifyExitCode = $LASTEXITCODE
+    if ($verifyExitCode -ne 0) { throw (Get-PDPOneChildFailure -Output $verifyOutput -Fallback 'Base backup isolated restore verification failed.') }
+
+    $currentStep = 'portable-package'
     Get-ChildItem -LiteralPath $backupPath -File | ForEach-Object { Copy-Item -LiteralPath $_.FullName -Destination (Join-Path $packageRoot $_.Name) -Force }
     Copy-Item -LiteralPath $envPath -Destination (Join-Path $packageRoot 'environment.env') -Force
 
@@ -96,27 +147,65 @@ try {
     }
     $manifest | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $packageRoot 'portable-manifest.json') -Encoding UTF8
     Compress-Archive -Path (Join-Path $packageRoot '*') -DestinationPath $plainZip -CompressionLevel Optimal -Force
-    Protect-PDPOnePortableFile -SourcePath $plainZip -DestinationPath $outputPath -Passphrase $passphrase -Iterations $KdfIterations
 
+    $currentStep = 'encryption'
+    Protect-PDPOnePortableFile -SourcePath $plainZip -DestinationPath $encryptedStage -Passphrase $passphrase -Iterations $KdfIterations
+    $portableHash = (Get-FileHash -LiteralPath $encryptedStage -Algorithm SHA256).Hash.ToLowerInvariant()
+
+    $currentStep = 'external-copy'
+    $externalPath = Copy-PDPOneVerifiedArchive -SourcePath $encryptedStage -DestinationDirectory $OutputDirectory -FileName $outputName -ExpectedHash $portableHash
+    $createdArchives += $externalPath
+    if ([string]::Equals($OutputDirectory.TrimEnd('\'), $LocalArchiveDirectory.TrimEnd('\'), [StringComparison]::OrdinalIgnoreCase)) {
+        $localPath = $externalPath
+    } else {
+        $currentStep = 'automatic-local-copy'
+        $localPath = Copy-PDPOneVerifiedArchive -SourcePath $encryptedStage -DestinationDirectory $LocalArchiveDirectory -FileName $outputName -ExpectedHash $portableHash
+        $createdArchives += $localPath
+    }
+
+    $currentStep = 'success-report'
     $safeReport = [ordered]@{
         schema_version = 1
         status = 'succeeded'
         operation = 'create-portable-encrypted-backup'
         file_name = $outputName
-        size_bytes = (Get-Item -LiteralPath $outputPath).Length
-        sha256 = (Get-FileHash -LiteralPath $outputPath -Algorithm SHA256).Hash.ToLowerInvariant()
+        size_bytes = (Get-Item -LiteralPath $externalPath).Length
+        sha256 = $portableHash
         base_backup_id = Split-Path $backupPath -Leaf
         isolated_restore_verified = $true
         stored_off_system_drive = (-not [string]::Equals($systemRoot, $outputRoot, [StringComparison]::OrdinalIgnoreCase))
+        external_copy = $externalPath
+        automatic_local_copy = $localPath
+        copies_sha256_verified = $true
         dpapi_independent = $true
         passphrase_stored = $false
         completed_at = [DateTime]::UtcNow.ToString('o')
     }
     $reportPath = Join-Path ([Environment]::GetFolderPath('Desktop')) 'PDP-ONE-PORTABLE-BACKUP-REPORT.json'
     $safeReport | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $reportPath -Encoding UTF8
-    Write-Host "Portable encrypted backup created: $outputPath" -ForegroundColor Green
+    Write-Host "Portable encrypted backup created: $externalPath" -ForegroundColor Green
+    Write-Host "Automatic local copy created: $localPath" -ForegroundColor Green
     Write-Host 'Store the passphrase separately. It cannot be recovered from GitHub or the backup file.' -ForegroundColor Yellow
-    Write-Output $outputPath
+    Write-Output $externalPath
+} catch {
+    $failure = ConvertTo-PDPOneRedactedText $_.Exception.Message
+    $failureReport = [ordered]@{
+        schema_version = 1
+        status = 'failed-safely'
+        operation = 'create-portable-encrypted-backup'
+        failed_step = $currentStep
+        error = $failure
+        created_archives = @($createdArchives)
+        existing_data_deleted = $false
+        existing_backups_deleted = $false
+        completed_at = [DateTime]::UtcNow.ToString('o')
+    }
+    $failureReportPath = Join-Path ([Environment]::GetFolderPath('Desktop')) 'PDP-ONE-PORTABLE-BACKUP-REPORT.json'
+    $failureReport | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $failureReportPath -Encoding UTF8
+    Write-Host "Portable backup stopped safely at step: $currentStep" -ForegroundColor Red
+    Write-Host $failure -ForegroundColor Red
+    Write-Host "Safe report: $failureReportPath" -ForegroundColor Yellow
+    throw
 } finally {
     Remove-Item -LiteralPath $stage -Recurse -Force -ErrorAction SilentlyContinue
     $passphrase = $null
