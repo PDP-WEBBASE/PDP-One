@@ -3,7 +3,8 @@
 [CmdletBinding()]
 param(
     [switch]$SkipPackageInstall,
-    [switch]$SkipAdministrator
+    [switch]$SkipAdministrator,
+    [switch]$SkipPostInstallConnection
 )
 
 $ErrorActionPreference = "Stop"
@@ -571,6 +572,8 @@ New-Item -ItemType Directory -Path $stateDirectory -Force | Out-Null
 
 Write-Host ""
 Write-Host "PDP One is ready: http://localhost:8080" -ForegroundColor Green
-Write-Host "Opening the automatic ChatGPT connection now. No OpenAI API key is used." -ForegroundColor Cyan
 Start-Process notepad.exe -ArgumentList $loginPath
-Start-Process -FilePath (Join-Path $ProjectRoot "CONNECT-CHATGPT.bat") -WorkingDirectory $ProjectRoot
+if (-not $SkipPostInstallConnection) {
+    Write-Host "Opening the automatic ChatGPT connection now. No OpenAI API key is used." -ForegroundColor Cyan
+    Start-Process -FilePath (Join-Path $ProjectRoot "CONNECT-CHATGPT.bat") -WorkingDirectory $ProjectRoot
+}
