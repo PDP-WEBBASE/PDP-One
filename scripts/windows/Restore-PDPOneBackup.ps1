@@ -9,7 +9,8 @@ param(
     [switch]$RestoreDatabase,
     [switch]$RestorePrivateFiles,
     [switch]$RestoreRedisData,
-    [switch]$RestoreTailscaleState
+    [switch]$RestoreTailscaleState,
+    [string]$PortableEnvironmentPath = ''
 )
 
 $ErrorActionPreference = "Stop"
@@ -18,7 +19,7 @@ Set-StrictMode -Version Latest
 . (Join-Path $PSScriptRoot "PDPOne.Common.ps1")
 if (-not $Confirmed -and -not $AutomaticRollback) { throw "Restore requires explicit confirmation or an authorized automatic rollback." }
 $reportPath = Join-Path $BackupPath "backup-report.json"
-$report = Get-Content -LiteralPath $reportPath -Raw | ConvertFrom-Json
+$report = Get-Content -LiteralPath $reportPath -Raw -Encoding UTF8 | ConvertFrom-Json
 if (-not $report.restore_verified) { throw "Restore is blocked because this backup has not passed isolated verification." }
 $ProjectRoot = Get-PDPOneProjectRoot
 Set-Location $ProjectRoot
@@ -29,7 +30,11 @@ $dbUser = [string]$report.database_user
 & docker compose --profile tunnel stop backend worker beat mcp web nginx tailscale *> $null
 if ($RestoreSettings) {
     Copy-Item -LiteralPath $envPath -Destination "$envPath.before-restore" -Force
-    Unprotect-PDPOneSecretFile -InputPath (Join-Path $BackupPath "environment.dpapi") -OutputPath $envPath
+    if ($PortableEnvironmentPath) {
+        Copy-Item -LiteralPath $PortableEnvironmentPath -Destination $envPath -Force
+    } else {
+        Unprotect-PDPOneSecretFile -InputPath (Join-Path $BackupPath "environment.dpapi") -OutputPath $envPath
+    }
 }
 if ($RestoreDatabase) {
     $dbContainer = (& docker compose ps -q db).Trim()
