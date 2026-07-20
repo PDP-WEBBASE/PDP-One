@@ -74,6 +74,7 @@ if ($LASTEXITCODE -ne 0) {
 $binRoot = Join-Path $AgentRoot "bin"
 New-Item -ItemType Directory -Force -Path $binRoot | Out-Null
 Copy-Item -Path (Join-Path $ProjectRoot "scripts\windows\*.ps1") -Destination $binRoot -Force
+Set-Content -LiteralPath (Join-Path $AgentRoot 'state\restart-agent-after-response') -Value ([DateTime]::UtcNow.ToString('o')) -Encoding ASCII
 $state.status = "healthy"
 $state.completed_at = (Get-Date).ToUniversalTime().ToString("o")
 $state | ConvertTo-Json | Set-Content -LiteralPath $statePath -Encoding UTF8
