@@ -1,4 +1,10 @@
-# PDP One v1.0.2-trial
+# PDP One v1.0.3-trial
+
+## Windows DPAPI compatibility repair
+
+- explicitly loads the Windows `System.Security` assembly before using DPAPI
+- uses the fully qualified `ProtectedData` and `DataProtectionScope` types required by Windows PowerShell 5.1
+- adds a native `windows-latest` CI gate that performs a real DPAPI encrypt/decrypt round-trip with Windows PowerShell 5.1
 
 ## Windows PowerShell 5.1 / Docker stderr repair
 

@@ -140,14 +140,34 @@ function Test-PDPOneExplicitDeploymentApproval([string]$Text) {
 }
 
 function Protect-PDPOneSecretFile([string]$InputPath, [string]$OutputPath) {
+    if ($null -eq ('System.Security.Cryptography.ProtectedData' -as [type])) {
+        Add-Type -AssemblyName System.Security -ErrorAction Stop
+    }
+    if ($null -eq ('System.Security.Cryptography.ProtectedData' -as [type])) {
+        throw 'Windows DPAPI support could not be loaded.'
+    }
     $bytes = [IO.File]::ReadAllBytes($InputPath)
-    $protected = [Security.Cryptography.ProtectedData]::Protect($bytes, $null, 'CurrentUser')
+    $protected = [System.Security.Cryptography.ProtectedData]::Protect(
+        $bytes,
+        $null,
+        [System.Security.Cryptography.DataProtectionScope]::CurrentUser
+    )
     [IO.File]::WriteAllBytes($OutputPath, $protected)
 }
 
 function Unprotect-PDPOneSecretFile([string]$InputPath, [string]$OutputPath) {
+    if ($null -eq ('System.Security.Cryptography.ProtectedData' -as [type])) {
+        Add-Type -AssemblyName System.Security -ErrorAction Stop
+    }
+    if ($null -eq ('System.Security.Cryptography.ProtectedData' -as [type])) {
+        throw 'Windows DPAPI support could not be loaded.'
+    }
     $bytes = [IO.File]::ReadAllBytes($InputPath)
-    $plain = [Security.Cryptography.ProtectedData]::Unprotect($bytes, $null, 'CurrentUser')
+    $plain = [System.Security.Cryptography.ProtectedData]::Unprotect(
+        $bytes,
+        $null,
+        [System.Security.Cryptography.DataProtectionScope]::CurrentUser
+    )
     [IO.File]::WriteAllBytes($OutputPath, $plain)
 }
 

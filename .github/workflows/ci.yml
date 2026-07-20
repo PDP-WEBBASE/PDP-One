@@ -68,3 +68,26 @@ jobs:
         env:
           DJANGO_SETTINGS_MODULE: config.settings_test
         run: python backend/manage.py test core.tests -v 2
+
+  windows-powershell-51:
+    name: Windows PowerShell 5.1 compatibility
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Parse all Windows scripts with Windows PowerShell 5.1
+        shell: powershell
+        run: |
+          $failed = $false
+          Get-ChildItem scripts/windows -Filter *.ps1 -Recurse | ForEach-Object {
+            $tokens = $null
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile($_.FullName, [ref]$tokens, [ref]$errors) | Out-Null
+            if ($errors.Count -gt 0) {
+              $failed = $true
+              $errors | ForEach-Object { Write-Error "$($_.Extent.File):$($_.Extent.StartLineNumber): $($_.Message)" }
+            }
+          }
+          if ($failed) { exit 1 }
+      - name: Test DPAPI and compatibility helpers
+        shell: powershell
+        run: .\scripts\windows\tests\Test-WindowsPowerShell51.ps1
