@@ -95,17 +95,18 @@ try {
     & icacls.exe $stage /inheritance:r /grant:r "${env:USERNAME}:(OI)(CI)F" 'SYSTEM:(OI)(CI)F' 'Administrators:(OI)(CI)F' *> $null
 
     $currentStep = 'base-backup'
-    $backupOutput = @(& powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'New-PDPOneBackup.ps1') -Kind manual -DeploymentId "portable-$timestamp" 2>&1)
-    $backupExitCode = $LASTEXITCODE
-    if ($backupExitCode -ne 0) { throw (Get-PDPOneChildFailure -Output $backupOutput -Fallback 'Base backup creation failed.') }
+    # Invoke the signed local script in-process. Windows PowerShell 5.1 can
+    # otherwise promote harmless native stderr (for example Docker's
+    # "Unable to find image ... locally") into a terminating RemoteException.
+    $baseBackupScript = Join-Path $PSScriptRoot 'New-PDPOneBackup.ps1'
+    $backupOutput = @(& $baseBackupScript -Kind manual -DeploymentId "portable-$timestamp")
     $backupPath = @($backupOutput | ForEach-Object { [string]$_ } | Where-Object { Test-Path -LiteralPath $_ -PathType Container -ErrorAction SilentlyContinue } | Select-Object -Last 1)
     if ($backupPath.Count -ne 1) { throw (Get-PDPOneChildFailure -Output $backupOutput -Fallback 'Base backup completed without returning a valid backup directory.') }
     $backupPath = [string]$backupPath[0]
 
     $currentStep = 'isolated-restore-verification'
-    $verifyOutput = @(& powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'Test-PDPOneBackupRestore.ps1') -BackupPath $backupPath 2>&1)
-    $verifyExitCode = $LASTEXITCODE
-    if ($verifyExitCode -ne 0) { throw (Get-PDPOneChildFailure -Output $verifyOutput -Fallback 'Base backup isolated restore verification failed.') }
+    $verifyScript = Join-Path $PSScriptRoot 'Test-PDPOneBackupRestore.ps1'
+    $verifyOutput = @(& $verifyScript -BackupPath $backupPath)
 
     $currentStep = 'portable-package'
     Get-ChildItem -LiteralPath $backupPath -File | ForEach-Object { Copy-Item -LiteralPath $_.FullName -Destination (Join-Path $packageRoot $_.Name) -Force }
