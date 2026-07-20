@@ -28,7 +28,7 @@ jobs:
         shell: pwsh
         run: |
           $failed = $false
-          Get-ChildItem scripts/windows -Filter *.ps1 | ForEach-Object {
+          Get-ChildItem scripts/windows -Filter *.ps1 -Recurse | ForEach-Object {
             $tokens = $null
             $errors = $null
             [System.Management.Automation.Language.Parser]::ParseFile($_.FullName, [ref]$tokens, [ref]$errors) | Out-Null
@@ -38,6 +38,9 @@ jobs:
             }
           }
           if ($failed) { exit 1 }
+      - name: Test portable recovery and Windows compatibility helpers
+        shell: pwsh
+        run: pwsh -NoLogo -NoProfile -File scripts/windows/tests/Test-PortableRecovery.ps1
       - uses: actions/setup-node@v4
         with:
           node-version: 22
