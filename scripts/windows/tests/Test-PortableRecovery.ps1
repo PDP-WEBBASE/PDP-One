@@ -48,5 +48,7 @@ try {
     Assert-True ($portableBackupScript.Contains("D:\BackUp PDP-0NE-14050429-01")) 'The required automatic local archive path is missing.'
     Assert-True ($portableBackupScript.Contains('copies_sha256_verified')) 'Portable backup copies are not recorded as hash-verified.'
     Assert-True ($portableBackupScript.Contains('failed-safely')) 'Portable backup does not emit a safe failure report.'
+    Assert-True ($portableBackupScript.Contains('$backupOutput = @(& $baseBackupScript')) 'Base backup is not invoked safely in-process.'
+    Assert-True (-not [regex]::IsMatch($portableBackupScript, 'New-PDPOneBackup\.ps1[^\r\n]*2>&1')) 'Native stderr can still be promoted to a terminating wrapper error.'
     Write-Host 'Portable recovery, approval compatibility, and redaction tests passed.' -ForegroundColor Green
 } finally { Remove-Item -LiteralPath $temporary -Recurse -Force -ErrorAction SilentlyContinue }
