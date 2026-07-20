@@ -8,4 +8,3 @@ COPY . .
 RUN mkdir -p /data/private
 EXPOSE 8000
 
-

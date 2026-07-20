@@ -62,4 +62,3 @@ class PaymentReceiptSerializer(serializers.ModelSerializer):
         if value <= 0:
             raise serializers.ValidationError("مبلغ دریافت باید بیشتر از صفر باشد.")
         return value
-

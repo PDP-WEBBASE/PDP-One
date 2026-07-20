@@ -53,4 +53,3 @@ class Migration(migrations.Migration):
             index=models.Index(fields=["status", "due_date"], name="core_receiv_status_due_idx"),
         ),
     ]
-

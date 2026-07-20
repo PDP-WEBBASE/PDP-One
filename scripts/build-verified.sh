@@ -26,4 +26,3 @@ timeout \
   "${vinext}" build
 
 "${script_dir}/validate-artifact.sh"
-

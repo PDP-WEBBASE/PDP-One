@@ -28,4 +28,3 @@ class Command(BaseCommand):
             self.stdout.write(self.style.SUCCESS("Local trial administrator created."))
         else:
             self.stdout.write("Existing administrator preserved.")
-

@@ -92,4 +92,3 @@ class AuditEvent(TimestampedModel):
     target_type = models.CharField(max_length=100)
     target_id = models.CharField(max_length=100, blank=True)
     payload = models.JSONField(default=dict)
-

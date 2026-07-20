@@ -31,4 +31,3 @@ test("renders development preview metadata", async () => {
   );
   assert.match(await response.text(), developmentPreviewMeta);
 });
-

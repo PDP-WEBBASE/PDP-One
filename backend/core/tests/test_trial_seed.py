@@ -19,4 +19,3 @@ class TrialSeedTests(TestCase):
     def test_trial_seed_is_disabled_by_default(self):
         call_command("seed_trial_data")
         self.assertFalse(Contract.objects.filter(code="TEST-1405-001").exists())
-

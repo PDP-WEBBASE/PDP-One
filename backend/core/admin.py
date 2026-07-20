@@ -6,4 +6,3 @@ admin.site.register(AnalysisReport)
 admin.site.register(AuditEvent)
 admin.site.register(Receivable)
 admin.site.register(PaymentReceipt)
-

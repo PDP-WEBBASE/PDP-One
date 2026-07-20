@@ -19,4 +19,3 @@ urlpatterns = [
     path("auth/login/", session_login),
     path("auth/logout/", session_logout),
 ]
-
