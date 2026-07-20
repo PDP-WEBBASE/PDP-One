@@ -1,255 +1,90 @@
 #requires -Version 5.1
 #requires -RunAsAdministrator
 [CmdletBinding()]
-param()
+param(
+    [string]$SourceRoot = "",
+    [string]$InstalledRoot = "",
+    [string]$ApprovedCommit = "",
+    [string]$DeploymentId = "",
+    [string]$BackupPath = "",
+    [string]$CodeArchive = "",
+    [switch]$AgentAuthorized
+)
 
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
 Set-StrictMode -Version Latest
+. (Join-Path $PSScriptRoot "PDPOne.Common.ps1")
 
-$SourceRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
+if (-not $SourceRoot) { $SourceRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path }
+if (-not $InstalledRoot) { $InstalledRoot = Get-PDPOneProjectRoot }
+$SourceRoot = (Resolve-Path -LiteralPath $SourceRoot).Path
+$InstalledRoot = (Resolve-Path -LiteralPath $InstalledRoot).Path
+if (-not (Test-Path -LiteralPath (Join-Path $SourceRoot "docker-compose.yml"))) { throw "Update source is invalid." }
+Start-PDPOneRancherDesktop -TimeoutSeconds 300
+$envPath = Assert-PDPOneConfiguration -ProjectRoot $InstalledRoot
+$tokenBefore = Get-PDPOneTokenFingerprint (Get-PDPOneEnvValue $envPath "PDP_MCP_PATH_TOKEN")
 
-function Get-FreeSystemDriveBytes {
-    $driveName = $env:SystemDrive.TrimEnd(':')
-    return (Get-PSDrive -Name $driveName).Free
+if ($AgentAuthorized) {
+    if ($ApprovedCommit -notmatch '^[0-9a-f]{40}$' -or -not $DeploymentId -or -not $BackupPath -or -not $CodeArchive) {
+        throw "Agent-authorized update is missing its locked commit, deployment, backup, or rollback snapshot."
+    }
+} else {
+    Write-Host "Emergency manual update: creating and restore-verifying a backup first." -ForegroundColor Yellow
+    $backupOutput = @(& powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "New-PDPOneBackup.ps1") -Kind manual -DeploymentId "manual-$((Get-Date).ToString('yyyyMMdd-HHmmss'))")
+    $BackupPath = [string]$backupOutput[-1]
+    & powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "Test-PDPOneBackupRestore.ps1") -BackupPath $BackupPath
+    if ($LASTEXITCODE -ne 0) { throw "Emergency update stopped because backup verification failed." }
+    $stage = Join-Path $env:TEMP ("pdp-one-code-before-update-" + [Guid]::NewGuid().ToString("N"))
+    New-Item -ItemType Directory -Force -Path $stage | Out-Null
+    & robocopy.exe $InstalledRoot $stage /E /COPY:DAT /DCOPY:DAT /R:2 /W:1 /NFL /NDL /NP /XF .env /XD .git work node_modules .next
+    if ($LASTEXITCODE -gt 7) { throw "Rollback code snapshot failed." }
+    $CodeArchive = Join-Path $BackupPath "code-before-deployment.zip"
+    Compress-Archive -Path (Join-Path $stage "*") -DestinationPath $CodeArchive -Force
+    Remove-Item -LiteralPath $stage -Recurse -Force
 }
 
-function Invoke-SafeDockerCacheCleanup([string]$Reason) {
-    Write-Host $Reason -ForegroundColor Cyan
-    Write-Host "Persistent database, Redis and private-file volumes are protected." -ForegroundColor DarkGreen
+$backupReport = Get-Content -LiteralPath (Join-Path $BackupPath "backup-report.json") -Raw | ConvertFrom-Json
+if (-not $backupReport.restore_verified) { throw "Update is blocked: the linked backup has not passed restore verification." }
 
-    $previousErrorAction = $ErrorActionPreference
-    try {
-        $ErrorActionPreference = "Continue"
-        & docker builder prune --all --force 2>&1 | Out-Host
-        & docker image prune --force 2>&1 | Out-Host
-    } finally {
-        $ErrorActionPreference = $previousErrorAction
+$migrationAttempted = $false
+$productionTouched = $false
+try {
+    Set-Location $InstalledRoot
+    & docker compose --profile tunnel stop backend worker beat mcp web nginx tailscale
+    if ($LASTEXITCODE -ne 0) { throw "Application services could not be stopped cleanly." }
+    $productionTouched = $true
+
+    & robocopy.exe $SourceRoot $InstalledRoot /E /COPY:DAT /DCOPY:DAT /R:2 /W:1 /NFL /NDL /NP /XF .env /XD .git work node_modules .next
+    if ($LASTEXITCODE -gt 7) { throw "Approved application files could not be copied." }
+    & docker compose config --quiet
+    if ($LASTEXITCODE -ne 0) { throw "Updated Docker Compose configuration is invalid." }
+
+    & docker compose build backend worker beat mcp web
+    if ($LASTEXITCODE -ne 0) { throw "Updated images could not be built." }
+    & docker compose up --detach db redis
+    if ($LASTEXITCODE -ne 0) { throw "Database dependencies could not be started." }
+    $migrationAttempted = $true
+    & docker compose run --rm backend python manage.py migrate --noinput
+    if ($LASTEXITCODE -ne 0) { throw "Controlled database migration failed." }
+
+    & docker compose --profile tunnel up --detach --no-build
+    if ($LASTEXITCODE -ne 0) { throw "Updated services failed to start." }
+    if (-not (Wait-PDPOneUrl "http://127.0.0.1:8080/healthz" 180)) { throw "Updated local health timed out." }
+    $tokenAfter = Get-PDPOneTokenFingerprint (Get-PDPOneEnvValue $envPath "PDP_MCP_PATH_TOKEN")
+    if ($tokenBefore -ne $tokenAfter) { throw "Update changed the MCP path token without authorization." }
+    & powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "Test-PDPOne.ps1") -SkipChatGPTToolCheck
+    if ($LASTEXITCODE -ne 0) { throw "Layered post-update health failed." }
+    Write-Host "PDP One updated to the locked release and passed health checks. Tokens and volumes were preserved." -ForegroundColor Green
+} catch {
+    $failure = $_.Exception.Message
+    if ($productionTouched) {
+        Write-Host "Update failed. Starting automatic rollback ..." -ForegroundColor Red
+        & powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "Rollback-PDPOne.ps1") -BackupPath $BackupPath -CodeArchive $CodeArchive -Automatic -RestoreDatabase:$migrationAttempted
+        $rollbackCode = $LASTEXITCODE
+        & powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "New-PDPOneDiagnostics.ps1") -FailureMessage $failure -DeploymentId $DeploymentId -BackupId $backupReport.backup_id -RollbackResult $(if ($rollbackCode -eq 0) { "healthy" } else { "failed" })
+        if ($rollbackCode -ne 0) { throw "Update failed and automatic rollback also failed: $failure" }
+        throw "Update failed; automatic rollback returned the previous version to health: $failure"
     }
+    throw
 }
-
-function Protect-LowDiskBeforeBuild {
-    $freeBytes = Get-FreeSystemDriveBytes
-    Write-Host ("Free system-drive space before build: {0:N2} GB" -f ($freeBytes / 1GB)) -ForegroundColor Cyan
-    if ($freeBytes -lt 12GB) {
-        Invoke-SafeDockerCacheCleanup -Reason "Low disk space detected. Removing unused build cache before the build ..."
-    }
-}
-
-function Test-DockerEngine {
-    cmd /c "docker info >nul 2>&1"
-    return $LASTEXITCODE -eq 0
-}
-
-function Find-InstalledProjectRoot {
-    $containerId = docker ps -a `
-        --filter "label=com.docker.compose.project=pdp-one" `
-        --filter "label=com.docker.compose.service=nginx" `
-        --format "{{.ID}}" 2>$null | Select-Object -First 1
-
-    if ([string]::IsNullOrWhiteSpace($containerId)) {
-        throw "The existing PDP One installation was not found. Run INSTALL-PDP-ONE.bat first."
-    }
-
-    $inspectOutput = docker inspect $containerId
-    if ($LASTEXITCODE -ne 0) { throw "Could not inspect the existing PDP One installation." }
-    $inspect = @($inspectOutput | ConvertFrom-Json)[0]
-    $workingDirectory = $inspect.Config.Labels.'com.docker.compose.project.working_dir'
-
-    if ([string]::IsNullOrWhiteSpace($workingDirectory) -or -not (Test-Path -LiteralPath $workingDirectory)) {
-        throw "The installed PDP One project folder could not be found."
-    }
-    return (Resolve-Path -LiteralPath $workingDirectory).Path
-}
-
-function Copy-ApplicationFiles([string]$From, [string]$To) {
-    if ($From -eq $To) { return }
-
-    Write-Host "Copying the new application version while preserving settings and data ..." -ForegroundColor Cyan
-    $arguments = @(
-        $From,
-        $To,
-        "/E",
-        "/COPY:DAT",
-        "/DCOPY:DAT",
-        "/R:2",
-        "/W:1",
-        "/NFL",
-        "/NDL",
-        "/NP",
-        "/XF", ".env", "pdp-one-diagnostics.txt",
-        "/XD", ".git", ".sites-runtime", "node_modules", ".next", "dist", "outputs", "work"
-    )
-    & robocopy @arguments | Out-Host
-    if ($LASTEXITCODE -gt 7) { throw "Application files could not be copied. Robocopy exit code: $LASTEXITCODE" }
-}
-
-function New-RandomSecret([int]$Bytes = 36) {
-    $buffer = New-Object byte[] $Bytes
-    $generator = [System.Security.Cryptography.RandomNumberGenerator]::Create()
-    try { $generator.GetBytes($buffer) } finally { $generator.Dispose() }
-    return [Convert]::ToBase64String($buffer).TrimEnd('=').Replace('+', '-').Replace('/', '_')
-}
-
-function Ensure-LocalCsrfOrigins([string]$Path) {
-    $content = [IO.File]::ReadAllText($Path)
-    $name = "DJANGO_CSRF_TRUSTED_ORIGINS"
-    $pattern = "(?m)^$([regex]::Escape($name))=(.*)$"
-    $match = [regex]::Match($content, $pattern)
-    $origins = @()
-    if ($match.Success) {
-        $origins = @($match.Groups[1].Value.Split(',') | ForEach-Object { $_.Trim() } | Where-Object { $_ })
-    }
-
-    foreach ($requiredOrigin in @("http://localhost:8080", "http://127.0.0.1:8080", "https://*.ts.net")) {
-        if ($origins -notcontains $requiredOrigin) {
-            $origins += $requiredOrigin
-        }
-    }
-
-    $newLine = "$name=$($origins -join ',')"
-    if ($match.Success) {
-        $content = [regex]::Replace($content, $pattern, $newLine)
-    } else {
-        $content = $content.TrimEnd() + "`r`n$newLine`r`n"
-    }
-    [IO.File]::WriteAllText($Path, $content, [Text.UTF8Encoding]::new($false))
-}
-
-function Ensure-TrialConnectionSettings([string]$Path) {
-    $content = [IO.File]::ReadAllText($Path)
-    if ($content -notmatch '(?m)^PDP_MCP_PATH_TOKEN=') {
-        $content = $content.TrimEnd() + "`r`nPDP_MCP_PATH_TOKEN=$(New-RandomSecret 32)`r`n"
-    }
-    if ($content -notmatch '(?m)^PDP_TRIAL_MODE=') {
-        $content = $content.TrimEnd() + "`r`nPDP_TRIAL_MODE=true`r`n"
-    }
-    if ($content -notmatch '(?m)^PDP_TRIAL_ADMIN_USERNAME=') {
-        $content = $content.TrimEnd() + "`r`nPDP_TRIAL_ADMIN_USERNAME=pdp-admin`r`n"
-    }
-    if ($content -notmatch '(?m)^PDP_TRIAL_ADMIN_PASSWORD=') {
-        $content = $content.TrimEnd() + "`r`nPDP_TRIAL_ADMIN_PASSWORD=$(New-RandomSecret 24)`r`n"
-    }
-    [IO.File]::WriteAllText($Path, $content, [Text.UTF8Encoding]::new($false))
-}
-
-Write-Host "PDP One automatic updater" -ForegroundColor Green
-if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
-    throw "Docker is unavailable. Start Rancher Desktop and try again."
-}
-if (-not (Test-DockerEngine)) {
-    Write-Host "The container engine is not ready. Starting Rancher Desktop automatically ..." -ForegroundColor Yellow
-    $rdctl = Get-Command rdctl.exe -ErrorAction SilentlyContinue
-    if ($rdctl) {
-        $previousErrorAction = $ErrorActionPreference
-        try {
-            $ErrorActionPreference = "Continue"
-            & $rdctl.Source start --application.start-in-background 2>&1 | Out-Host
-        } finally {
-            $ErrorActionPreference = $previousErrorAction
-        }
-    }
-    if (-not (Get-Process -Name "Rancher Desktop" -ErrorAction SilentlyContinue)) {
-        $desktopExe = "C:\Program Files\Rancher Desktop\Rancher Desktop.exe"
-        if (Test-Path -LiteralPath $desktopExe) {
-            Start-Process -FilePath $desktopExe -ArgumentList @(
-                "--containerEngine.name", "moby",
-                "--kubernetes.enabled=false"
-            )
-        }
-    }
-    foreach ($attempt in 1..15) {
-        if (Test-DockerEngine) { break }
-        if (($attempt % 5) -eq 0) {
-            Write-Host "Initial Moby startup wait ... $($attempt * 3) seconds" -ForegroundColor DarkYellow
-        }
-        Start-Sleep -Seconds 3
-    }
-    if (-not (Test-DockerEngine)) {
-        Write-Host "The Rancher backend is stale. Restarting Rancher Desktop and WSL automatically ..." -ForegroundColor Yellow
-        if ($rdctl) {
-            $previousErrorAction = $ErrorActionPreference
-            try {
-                $ErrorActionPreference = "Continue"
-                & $rdctl.Source shutdown 2>&1 | Out-Host
-            } finally {
-                $ErrorActionPreference = $previousErrorAction
-            }
-            Start-Sleep -Seconds 8
-        }
-        Get-Process -Name "Rancher Desktop" -ErrorAction SilentlyContinue |
-            Stop-Process -Force -ErrorAction SilentlyContinue
-        & wsl.exe --shutdown | Out-Host
-        Start-Sleep -Seconds 5
-
-        $desktopExe = "C:\Program Files\Rancher Desktop\Rancher Desktop.exe"
-        if (Test-Path -LiteralPath $desktopExe) {
-            Start-Process -FilePath $desktopExe -ArgumentList @(
-                "--containerEngine.name", "moby",
-                "--kubernetes.enabled=false"
-            )
-        }
-        foreach ($attempt in 1..100) {
-            if (Test-DockerEngine) { break }
-            if (($attempt % 5) -eq 0) {
-                Write-Host "Waiting after automatic restart ... $($attempt * 3) seconds" -ForegroundColor DarkYellow
-            }
-            Start-Sleep -Seconds 3
-        }
-    }
-    if (-not (Test-DockerEngine)) {
-        throw "Rancher Desktop could not start after an automatic restart. Run CLEAN-PDP-ONE-DISK.bat to reclaim WSL disk space."
-    }
-}
-
-$InstalledRoot = Find-InstalledProjectRoot
-if (-not (Test-Path -LiteralPath (Join-Path $InstalledRoot ".env"))) {
-    throw "The existing secure .env configuration was not found. The update stopped without changing the installation."
-}
-
-Copy-ApplicationFiles -From $SourceRoot -To $InstalledRoot
-Set-Location $InstalledRoot
-Ensure-TrialConnectionSettings -Path (Join-Path $InstalledRoot ".env")
-Ensure-LocalCsrfOrigins -Path (Join-Path $InstalledRoot ".env")
-
-docker compose config --quiet
-if ($LASTEXITCODE -ne 0) { throw "Docker Compose configuration is invalid. The existing data was not deleted." }
-
-Protect-LowDiskBeforeBuild
-Write-Host "Building and starting the updated PDP One services ..." -ForegroundColor Cyan
-docker compose up --build --detach
-if ($LASTEXITCODE -ne 0) { throw "PDP One services failed to start after the update." }
-Invoke-SafeDockerCacheCleanup -Reason "Updated images are ready. Removing build cache that is no longer needed at runtime ..."
-
-$ready = $false
-foreach ($attempt in 1..60) {
-    try {
-        $response = Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:8080" -TimeoutSec 8
-        if ($response.StatusCode -ge 200 -and $response.StatusCode -lt 500) {
-            $ready = $true
-            break
-        }
-    } catch {
-        Start-Sleep -Seconds 2
-    }
-}
-
-if (-not $ready) {
-    docker compose logs --tail 80 nginx backend web
-    throw "The updated application did not become ready in time. Review the log above."
-}
-
-$cleanupScript = Join-Path $InstalledRoot "scripts\windows\Clean-PDPOneDisk.ps1"
-if (Test-Path -LiteralPath $cleanupScript) {
-    try {
-        & powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File $cleanupScript -InstalledRoot $InstalledRoot -CurrentSourceRoot $SourceRoot
-    } catch {
-        Write-Host "Automatic disk cleanup could not complete, but the PDP One update succeeded." -ForegroundColor Yellow
-    }
-}
-
-Write-Host "" 
-Write-Host "PDP One was updated successfully: http://localhost:8080" -ForegroundColor Green
-Write-Host "Your existing secure settings and Docker data volumes were preserved." -ForegroundColor DarkGreen
-Write-Host "Opening the automatic ChatGPT connection now. No OpenAI API key is used." -ForegroundColor Cyan
-Start-Process -FilePath (Join-Path $InstalledRoot "CONNECT-CHATGPT.bat") -WorkingDirectory $InstalledRoot

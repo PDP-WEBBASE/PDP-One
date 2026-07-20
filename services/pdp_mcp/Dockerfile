@@ -3,7 +3,7 @@ FROM ${PDP_DOCKER_REGISTRY}/python:3.13-slim
 WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
-COPY server.py .
+COPY server.py deployment_queue.py .
 EXPOSE 8010
 CMD ["python", "server.py"]
 

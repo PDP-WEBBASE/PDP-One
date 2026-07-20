@@ -1,68 +1,54 @@
 # PDP One
 
-نسخه پایه سامانه یکپارچه مدیریت پروژه، قرارداد، مناقصات و تحلیل‌های مدیریتی.
+سامانه یکپارچه مدیریت پروژه، قرارداد، مناقصه، مطالبات و تحلیل مدیریتی با رابط فارسی RTL، Django/PostgreSQL، Celery/Redis و اتصال محدود MCP به ChatGPT.
 
-## Current milestone
+## اجرای پایدار Windows
 
-- Persian RTL responsive dashboard and PWA manifest
-- Contract, finance and receivables, project, tender, and analysis demonstration flows
-- PostgreSQL-backed contract, receivable, payment-receipt and analysis drafts with audit events
-- Authenticated finance API and browser session login
-- Django REST API foundation with PostgreSQL models
-- Redis/Celery background processing foundation
-- Tool-only MCP service for ChatGPT reads and draft writes
-- Docker Compose deployment for WSL2 and future server migration
+پس از نصب اولیه، عملیات روزمره از هم تفکیک شده‌اند:
 
-## Windows trial — automated
+- `START-PDP-ONE.bat`: فقط Rancher، سرویس‌های موجود، Tailscale Funnel و Health Check را اجرا می‌کند. این مسیر Build، Pull، Migration یا Rotation ندارد.
+- `STOP-PDP-ONE.bat`: سرویس‌ها را بدون حذف Volume، هویت Tailscale یا تنظیمات متوقف می‌کند.
+- `CONNECT-CHATGPT.bat`: اتصال یک‌باره App را آماده می‌کند و توکن موجود را حفظ می‌کند.
+- `ROTATE-PDP-ONE-MCP-TOKEN.bat`: مسیر مستقل و تأییدشده برای Rotation؛ تنها عملیاتی است که نیازمند ویرایش دوباره URL در App است.
+- `UPDATE-PDP-ONE.bat`: مسیر اضطراری دستی است. مسیر عادی Deploy پس از Preview و تأیید، توسط عامل محلی انجام می‌شود.
 
-فایل `INSTALL-PDP-ONE.bat` را با دسترسی Administrator اجرا کنید. نصب‌کننده، موتور کانتینر سازگار با Docker، Cloudflared و پیش‌نیازهای Windows/WSL2 را بررسی می‌کند، رمزهای تصادفی می‌سازد، داده آزمایشی مشخص ایجاد می‌کند و سرویس‌ها را بالا می‌آورد.
+نصب اولیه:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\windows\Install-PDPOne.ps1
 ```
 
-پس از نصب:
+بازیابی پس از نصب مجدد کامل Windows:
 
-```powershell
-# لینک موقت اینترنتی و اتصال خودکار تا مرحله تأیید ChatGPT
-.\CONNECT-CHATGPT.bat
+1. روی سیستم سالم، `CREATE-PDP-ONE-PORTABLE-BACKUP.bat` را اجرا و فایل رمز‌شده `.pdpone` را خارج از درایو Windows نگه‌داری کنید.
+2. روی Windows جدید، Source همین Release و فایل `.pdpone` را در دسترس قرار دهید.
+3. `RESTORE-PDP-ONE.bat` را اجرا کنید. اگر فعال‌سازی WSL نیازمند Restart بود، پس از ورود مجدد همان BAT را دوباره اجرا کنید.
 
-# کنترل سلامت
-powershell -ExecutionPolicy Bypass -File .\scripts\windows\Test-PDPOne.ps1
+Passphrase در GitHub، گزارش یا Backup ذخیره نمی‌شود و بدون آن Restore ممکن نیست.
 
-# توقف بدون حذف داده‌ها
-powershell -ExecutionPolicy Bypass -File .\scripts\windows\Stop-PDPOne.ps1
-```
-
-برای دریافت نسخه جدید بدون حذف تنظیمات و داده‌های موجود، آخرین ZIP مخزن را دریافت و فایل زیر را با دسترسی Administrator اجرا کنید:
-
-به‌روزرسان پس از موفقیت، کش Build و ایمیج‌های بلااستفاده Docker و بسته‌های قدیمی PDP One در Downloads را پاک‌سازی می‌کند. پایگاه داده، فایل‌های خصوصی و Docker Volumeهای ماندگار حذف نمی‌شوند.
+راه‌اندازی عامل محلی یک اقدام یک‌باره است:
 
 ```text
-UPDATE-PDP-ONE.bat
+INSTALL-PDP-ONE-DEPLOYMENT-AGENT.bat
 ```
 
-برای پاک‌سازی فوری فضای نسخه‌های قبلی، فایل زیر را با دسترسی Administrator اجرا کنید. این عملیات Rancher Desktop را خودکار راه‌اندازی می‌کند، کش Docker را پاک می‌کند و برای بازگرداندن واقعی فضای درایو ویندوز، دیسک WSL را به‌صورت کنترل‌شده Compact می‌کند؛ در پایان Rancher و PDP One دوباره راه‌اندازی می‌شوند:
+عامل فقط صف محلی HMAC-signed، فرمان‌های allowlist، SHA دقیق Commit و تأیید منقضی‌شونده را می‌پذیرد. اجرای عمومی PowerShell/CMD در ابزارهای MCP وجود ندارد.
+
+## جریان تغییر و استقرار
 
 ```text
-CLEAN-PDP-ONE-DISK.bat
+Branch → Tests/Security → Preview → توقف برای تأیید صریح
+→ Backup نهایی و Restore آزمایشی → Deploy Commit قفل‌شده
+→ Health چندلایه → گزارش یا Rollback خودکار
 ```
 
-## Manual local trial
+نمایش Preview هرگز مجوز Deploy نیست. `.env`، داده PostgreSQL، فایل‌های خصوصی، Redis و هویت Tailscale در Git ذخیره نمی‌شوند و Volumeها در Startup/Update حذف نمی‌شوند.
 
-1. Copy `.env.example` to `.env` and replace all placeholder secrets.
-2. Run `docker compose up --build -d` inside WSL2.
-3. Open `http://localhost:8080`.
-4. Create the first administrator with `docker compose exec backend python manage.py createsuperuser`.
+## اسناد عملیاتی
 
-Do not use the temporary trial link as a permanent production deployment. The random URL path and ephemeral HTTPS tunnel are suitable for the controlled trial only.
-
-## ChatGPT connection
-
-Double-click `CONNECT-CHATGPT.bat`. It starts or updates the services, verifies health, launches the official Tailscale container through the configured registry cache, creates a free temporary HTTPS Funnel, copies the tokenized MCP URL to the clipboard, opens the ChatGPT app settings and writes the exact connection fields to `PDP-ONE-CHATGPT-CONNECTION.txt`. On the first run only, complete the Tailscale account and Funnel approval pages opened by the script; the device identity is then preserved in a local Docker volume.
-
-This integration does not use the OpenAI API; ChatGPT invokes the MCP tools from the user's ChatGPT workspace.
-
-The connector can check system health, search contracts and receivables, return persisted management/finance summaries, and create contract, receivable, receipt and analysis drafts. Approval, deletion and financial finalization remain human-only actions.
-
-No OpenAI API key is used. The unavoidable final action is confirming the custom app inside the authenticated ChatGPT Business workspace. See [docs/chatgpt-connection.md](docs/chatgpt-connection.md).
+- [معماری](docs/architecture.md)
+- [اتصال پایدار ChatGPT](docs/chatgpt-connection.md)
+- [راهنمای Deploy و عامل محلی](docs/backlog-001-deployment.md)
+- [راهنمای بازیابی و Rollback](docs/recovery.md)
+- [وضعیت BACKLOG-001](docs/backlog-001-status.md)
+- [Backup قابل‌انتقال و بازیابی کامل Windows](docs/bare-metal-recovery.md)

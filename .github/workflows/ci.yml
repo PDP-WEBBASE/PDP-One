@@ -13,6 +13,34 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Reject secrets and destructive volume operations
+        shell: bash
+        run: |
+          if rg -n '(ghp_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|sk-[A-Za-z0-9_-]{20,}|tskey-[A-Za-z0-9_-]{20,})' --glob '!package-lock.json' .; then
+            echo 'A value resembling a secret was found.' >&2
+            exit 1
+          fi
+          if rg -n '(docker\s+compose\s+down\s+-v|docker\s+volume\s+rm|docker\s+system\s+prune.*--volumes)' scripts/windows *.bat docker-compose.yml; then
+            echo 'A forbidden destructive volume operation was found.' >&2
+            exit 1
+          fi
+      - name: Parse Windows PowerShell scripts
+        shell: pwsh
+        run: |
+          $failed = $false
+          Get-ChildItem scripts/windows -Filter *.ps1 -Recurse | ForEach-Object {
+            $tokens = $null
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile($_.FullName, [ref]$tokens, [ref]$errors) | Out-Null
+            if ($errors.Count -gt 0) {
+              $failed = $true
+              $errors | ForEach-Object { Write-Error "$($_.Extent.File):$($_.Extent.StartLineNumber): $($_.Message)" }
+            }
+          }
+          if ($failed) { exit 1 }
+      - name: Test portable recovery and Windows compatibility helpers
+        shell: pwsh
+        run: pwsh -NoLogo -NoProfile -File scripts/windows/tests/Test-PortableRecovery.ps1
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -32,6 +60,10 @@ jobs:
         run: |
           python -m compileall -q backend services/pdp_mcp
           python backend/manage.py makemigrations --check --dry-run
+      - name: Test signed deployment queue
+        env:
+          PYTHONPATH: services/pdp_mcp
+        run: python -m unittest services.pdp_mcp.test_deployment_queue -v
       - name: Run backend tests
         env:
           DJANGO_SETTINGS_MODULE: config.settings_test

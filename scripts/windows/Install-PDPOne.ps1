@@ -3,7 +3,8 @@
 [CmdletBinding()]
 param(
     [switch]$SkipPackageInstall,
-    [switch]$SkipAdministrator
+    [switch]$SkipAdministrator,
+    [switch]$SkipPostInstallConnection
 )
 
 $ErrorActionPreference = "Stop"
@@ -411,6 +412,7 @@ if (-not (Test-Path $EnvPath)) {
     $djangoSecret = New-RandomSecret 48
     $mcpToken = New-RandomSecret 48
     $mcpPathToken = New-RandomSecret 32
+    $deploymentAgentSigningKey = New-RandomSecret 48
     $trialAdminPassword = New-RandomSecret 24
     $envTemplatePath = Join-Path $ProjectRoot ".env.example"
     if (Test-Path -LiteralPath $envTemplatePath) {
@@ -443,6 +445,7 @@ PDP_TRIAL_ADMIN_PASSWORD=replace-with-a-random-password
     $envContent = $envContent.Replace("DJANGO_SECRET_KEY=change-this-in-production", "DJANGO_SECRET_KEY=$djangoSecret")
     $envContent = $envContent.Replace("PDP_MCP_TOKEN=replace-with-a-long-random-token", "PDP_MCP_TOKEN=$mcpToken")
     $envContent = $envContent.Replace("PDP_MCP_PATH_TOKEN=replace-with-a-random-path-token", "PDP_MCP_PATH_TOKEN=$mcpPathToken")
+    $envContent = $envContent.Replace("PDP_DEPLOYMENT_AGENT_SIGNING_KEY=replace-with-a-long-local-random-key", "PDP_DEPLOYMENT_AGENT_SIGNING_KEY=$deploymentAgentSigningKey")
     $envContent = $envContent.Replace("PDP_TRIAL_ADMIN_PASSWORD=replace-with-a-random-password", "PDP_TRIAL_ADMIN_PASSWORD=$trialAdminPassword")
     $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
     [IO.File]::WriteAllText($EnvPath, $envContent, $utf8NoBom)
@@ -462,10 +465,33 @@ PDP_TRIAL_ADMIN_PASSWORD=replace-with-a-random-password
     if ($envContent -notmatch '(?m)^PDP_TRIAL_ADMIN_PASSWORD=') {
         $envContent = $envContent.TrimEnd() + "`r`nPDP_TRIAL_ADMIN_PASSWORD=$(New-RandomSecret 24)`r`n"
     }
+    if ($envContent -notmatch '(?m)^PDP_DEPLOYMENT_AGENT_ROOT=') {
+        $envContent = $envContent.TrimEnd() + "`r`nPDP_DEPLOYMENT_AGENT_ROOT=C:/ProgramData/PDP-One/deployment-agent`r`n"
+    }
+    if ($envContent -notmatch '(?m)^PDP_DEPLOYMENT_AGENT_SIGNING_KEY=') {
+        $envContent = $envContent.TrimEnd() + "`r`nPDP_DEPLOYMENT_AGENT_SIGNING_KEY=$(New-RandomSecret 48)`r`n"
+    }
     [IO.File]::WriteAllText($EnvPath, $envContent, [Text.UTF8Encoding]::new($false))
 }
 
+$envContent = [IO.File]::ReadAllText($EnvPath)
+if ($envContent -notmatch '(?m)^PDP_DEPLOYMENT_AGENT_ROOT=') {
+    $envContent = $envContent.TrimEnd() + "`r`nPDP_DEPLOYMENT_AGENT_ROOT=C:/ProgramData/PDP-One/deployment-agent`r`n"
+}
+if ($envContent -notmatch '(?m)^PDP_DEPLOYMENT_AGENT_SIGNING_KEY=' -or $envContent -match '(?m)^PDP_DEPLOYMENT_AGENT_SIGNING_KEY=replace-with-') {
+    if ($envContent -match '(?m)^PDP_DEPLOYMENT_AGENT_SIGNING_KEY=') {
+        $envContent = [regex]::Replace($envContent, '(?m)^PDP_DEPLOYMENT_AGENT_SIGNING_KEY=.*$', "PDP_DEPLOYMENT_AGENT_SIGNING_KEY=$(New-RandomSecret 48)")
+    } else {
+        $envContent = $envContent.TrimEnd() + "`r`nPDP_DEPLOYMENT_AGENT_SIGNING_KEY=$(New-RandomSecret 48)`r`n"
+    }
+}
+[IO.File]::WriteAllText($EnvPath, $envContent, [Text.UTF8Encoding]::new($false))
+
 Ensure-LocalCsrfOrigins -Path $EnvPath
+$agentQueueRoot = "C:\ProgramData\PDP-One\deployment-agent\queue"
+foreach ($queueName in @("incoming", "processing", "responses", "rejected")) {
+    New-Item -ItemType Directory -Force -Path (Join-Path $agentQueueRoot $queueName) | Out-Null
+}
 
 $postgresImage = "$containerRegistry/postgres:17-alpine"
 $postgresVolumeName = Find-PdpPostgresVolume
@@ -481,7 +507,17 @@ if ($LASTEXITCODE -ne 0) { throw "Docker Compose configuration is invalid." }
 
 Protect-LowDiskBeforeBuild
 Write-Host "Downloading and building services. The first run may take several minutes ..." -ForegroundColor Cyan
-docker compose up --build --detach
+docker compose build backend worker beat mcp web
+if ($LASTEXITCODE -ne 0) { throw "PDP One images failed to build." }
+docker compose up --detach db redis
+if ($LASTEXITCODE -ne 0) { throw "PDP One data services failed to start." }
+docker compose run --rm backend python manage.py migrate --noinput
+if ($LASTEXITCODE -ne 0) { throw "PDP One controlled initial migration failed." }
+docker compose run --rm backend python manage.py ensure_trial_admin
+if ($LASTEXITCODE -ne 0) { throw "PDP One initial administrator setup failed." }
+docker compose run --rm backend python manage.py seed_trial_data
+if ($LASTEXITCODE -ne 0) { throw "PDP One initial trial-data setup failed." }
+docker compose up --detach --no-build
 if ($LASTEXITCODE -ne 0) { throw "PDP One services failed to start." }
 Invoke-SafeDockerCacheCleanup -Reason "Build completed. Removing build cache that is no longer needed at runtime ..."
 
@@ -536,6 +572,8 @@ New-Item -ItemType Directory -Path $stateDirectory -Force | Out-Null
 
 Write-Host ""
 Write-Host "PDP One is ready: http://localhost:8080" -ForegroundColor Green
-Write-Host "Opening the automatic ChatGPT connection now. No OpenAI API key is used." -ForegroundColor Cyan
 Start-Process notepad.exe -ArgumentList $loginPath
-Start-Process -FilePath (Join-Path $ProjectRoot "CONNECT-CHATGPT.bat") -WorkingDirectory $ProjectRoot
+if (-not $SkipPostInstallConnection) {
+    Write-Host "Opening the automatic ChatGPT connection now. No OpenAI API key is used." -ForegroundColor Cyan
+    Start-Process -FilePath (Join-Path $ProjectRoot "CONNECT-CHATGPT.bat") -WorkingDirectory $ProjectRoot
+}
