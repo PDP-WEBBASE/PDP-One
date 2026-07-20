@@ -127,3 +127,4 @@ class SessionApiTests(APITestCase):
         )
         self.assertEqual(login_response.status_code, 200, login_response.data)
         self.assertTrue(login_response.data["authenticated"])
+

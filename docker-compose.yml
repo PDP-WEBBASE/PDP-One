@@ -30,7 +30,9 @@ services:
         PDP_DOCKER_REGISTRY: ${PDP_DOCKER_REGISTRY:-docker.arvancloud.ir/library}
     restart: unless-stopped
     env_file: .env
-    command: sh -c "python manage.py migrate && python manage.py ensure_trial_admin && python manage.py seed_trial_data && gunicorn config.wsgi:application --bind 0.0.0.0:8000 --workers 3"
+    # Startup must never run uncontrolled migrations. The guarded updater runs
+    # `manage.py migrate --noinput` only after a verified final backup.
+    command: gunicorn config.wsgi:application --bind 0.0.0.0:8000 --workers 3
     volumes:
       - private_files:/data/private
     depends_on:
@@ -70,6 +72,10 @@ services:
     env_file: .env
     environment:
       PDP_API_URL: http://backend:8000/api/v1
+      PDP_DEPLOYMENT_QUEUE: /deployment-agent/queue
+    volumes:
+      - "${PDP_DEPLOYMENT_AGENT_ROOT:-C:/ProgramData/PDP-One/deployment-agent}/queue/incoming:/deployment-agent/queue/incoming"
+      - "${PDP_DEPLOYMENT_AGENT_ROOT:-C:/ProgramData/PDP-One/deployment-agent}/queue/responses:/deployment-agent/queue/responses:ro"
     depends_on: [backend]
 
   web:

@@ -1,5 +1,7 @@
 @echo off
-chcp 65001 >nul
-cd /d "%~dp0"
-powershell -NoProfile -ExecutionPolicy Bypass -File ".\scripts\windows\Stop-PDPOne.ps1"
-pause
+setlocal
+title PDP One Safe Stop
+powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\windows\Stop-PDPOne.ps1"
+set "PDP_ONE_EXIT=%errorlevel%"
+if not "%PDP_ONE_EXIT%"=="0" pause
+exit /b %PDP_ONE_EXIT%

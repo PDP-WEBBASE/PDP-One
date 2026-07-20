@@ -31,3 +31,4 @@ class TrialAdminCommandTests(TestCase):
     def test_refuses_placeholder_password(self):
         call_command("ensure_trial_admin")
         self.assertFalse(get_user_model().objects.filter(username="unsafe-admin").exists())
+

@@ -5,3 +5,4 @@ export default defineConfig({
   schema: "./db/schema.ts",
   dialect: "sqlite",
 });
+

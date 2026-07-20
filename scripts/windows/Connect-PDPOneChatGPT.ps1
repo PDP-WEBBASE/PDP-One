@@ -161,7 +161,7 @@ function Get-TailscaleContainerStatus {
     try { return ($statusText | ConvertFrom-Json) } catch { return $null }
 }
 
-Write-Host "PDP One - automatic ChatGPT connection 2026.07.19.18" -ForegroundColor Green
+Write-Host "PDP One - stable ChatGPT connection 2026.07.20.19" -ForegroundColor Green
 if (-not (Get-Command docker -ErrorAction SilentlyContinue)) { throw "Docker command is unavailable." }
 if (-not (Test-DockerEngine)) { throw "Open Rancher Desktop and wait until the Moby engine is ready." }
 
@@ -170,11 +170,18 @@ Set-Location $ProjectRoot
 $EnvPath = Join-Path $ProjectRoot ".env"
 if (-not (Test-Path -LiteralPath $EnvPath)) { throw "The secure .env file is missing." }
 
-# Each temporary connection receives a fresh private MCP path. This revokes
-# URLs from previous runs and prevents an accidentally shared screenshot or
-# instruction file from remaining usable.
-$mcpPathToken = New-RandomSecret 32
-Set-EnvValue -Path $EnvPath -Name "PDP_MCP_PATH_TOKEN" -Value $mcpPathToken
+# BACKLOG-001: the private capability path is installation identity. It is
+# generated once when missing, then preserved across connector runs, startup,
+# recovery and updates. Rotation is deliberately isolated in the dedicated
+# Rotate-PDPOneMcpToken.ps1 workflow.
+$mcpPathToken = Get-EnvValue -Path $EnvPath -Name "PDP_MCP_PATH_TOKEN"
+if ([string]::IsNullOrWhiteSpace($mcpPathToken) -or $mcpPathToken -match '^(replace-with-|trial-path-not-configured)') {
+    $mcpPathToken = New-RandomSecret 32
+    Set-EnvValue -Path $EnvPath -Name "PDP_MCP_PATH_TOKEN" -Value $mcpPathToken
+    Write-Host "A private MCP path was created for this installation." -ForegroundColor Cyan
+} else {
+    Write-Host "The existing private MCP path was preserved." -ForegroundColor DarkGreen
+}
 Set-EnvValue -Path $EnvPath -Name "PDP_TRIAL_MODE" -Value "true"
 
 $allowedHosts = Get-EnvValue -Path $EnvPath -Name "DJANGO_ALLOWED_HOSTS"
@@ -263,7 +270,7 @@ foreach ($imageCandidate in $imageCandidates) {
             # Windows PowerShell 5.1 wraps normal native stderr progress (for
             # example Docker "Pulling") as NativeCommandError when redirected.
             $ErrorActionPreference = "Continue"
-            $attemptLines = @(& docker compose --profile tunnel up --detach --force-recreate tailscale 2>&1)
+            $attemptLines = @(& docker compose --profile tunnel up --detach tailscale 2>&1)
             $tailscaleStartExitCode = $LASTEXITCODE
         } finally {
             $ErrorActionPreference = $previousErrorAction
@@ -490,7 +497,15 @@ if (-not $publicBase -or (-not $tailscaleContainerActive -and ($null -eq $tunnel
 }
 
 $mcpEndpoint = "$($publicBase.TrimEnd('/'))/mcp/$mcpPathToken"
+if ($tailscaleContainerActive) {
+    Set-EnvValue -Path $EnvPath -Name "PDP_PUBLIC_BASE_URL" -Value ($publicBase.TrimEnd('/'))
+}
 $instructionPath = Join-Path $ProjectRoot "PDP-ONE-CHATGPT-CONNECTION.txt"
+$lifetimeInstruction = $(if ($tailscaleContainerActive) {
+    "The Tailscale Funnel and private MCP path remain stable across ordinary restarts."
+} else {
+    "This fallback URL works only while this window remains open."
+})
 $instructions = @"
 PDP One - ChatGPT connection
 ================================
@@ -508,8 +523,8 @@ ChatGPT Business setup (one-time manual confirmation):
 4. Enter the name, description and MCP URL shown above.
 5. Choose No Authentication, scan the tools, and confirm Create/Save.
 
-The URL works only while this window and Rancher Desktop remain open.
-Closing this window revokes the temporary internet connection.
+$lifetimeInstruction
+Only the dedicated token-rotation workflow invalidates the private MCP path.
 No OpenAI API key is used by PDP One.
 "@
 [IO.File]::WriteAllText($instructionPath, $instructions, [Text.UTF8Encoding]::new($false))
@@ -521,21 +536,20 @@ Write-Host "The private MCP URL was copied to the clipboard and saved in the ins
 Write-Host "For security, the private URL is not displayed in this window." -ForegroundColor Yellow
 Write-Host "" 
 Write-Host "ChatGPT setup instructions were opened in Notepad." -ForegroundColor Green
-Write-Host "Keep this window open. Press Ctrl+C to revoke the link." -ForegroundColor Yellow
+if ($tailscaleContainerActive) {
+    Write-Host "The stable Tailscale Funnel will remain configured after this window closes." -ForegroundColor Yellow
+} else {
+    Write-Host "Keep this window open while the fallback tunnel is in use." -ForegroundColor Yellow
+}
 Start-Process notepad.exe -ArgumentList $instructionPath
 Start-Process "https://chatgpt.com/plugins"
 
-try {
-    if ($tailscaleContainerActive) {
-        Read-Host "Press Enter to revoke the temporary Tailscale Funnel"
-    } else {
+if (-not $tailscaleContainerActive) {
+    try {
         Wait-Process -Id $tunnelProcess.Id
-    }
-} finally {
-    if ($tailscaleContainerActive) {
-        & docker compose --profile tunnel exec -T tailscale tailscale --socket=/tmp/tailscaled.sock funnel reset *> $null
-    }
-    if ($null -ne $tunnelProcess -and -not $tunnelProcess.HasExited) {
-        Stop-Process -Id $tunnelProcess.Id -Force -ErrorAction SilentlyContinue
+    } finally {
+        if ($null -ne $tunnelProcess -and -not $tunnelProcess.HasExited) {
+            Stop-Process -Id $tunnelProcess.Id -Force -ErrorAction SilentlyContinue
+        }
     }
 }

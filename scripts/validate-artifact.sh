@@ -35,3 +35,4 @@ if (!worker.default || typeof worker.default.fetch !== "function") {
 NODE
 
 echo "Validated Sites artifact: ESM Worker default.fetch and hosting manifest are present."
+

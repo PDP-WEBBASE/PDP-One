@@ -3,6 +3,7 @@ from typing import Any
 import httpx
 from mcp.server.fastmcp import FastMCP
 from mcp.types import ToolAnnotations
+from deployment_queue import enqueue, get_queue_status, get_response, validate_commit, validate_identifier
 
 API_URL = os.getenv("PDP_API_URL", "http://localhost:8000/api/v1").rstrip("/")
 TOKEN = os.getenv("PDP_MCP_TOKEN", "")
@@ -123,6 +124,108 @@ async def create_payment_receipt_draft(receivable_id: str, amount_rials: int, re
 async def save_analysis_draft(title: str, summary: str, source_record_ids: list[str]) -> dict:
     payload = {"title": title, "summary": summary, "source_record_ids": source_record_ids, "model_label": "ChatGPT", "review_status": "ai_draft"}
     return {"report": await api("POST", "analysis-reports/", json=payload), "requires_human_review": True}
+
+
+@mcp.tool(
+    description="Return the local deployment agent and signed-queue status. This never changes the installation.",
+    annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, openWorldHint=False, idempotentHint=True),
+)
+async def get_deployment_status() -> dict:
+    return get_queue_status()
+
+
+@mcp.tool(
+    description="Return the mandatory guarded workflow for a proposed web change. Source changes still occur only on a separate GitHub branch.",
+    annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, openWorldHint=False, idempotentHint=True),
+)
+async def prepare_web_change(summary: str) -> dict:
+    return {
+        "summary": summary,
+        "workflow": ["branch", "tests", "security review", "preview", "explicit approval", "final verified backup", "deploy", "health", "rollback on failure"],
+        "production_changed": False,
+        "requires_github_branch": True,
+    }
+
+
+@mcp.tool(
+    description="Return the Preview gate requirements. It does not deploy or modify the Windows installation.",
+    annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, openWorldHint=False, idempotentHint=True),
+)
+async def create_preview(commit_sha: str) -> dict:
+    commit = validate_commit(commit_sha)
+    return {"commit_sha": commit, "production_changed": False, "gate": "stop-for-explicit-user-approval", "preview_created_by": "GitHub/Sites workflow"}
+
+
+@mcp.tool(
+    description="Record explicit user approval for one exact previewed commit. This does not deploy; approval expires after 24 hours.",
+    annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, openWorldHint=False, idempotentHint=False),
+)
+async def request_deployment_approval(commit_sha: str, preview_id: str, approval_text: str) -> dict:
+    commit = validate_commit(commit_sha)
+    if approval_text.strip() not in {"تأیید است، Deploy کن", "تایید است، Deploy کن", "APPROVE DEPLOY"}:
+        raise ValueError("The exact explicit deployment approval phrase was not supplied.")
+    return enqueue("approve_release", {"commit_sha": commit, "preview_id": validate_identifier(preview_id, "preview_id"), "approval_text": approval_text.strip()})
+
+
+@mcp.tool(
+    description="Ask the local agent to create and isolate-restore-verify a final backup tied to an approved commit. No deployment occurs.",
+    annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, openWorldHint=False, idempotentHint=False),
+)
+async def create_final_backup(commit_sha: str, deployment_id: str) -> dict:
+    return enqueue("create_final_backup", {"commit_sha": validate_commit(commit_sha), "deployment_id": validate_identifier(deployment_id, "deployment_id")})
+
+
+@mcp.tool(
+    description="Ask the local agent to re-run integrity and isolated restore verification for a named backup.",
+    annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, openWorldHint=False, idempotentHint=False),
+)
+async def verify_backup_restore(backup_id: str) -> dict:
+    return enqueue("verify_backup_restore", {"backup_id": backup_id})
+
+
+@mcp.tool(
+    description="Deploy only an exact, previously previewed and explicitly approved commit. The agent enforces a fresh verified final backup, health checks, locking, audit, and automatic rollback.",
+    annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True, openWorldHint=False, idempotentHint=False),
+)
+async def deploy_approved_release(commit_sha: str, deployment_id: str, preview_id: str) -> dict:
+    return enqueue("deploy_approved_release", {"commit_sha": validate_commit(commit_sha), "deployment_id": validate_identifier(deployment_id, "deployment_id"), "preview_id": validate_identifier(preview_id, "preview_id")})
+
+
+@mcp.tool(
+    description="Ask the local agent to run the layered post-deployment health check.",
+    annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, openWorldHint=False, idempotentHint=False),
+)
+async def check_deployment_health(deployment_id: str = "") -> dict:
+    normalized = validate_identifier(deployment_id, "deployment_id") if deployment_id else "current"
+    return enqueue("check_deployment_health", {"deployment_id": normalized})
+
+
+@mcp.tool(
+    description="Roll back the latest matching deployment to its verified final backup and prior code snapshot. Requires user confirmation in the client.",
+    annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True, openWorldHint=False, idempotentHint=False),
+)
+async def rollback_deployment(deployment_id: str, reason: str) -> dict:
+    if not 1 <= len(reason.strip()) <= 500:
+        raise ValueError("reason must be between 1 and 500 characters.")
+    return enqueue("rollback_deployment", {"deployment_id": validate_identifier(deployment_id, "deployment_id"), "reason": reason.strip()})
+
+
+@mcp.tool(
+    description="Return a local deployment-agent response by request ID.",
+    annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, openWorldHint=False, idempotentHint=True),
+)
+async def get_deployment_report(request_id: str) -> dict:
+    return get_response(request_id)
+
+
+@mcp.tool(
+    description="Rotate the private MCP path token only after explicit confirmation. This temporarily disconnects the existing ChatGPT app and requires one URL update.",
+    annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True, openWorldHint=False, idempotentHint=False),
+)
+async def rotate_mcp_token(confirmation: str) -> dict:
+    if confirmation.strip() != "ROTATE MCP TOKEN":
+        raise ValueError("Exact confirmation ROTATE MCP TOKEN is required.")
+    return enqueue("rotate_mcp_token", {"confirmation": confirmation.strip()})
 
 if __name__ == "__main__":
     mcp.run(transport="streamable-http")

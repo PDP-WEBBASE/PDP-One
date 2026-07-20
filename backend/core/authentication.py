@@ -22,3 +22,4 @@ class MCPTokenAuthentication(BaseAuthentication):
             user.set_unusable_password()
             user.save(update_fields=["password"])
         return user, None
+

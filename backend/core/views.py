@@ -137,3 +137,4 @@ def session_logout(request):
     logout(request)
     AuditEvent.objects.create(actor=username, action="session.logout", target_type="user")
     return Response({"authenticated": False})
+
