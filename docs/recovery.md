@@ -10,6 +10,12 @@
 
 Backup نهایی باید `restore_verified: true` و Commit/Deployment یکسان با Release تأییدشده داشته باشد. Updater بدون این وضعیت اجرا نمی‌شود.
 
+## Backup قابل‌انتقال مستقل از DPAPI
+
+Backupهای عادی برای Rollback سریع همان نصب، `.env` را با Windows DPAPI محافظت می‌کنند. برای خرابی کامل یا نصب مجدد Windows باید `CREATE-PDP-ONE-PORTABLE-BACKUP.bat` اجرا شود. این مسیر پس از Backup و Restore آزمایشی، دیتابیس، فایل‌های خصوصی، Redis، هویت Tailscale، محیط امن و Snapshot کد را داخل یک فایل `.pdpone` قرار می‌دهد و کل بسته را با AES-256-CBC و HMAC-SHA256 رمز و احراز اصالت می‌کند. کلیدها با PBKDF2-HMAC-SHA256 از Passphrase کاربر مشتق می‌شوند.
+
+فایل `.pdpone` باید خارج از درایو Windows نگه‌داری شود. Passphrase نه در Backup و نه در GitHub ذخیره می‌شود. برای Restore کامل از `RESTORE-PDP-ONE.bat` استفاده کنید.
+
 ## Rollback خودکار
 
 Updater پیش از کپی Source، Snapshot کد نگه می‌دارد. اگر Build، Migration، Startup، Health عمومی/MCP، شمارش داده یا continuity توکن شکست بخورد:
