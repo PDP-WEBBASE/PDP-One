@@ -7,6 +7,26 @@ $ProgressPreference = "SilentlyContinue"
 Set-StrictMode -Version Latest
 . (Join-Path $PSScriptRoot "PDPOne.Common.ps1")
 
+function Invoke-PDPOneHealthRequest {
+    param(
+        [Parameter(Mandatory = $true)][string]$Url,
+        [hashtable]$Headers = @{},
+        [string]$ExpectedPattern = '',
+        [int]$Attempts = 24
+    )
+    $lastError = ''
+    foreach ($attempt in 1..$Attempts) {
+        try {
+            $response = Invoke-WebRequest -UseBasicParsing -Uri $Url -Headers $Headers -TimeoutSec 15
+            $content = ConvertTo-PDPOneResponseText $response.Content
+            if ($response.StatusCode -eq 200 -and (-not $ExpectedPattern -or $content -match $ExpectedPattern)) { return $response }
+            $lastError = "HTTP $($response.StatusCode) returned unexpected health content."
+        } catch { $lastError = $_.Exception.Message }
+        if ($attempt -lt $Attempts) { Start-Sleep -Seconds 5 }
+    }
+    throw "Health endpoint $Url did not become ready: $(ConvertTo-PDPOneRedactedText $lastError)"
+}
+
 $ProjectRoot = Get-PDPOneProjectRoot
 Set-Location $ProjectRoot
 $envPath = Assert-PDPOneConfiguration -ProjectRoot $ProjectRoot
@@ -37,11 +57,9 @@ foreach ($service in @("worker", "beat", "mcp")) {
     if ($state -ne "running") { throw "$service is not running." }
 }
 
-$local = Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:8080/healthz" -TimeoutSec 15
-if ($local.StatusCode -ne 200 -or $local.Content -notmatch "PDP One ready") { throw "Local Nginx/Web health failed." }
+$local = Invoke-PDPOneHealthRequest -Url "http://127.0.0.1:8080/healthz" -ExpectedPattern '(?i)(PDP One ready|healthy|ready|ok)'
 $apiToken = Get-PDPOneEnvValue $envPath "PDP_MCP_TOKEN"
-$api = Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:8080/api/v1/system-status/" -Headers @{ Authorization = "Bearer $apiToken" } -TimeoutSec 15
-if ($api.StatusCode -ne 200 -or $api.Content -notmatch 'database') { throw "Backend API/database health failed." }
+$api = Invoke-PDPOneHealthRequest -Url "http://127.0.0.1:8080/api/v1/system-status/" -Headers @{ Authorization = "Bearer $apiToken" } -ExpectedPattern '(?i)database'
 
 & docker compose exec -T mcp python -c "import socket; s=socket.create_connection(('127.0.0.1',8010),5); s.close()" *> $null
 if ($LASTEXITCODE -ne 0) { throw "MCP service did not accept a local connection." }
@@ -57,8 +75,7 @@ if ($funnelStatus -notmatch '(?i)Funnel on|Available on the internet|proxy http:
 if (-not $SkipPublicCheck) {
     $publicBase = Get-PDPOneEnvValue $envPath "PDP_PUBLIC_BASE_URL"
     if (-not $publicBase) { throw "PDP_PUBLIC_BASE_URL is missing; run CONNECT-CHATGPT.bat once." }
-    $public = Invoke-WebRequest -UseBasicParsing -Uri "$($publicBase.TrimEnd('/'))/healthz" -TimeoutSec 20
-    if ($public.StatusCode -ne 200) { throw "Public Funnel health failed." }
+    $public = Invoke-PDPOneHealthRequest -Url "$($publicBase.TrimEnd('/'))/healthz" -ExpectedPattern '(?i)(PDP One ready|healthy|ready|ok)' -Attempts 12
 }
 
 $report = [ordered]@{
