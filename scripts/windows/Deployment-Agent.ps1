@@ -9,6 +9,7 @@ Set-StrictMode -Version Latest
 
 $mutex = New-Object Threading.Mutex($false, "Global\PDP-One-Deployment-Agent")
 if (-not $mutex.WaitOne(0)) { exit 0 }
+$restartAfterResponse = $false
 
 function Write-AgentAudit([string]$RequestId, [string]$Action, [string]$Status, [string]$Message) {
     $entry = [ordered]@{
@@ -63,7 +64,9 @@ function Invoke-AgentAction($Payload) {
             $commit = [string]$params.commit_sha
             $previewId = Assert-SafeIdentifier ([string]$params.preview_id) "preview_id"
             if ($commit -notmatch '^[0-9a-f]{40}$') { throw "Approval commit is invalid." }
-            if (([string]$params.approval_text) -notin @("تأیید است، Deploy کن", "تایید است، Deploy کن", "APPROVE DEPLOY")) { throw "Explicit approval phrase is invalid." }
+            # Keep the script source ASCII-safe for Windows PowerShell 5.1.
+            # The helper constructs the approved Persian phrases from Unicode code points.
+            if (-not (Test-PDPOneExplicitDeploymentApproval ([string]$params.approval_text))) { throw "Explicit approval phrase is invalid." }
             $approval = [ordered]@{ commit_sha = $commit; preview_id = $previewId; approved_at = (Get-Date).ToUniversalTime().ToString("o"); expires_at = (Get-Date).ToUniversalTime().AddHours(24).ToString("o") }
             $approval | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $AgentRoot "state\approved-release.json") -Encoding UTF8
             return @{ approved_commit = $commit; preview_id = [string]$params.preview_id; expires_in_hours = 24; deployed = $false }
@@ -90,7 +93,7 @@ function Invoke-AgentAction($Payload) {
             $previewId = Assert-SafeIdentifier ([string]$params.preview_id) "preview_id"
             $approvalPath = Join-Path $AgentRoot "state\approved-release.json"
             if (-not (Test-Path -LiteralPath $approvalPath)) { throw "No explicit release approval is recorded." }
-            $approval = Get-Content -LiteralPath $approvalPath -Raw | ConvertFrom-Json
+            $approval = Get-Content -LiteralPath $approvalPath -Raw -Encoding UTF8 | ConvertFrom-Json
             if ([DateTimeOffset]::Parse($approval.expires_at) -le [DateTimeOffset]::UtcNow) { throw "Release approval expired." }
             if ($approval.commit_sha -ne ([string]$params.commit_sha) -or $approval.preview_id -ne $previewId) { throw "Requested deployment does not match the approved preview." }
             $report = & powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File (Join-Path $scripts "Invoke-PDPOneDeployment.ps1") -CommitSha ([string]$params.commit_sha) -DeploymentId $deploymentId -PreviewId $previewId -AgentRoot $AgentRoot
@@ -108,7 +111,7 @@ function Invoke-AgentAction($Payload) {
             $deploymentId = Assert-SafeIdentifier ([string]$params.deployment_id) "deployment_id"
             $statePath = Join-Path $AgentRoot "state\last-deployment.json"
             if (-not (Test-Path -LiteralPath $statePath)) { throw "No deployment state is available for rollback." }
-            $state = Get-Content -LiteralPath $statePath -Raw | ConvertFrom-Json
+            $state = Get-Content -LiteralPath $statePath -Raw -Encoding UTF8 | ConvertFrom-Json
             if ($state.deployment_id -ne $deploymentId) { throw "Rollback deployment identifier does not match." }
             & powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File (Join-Path $scripts "Rollback-PDPOne.ps1") -BackupPath $state.backup_path -CodeArchive $state.code_archive -Automatic -RestoreDatabase
             if ($LASTEXITCODE -ne 0) { throw "Rollback failed." }
@@ -129,7 +132,7 @@ try {
         New-Item -ItemType Directory -Force -Path (Join-Path $AgentRoot $directory) | Out-Null
     }
     $lastStartupAttempt = [DateTime]::MinValue
-    do {
+    :AgentLoop do {
         $ProjectRoot = Get-PDPOneProjectRoot
         $envPath = Assert-PDPOneConfiguration -ProjectRoot $ProjectRoot
         $signingKey = Get-PDPOneEnvValue $envPath "PDP_DEPLOYMENT_AGENT_SIGNING_KEY"
@@ -155,7 +158,7 @@ try {
             $payload = $null
             try {
                 Move-Item -LiteralPath $request.FullName -Destination $processing -ErrorAction Stop
-                $envelope = Get-Content -LiteralPath $processing -Raw | ConvertFrom-Json
+                $envelope = Get-Content -LiteralPath $processing -Raw -Encoding UTF8 | ConvertFrom-Json
                 $payloadBytes = [Convert]::FromBase64String([string]$envelope.payload_b64)
                 if (-not (Test-AgentSignature $payloadBytes ([string]$envelope.signature) $signingKey)) { throw "Request signature is invalid." }
                 $payload = [Text.Encoding]::UTF8.GetString($payloadBytes) | ConvertFrom-Json
@@ -168,6 +171,12 @@ try {
                 Set-Content -LiteralPath $processedMarker -Value ((Get-Date).ToUniversalTime().ToString("o")) -Encoding ASCII
                 Write-AgentAudit $requestId ([string]$payload.action) "succeeded" "Allowlisted request completed."
                 Remove-Item -LiteralPath $processing -Force
+                $restartMarker = Join-Path $AgentRoot 'state\restart-agent-after-response'
+                if (Test-Path -LiteralPath $restartMarker) {
+                    Remove-Item -LiteralPath $restartMarker -Force
+                    $restartAfterResponse = $true
+                    break
+                }
             } catch {
                 $requestId = [IO.Path]::GetFileNameWithoutExtension($request.Name)
                 $action = "unknown"
@@ -180,9 +189,14 @@ try {
                 if (Test-Path -LiteralPath $processing) { Move-Item -LiteralPath $processing -Destination (Join-Path $AgentRoot "queue\rejected\$($request.Name)") -Force }
             }
         }
+        if ($restartAfterResponse) { break AgentLoop }
         if (-not $Once) { Start-Sleep -Seconds $PollSeconds }
     } while (-not $Once)
 } finally {
     $mutex.ReleaseMutex()
     $mutex.Dispose()
+}
+if ($restartAfterResponse -and -not $Once) {
+    $arguments = "-NoLogo -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$PSCommandPath`" -AgentRoot `"$AgentRoot`" -PollSeconds $PollSeconds"
+    Start-Process -FilePath 'powershell.exe' -ArgumentList $arguments -WindowStyle Hidden | Out-Null
 }
