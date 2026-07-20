@@ -116,6 +116,29 @@ function Wait-PDPOneUrl([string]$Url, [int]$TimeoutSeconds = 120) {
     return $false
 }
 
+function ConvertTo-PDPOneResponseText($Content) {
+    if ($null -eq $Content) { return "" }
+    if ($Content -is [byte[]]) { return [Text.Encoding]::UTF8.GetString($Content) }
+    return [string]$Content
+}
+
+function New-PDPOneCodePointString([int[]]$Points) {
+    return -join @($Points | ForEach-Object { [char]$_ })
+}
+
+function Test-PDPOneExplicitDeploymentApproval([string]$Text) {
+    if ([string]::IsNullOrWhiteSpace($Text)) { return $false }
+    $normalized = $Text.Normalize([Text.NormalizationForm]::FormKC).Trim()
+    foreach ($codePoint in @(0xFEFF, 0x200C, 0x200E, 0x200F)) {
+        $normalized = $normalized.Replace([string][char]$codePoint, "")
+    }
+    $normalized = $normalized.Replace([char]0x064A, [char]0x06CC).Replace([char]0x0643, [char]0x06A9)
+    $normalized = [regex]::Replace($normalized, '\s+', ' ')
+    $withHamza = New-PDPOneCodePointString @(0x062A,0x0623,0x06CC,0x06CC,0x062F,0x0020,0x0627,0x0633,0x062A,0x060C,0x0020,0x0044,0x0065,0x0070,0x006C,0x006F,0x0079,0x0020,0x06A9,0x0646)
+    $withoutHamza = New-PDPOneCodePointString @(0x062A,0x0627,0x06CC,0x06CC,0x062F,0x0020,0x0627,0x0633,0x062A,0x060C,0x0020,0x0044,0x0065,0x0070,0x006C,0x006F,0x0079,0x0020,0x06A9,0x0646)
+    return $normalized -in @($withHamza, $withoutHamza, 'APPROVE DEPLOY')
+}
+
 function Protect-PDPOneSecretFile([string]$InputPath, [string]$OutputPath) {
     $bytes = [IO.File]::ReadAllBytes($InputPath)
     $protected = [Security.Cryptography.ProtectedData]::Protect($bytes, $null, 'CurrentUser')
@@ -135,5 +158,7 @@ function ConvertTo-PDPOneRedactedText([string]$Text) {
     $result = [regex]::Replace($result, "(?im)^($secretNames)\s*[:=].*$", '$1=[REDACTED]')
     $result = [regex]::Replace($result, '(?i)(Bearer\s+)[A-Za-z0-9._~+\-/=]+', '$1[REDACTED]')
     $result = [regex]::Replace($result, '(https://[^\s/]+/mcp/)[A-Za-z0-9_-]+', '$1[REDACTED]')
+    $result = [regex]::Replace($result, '(?i)\b(ghp_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|tskey-[A-Za-z0-9_-]{20,})\b', '[REDACTED]')
+    $result = [regex]::Replace($result, '(?i)("(?:token|password|secret|signing_key|authorization)"\s*:\s*")[^"]+(")', '$1[REDACTED]$2')
     return $result
 }
