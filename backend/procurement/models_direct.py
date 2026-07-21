@@ -17,12 +17,6 @@ class OpportunityContact(TimestampedModel):
 
     class Meta:
         ordering = ["organization", "name"]
-        constraints = [
-            models.UniqueConstraint(
-                fields=["organization", "name", "phone"],
-                name="proc_opp_contact_identity_uniq",
-            ),
-        ]
 
     def __str__(self):
         return f"{self.name} — {self.organization}" if self.organization else self.name
