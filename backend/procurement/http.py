@@ -1,3 +1,5 @@
+import ipaddress
+import socket
 import time
 from dataclasses import dataclass
 from urllib.error import HTTPError, URLError
@@ -34,6 +36,34 @@ class SafeRedirectHandler(HTTPRedirectHandler):
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
+def _validate_public_dns(host: str) -> None:
+    try:
+        addresses = {item[4][0] for item in socket.getaddrinfo(host, 443, type=socket.SOCK_STREAM)}
+    except socket.gaierror as exc:
+        raise SourceFetchError(
+            "Source host could not be resolved.",
+            category="network",
+            retryable=True,
+        ) from exc
+    if not addresses:
+        raise SourceFetchError("Source host resolved to no address.", category="network", retryable=True)
+    for address in addresses:
+        ip = ipaddress.ip_address(address)
+        if (
+            ip.is_private
+            or ip.is_loopback
+            or ip.is_link_local
+            or ip.is_reserved
+            or ip.is_multicast
+            or ip.is_unspecified
+        ):
+            raise SourceFetchError(
+                "Source host resolved to a non-public network address.",
+                category="validation",
+                retryable=False,
+            )
+
+
 def validate_source_url(url: str, allowed_host: str) -> None:
     parsed = urlparse(url)
     host = (parsed.hostname or "").lower()
@@ -44,6 +74,7 @@ def validate_source_url(url: str, allowed_host: str) -> None:
         raise SourceFetchError("Source URL host is outside the configured source domain.", category="validation", retryable=False)
     if parsed.username or parsed.password:
         raise SourceFetchError("Credentials in source URLs are not allowed.", category="validation", retryable=False)
+    _validate_public_dns(host)
 
 
 def fetch_public_html(
@@ -62,7 +93,17 @@ def fetch_public_html(
         request = Request(url, headers={"User-Agent": USER_AGENT, "Accept": "text/html,application/xhtml+xml"})
         try:
             with opener.open(request, timeout=timeout_seconds) as response:
+                final_url = response.geturl()
+                validate_source_url(final_url, allowed_host)
                 status_code = int(getattr(response, "status", 200))
+                content_type_header = response.headers.get_content_type()
+                if content_type_header not in {"text/html", "application/xhtml+xml"}:
+                    raise SourceFetchError(
+                        "Source returned a non-HTML response.",
+                        category="validation",
+                        retryable=False,
+                        status_code=status_code,
+                    )
                 content = response.read(max_bytes + 1)
                 if len(content) > max_bytes:
                     raise SourceFetchError(
@@ -71,13 +112,13 @@ def fetch_public_html(
                         retryable=False,
                         status_code=status_code,
                     )
-                content_type = response.headers.get_content_charset() or "utf-8"
+                content_charset = response.headers.get_content_charset() or "utf-8"
                 try:
-                    text = content.decode(content_type)
+                    text = content.decode(content_charset)
                 except (LookupError, UnicodeDecodeError):
                     text = content.decode("utf-8", errors="replace")
                 return FetchedPage(
-                    url=response.geturl(),
+                    url=final_url,
                     status_code=status_code,
                     content=content,
                     text=text,
