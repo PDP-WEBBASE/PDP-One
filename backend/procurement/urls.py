@@ -10,6 +10,7 @@ from .views import (
     TenderViewSet,
     procurement_dashboard,
 )
+from .views_extraction import ExtractionRunViewSet
 
 router = DefaultRouter()
 router.register("notices", ProcurementNoticeViewSet, basename="procurement-notice")
@@ -18,6 +19,7 @@ router.register("inquiries", InquiryViewSet, basename="procurement-inquiry")
 router.register("cases", ProcurementCaseViewSet, basename="procurement-case")
 router.register("sources", ProcurementSourceViewSet, basename="procurement-source")
 router.register("connectors", ProcurementConnectorViewSet, basename="procurement-connector")
+router.register("extraction-runs", ExtractionRunViewSet, basename="procurement-extraction-run")
 
 urlpatterns = [
     path("", include(router.urls)),
