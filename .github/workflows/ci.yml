@@ -67,7 +67,7 @@ jobs:
       - name: Run backend tests
         env:
           DJANGO_SETTINGS_MODULE: config.settings_test
-        run: python backend/manage.py test core.tests -v 2
+        run: python backend/manage.py test core.tests procurement.tests -v 2
 
   windows-powershell-51:
     name: Windows PowerShell 5.1 compatibility
