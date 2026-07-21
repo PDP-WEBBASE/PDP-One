@@ -65,8 +65,8 @@ class ExtractionRun(TimestampedModel):
     class Meta:
         ordering = ["-created_at"]
         indexes = [
-            models.Index(fields=["status", "created_at"], name="proc_extract_status_created_idx"),
-            models.Index(fields=["trigger", "created_at"], name="proc_extract_trigger_created_idx"),
+            models.Index(fields=["status", "created_at"], name="proc_ext_status_created_idx"),
+            models.Index(fields=["trigger", "created_at"], name="proc_ext_trigger_created_idx"),
         ]
 
 
@@ -94,11 +94,11 @@ class ExtractionPage(TimestampedModel):
         constraints = [
             models.UniqueConstraint(
                 fields=["run", "connector", "page_number"],
-                name="proc_extract_run_connector_page_uniq",
+                name="proc_ext_run_conn_page_uniq",
             ),
         ]
         indexes = [
-            models.Index(fields=["connector", "captured_at"], name="proc_extract_page_captured_idx"),
+            models.Index(fields=["connector", "captured_at"], name="proc_ext_page_captured_idx"),
         ]
 
 
@@ -129,8 +129,8 @@ class ExtractionRunItem(TimestampedModel):
     class Meta:
         ordering = ["run", "connector", "page_number", "position"]
         indexes = [
-            models.Index(fields=["run", "status"], name="proc_extract_item_status_idx"),
-            models.Index(fields=["connector", "source_record_id"], name="proc_extract_item_record_idx"),
+            models.Index(fields=["run", "status"], name="proc_ext_item_status_idx"),
+            models.Index(fields=["connector", "source_record_id"], name="proc_ext_item_record_idx"),
         ]
 
 
@@ -163,5 +163,5 @@ class ExtractionError(TimestampedModel):
     class Meta:
         ordering = ["-created_at"]
         indexes = [
-            models.Index(fields=["connector", "category", "created_at"], name="proc_extract_error_lookup_idx"),
+            models.Index(fields=["connector", "category", "created_at"], name="proc_ext_error_lookup_idx"),
         ]
