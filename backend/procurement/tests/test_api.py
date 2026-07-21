@@ -1,0 +1,134 @@
+from django.contrib.auth import get_user_model
+from django.test import TestCase
+from django.utils import timezone
+from rest_framework.test import APIClient
+
+from procurement.models import ProcurementCase, ProcurementConnector, ProcurementNotice, ProcurementSource
+
+
+class ProcurementSourceApiTests(TestCase):
+    def setUp(self):
+        User = get_user_model()
+        self.user = User.objects.create_user(username="viewer", password="test-pass-123")
+        self.admin = User.objects.create_user(username="system-admin", password="test-pass-123", is_staff=True)
+        self.client = APIClient()
+
+    def test_authenticated_user_can_read_sources_but_cannot_change_them(self):
+        self.client.force_authenticate(self.user)
+        response = self.client.get("/api/v1/procurement/sources/")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["count"], 3)
+
+        hezareh = ProcurementSource.objects.get(key="hezareh")
+        response = self.client.patch(
+            f"/api/v1/procurement/sources/{hezareh.id}/",
+            {"enabled": False},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 403)
+
+    def test_system_admin_can_disable_site_and_its_connectors(self):
+        self.client.force_authenticate(self.admin)
+        hezareh = ProcurementSource.objects.get(key="hezareh")
+        response = self.client.patch(
+            f"/api/v1/procurement/sources/{hezareh.id}/",
+            {"enabled": False},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 200)
+
+        hezareh.refresh_from_db()
+        self.assertFalse(hezareh.enabled)
+        self.assertEqual(hezareh.status, ProcurementSource.Status.INACTIVE)
+        self.assertFalse(
+            ProcurementConnector.objects.filter(source=hezareh, enabled=True).exists()
+        )
+
+    def test_system_admin_can_disable_one_connector_without_disabling_site(self):
+        self.client.force_authenticate(self.admin)
+        connector = ProcurementConnector.objects.get(key="parsnamad_inquiries")
+        response = self.client.patch(
+            f"/api/v1/procurement/connectors/{connector.id}/",
+            {"enabled": False},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 200)
+
+        connector.refresh_from_db()
+        self.assertFalse(connector.enabled)
+        self.assertEqual(connector.status, ProcurementConnector.Status.INACTIVE)
+        self.assertTrue(connector.source.enabled)
+
+
+class ProcurementNoticeApiTests(TestCase):
+    def setUp(self):
+        User = get_user_model()
+        self.user = User.objects.create_user(username="expert", password="test-pass-123")
+        self.client = APIClient()
+        self.client.force_authenticate(self.user)
+        now = timezone.now()
+        self.tender = ProcurementNotice.objects.create(
+            resolved_notice_type=ProcurementNotice.NoticeType.TENDER,
+            title="مناقصه طراحی ساختمان اداری",
+            employer_name="کارفرمای نمونه",
+            province="تهران",
+            first_seen_at=now,
+            last_seen_at=now,
+        )
+        self.inquiry = ProcurementNotice.objects.create(
+            resolved_notice_type=ProcurementNotice.NoticeType.INQUIRY,
+            title="استعلام خدمات مطالعاتی",
+            employer_name="کارفرمای دوم",
+            province="البرز",
+            first_seen_at=now,
+            last_seen_at=now,
+        )
+
+    def test_tender_and_inquiry_endpoints_are_separate_views_of_same_model(self):
+        tenders = self.client.get("/api/v1/procurement/tenders/")
+        inquiries = self.client.get("/api/v1/procurement/inquiries/")
+
+        self.assertEqual(tenders.status_code, 200)
+        self.assertEqual(inquiries.status_code, 200)
+        self.assertEqual(tenders.data["count"], 1)
+        self.assertEqual(inquiries.data["count"], 1)
+        self.assertEqual(tenders.data["results"][0]["id"], str(self.tender.id))
+        self.assertEqual(inquiries.data["results"][0]["id"], str(self.inquiry.id))
+
+    def test_case_creation_protects_notice_from_retention(self):
+        response = self.client.post(
+            "/api/v1/procurement/cases/",
+            {
+                "notice": str(self.tender.id),
+                "stage": ProcurementCase.Stage.SELECTED,
+                "next_action": "بررسی اسناد",
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, 201)
+        self.tender.refresh_from_db()
+        self.assertTrue(self.tender.retention_protected)
+
+    def test_negative_decision_requires_reason(self):
+        response = self.client.post(
+            "/api/v1/procurement/cases/",
+            {
+                "notice": str(self.inquiry.id),
+                "stage": ProcurementCase.Stage.DO_NOT_PARTICIPATE,
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("decision_reason", response.data)
+
+    def test_dashboard_reports_active_records(self):
+        ProcurementCase.objects.create(
+            notice=self.tender,
+            responsible=self.user,
+            next_action="بررسی اسناد",
+        )
+        response = self.client.get("/api/v1/procurement/dashboard/")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["notices"]["total"], 2)
+        self.assertEqual(response.data["cases"]["active"], 1)
+        self.assertEqual(response.data["sources"]["enabled_connectors"], 4)
