@@ -165,3 +165,11 @@ class ExtractionError(TimestampedModel):
         indexes = [
             models.Index(fields=["connector", "category", "created_at"], name="proc_ext_error_lookup_idx"),
         ]
+
+
+from .models_direct import (  # noqa: E402,F401
+    DirectOpportunity,
+    OpportunityContact,
+    OpportunityFollowUp,
+    OpportunityResult,
+)
