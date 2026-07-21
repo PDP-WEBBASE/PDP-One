@@ -115,7 +115,7 @@ class ExtractionRunSerializer(serializers.ModelSerializer):
             "updated_at",
         ]
 
-    def validate_connectors(self, connectors):
+    def validate_connector_ids(self, connectors):
         if not connectors:
             raise serializers.ValidationError("حداقل یک منبع فعال باید انتخاب شود.")
         unique_ids = {connector.id for connector in connectors}
