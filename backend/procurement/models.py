@@ -274,3 +274,12 @@ class ProcurementCase(TimestampedModel):
 
     def __str__(self):
         return f"{self.notice.title} — {self.get_stage_display()}"
+
+
+from .models_extraction import (  # noqa: E402,F401
+    ExtractionError,
+    ExtractionPage,
+    ExtractionRun,
+    ExtractionRunItem,
+    ExtractionSchedule,
+)
