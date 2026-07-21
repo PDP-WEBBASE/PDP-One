@@ -103,8 +103,4 @@ class Migration(migrations.Migration):
             ],
             options={"ordering": ["-result_date"]},
         ),
-        migrations.AddConstraint(
-            model_name="opportunitycontact",
-            constraint=models.UniqueConstraint(fields=("organization", "name", "phone"), name="proc_opp_contact_identity_uniq"),
-        ),
     ]
