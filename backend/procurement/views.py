@@ -8,6 +8,7 @@ from rest_framework.viewsets import GenericViewSet
 from core.models import AuditEvent
 
 from .models import ProcurementCase, ProcurementConnector, ProcurementNotice, ProcurementSource
+from .models_direct import DirectOpportunity
 from .permissions import IsSystemAdministratorOrReadOnly
 from .serializers import (
     ProcurementCaseSerializer,
@@ -172,6 +173,16 @@ def procurement_dashboard(request):
             ProcurementCase.Stage.DO_NOT_PARTICIPATE,
         ]
     )
+    opportunities = DirectOpportunity.objects.filter(soft_deleted_at__isnull=True)
+    active_opportunities = opportunities.exclude(
+        stage__in=[
+            DirectOpportunity.Stage.WON,
+            DirectOpportunity.Stage.LOST,
+            DirectOpportunity.Stage.STOPPED,
+            DirectOpportunity.Stage.CONVERTED_TO_NOTICE,
+            DirectOpportunity.Stage.CONVERTED_TO_CONTRACT,
+        ]
+    )
     return Response(
         {
             "notices": {
@@ -189,6 +200,13 @@ def procurement_dashboard(request):
                 "overdue_next_actions": active_cases.filter(next_action_due__lt=now).count(),
                 "without_responsible": active_cases.filter(responsible__isnull=True).count(),
                 "by_stage": list(cases.values("stage").annotate(count=Count("id")).order_by("stage")),
+            },
+            "direct_opportunities": {
+                "total": opportunities.count(),
+                "active": active_opportunities.count(),
+                "overdue_next_actions": active_opportunities.filter(next_action_due__lt=now).count(),
+                "without_responsible": active_opportunities.filter(responsible__isnull=True).count(),
+                "by_stage": list(opportunities.values("stage").annotate(count=Count("id")).order_by("stage")),
             },
             "sources": {
                 "enabled_sites": ProcurementSource.objects.filter(enabled=True).count(),
