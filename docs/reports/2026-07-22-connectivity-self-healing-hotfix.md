@@ -167,6 +167,6 @@ The hotfix remains subject to the normal PDP One controls:
 
 ## Final identifiers
 
-- Corrected hotfix candidate: `aba7f77243c69d5725b6a61c86c41afee12f1cc3`
+- Corrected hotfix candidate: `574f971c62cd4511fab0ddce6104389559db0f60`
 - Version: `1.0.4-trial`
 - Preview, final backup, deployment and final health identifiers are appended after the guarded deployment is completed.
