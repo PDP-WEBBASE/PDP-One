@@ -10,7 +10,7 @@ class ProcurementAutomationSettings(TimestampedModel):
         DAILY = "daily", "روزانه"
 
     key = models.SlugField(max_length=40, unique=True, default="default")
-    enabled = models.BooleanField(default=True)
+    enabled = models.BooleanField(default=False)
     cadence = models.CharField(max_length=12, choices=Cadence.choices, default=Cadence.DAILY)
     interval_minutes = models.PositiveIntegerField(default=60)
     daily_time = models.TimeField(null=True, blank=True)
