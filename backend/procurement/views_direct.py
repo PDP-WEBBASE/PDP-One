@@ -69,7 +69,7 @@ class DirectOpportunityViewSet(
             target_type="direct_opportunity",
             target_id=str(opportunity.id),
             payload={
-                "reference_code": opportunity.reference_record.code,
+                "reference_code": None,
                 "title": opportunity.title,
                 "employer_name": opportunity.employer_name,
                 "stage": opportunity.stage,
@@ -80,12 +80,21 @@ class DirectOpportunityViewSet(
     def perform_update(self, serializer):
         before_stage = serializer.instance.stage
         opportunity = serializer.save(last_activity_at=timezone.now())
+        reference_code = None
+        try:
+            reference_code = opportunity.reference_record.code
+        except AttributeError:
+            pass
         AuditEvent.objects.create(
             actor=self.request.user.username,
             action="procurement.direct_opportunity.update",
             target_type="direct_opportunity",
             target_id=str(opportunity.id),
-            payload={"stage_before": before_stage, "stage_after": opportunity.stage},
+            payload={
+                "stage_before": before_stage,
+                "stage_after": opportunity.stage,
+                "reference_code": reference_code,
+            },
         )
 
     @action(detail=True, methods=["post"], url_path="soft-delete")
