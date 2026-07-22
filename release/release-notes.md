@@ -1,29 +1,27 @@
-# PDP One v1.0.3-trial
+# PDP One v1.0.4-trial
 
-## Windows DPAPI compatibility repair
+## Windows startup and connectivity self-healing hotfix
 
-- explicitly loads the Windows `System.Security` assembly before using DPAPI
-- uses the fully qualified `ProtectedData` and `DataProtectionScope` types required by Windows PowerShell 5.1
-- adds a native `windows-latest` CI gate that performs a real DPAPI encrypt/decrypt round-trip with Windows PowerShell 5.1
+- adds a stable Windows startup watchdog that runs after logon and rechecks PDP One every ten minutes
+- starts Rancher Desktop when needed and waits for the Docker engine instead of failing during early Windows startup
+- verifies the local application, PostgreSQL, MCP, Tailscale state and the real public health endpoint separately
+- no longer treats the text `Funnel on` by itself as proof that the internet route is usable
+- retries the Tailscale container and Funnel automatically without rotating the MCP path token
+- tests public IPv4 resolution without changing Windows or corporate-network DNS settings
+- opens `http://localhost:8080` for the local user, so the local browser does not depend on public `.ts.net` DNS resolution
+- adds a one-click emergency startup and tunnel-repair BAT
+- adds a one-click safe diagnostic BAT
+- writes redacted TXT and JSON diagnostics to the installation root and Desktop on failure
+- preserves PostgreSQL data, Docker volumes, Tailscale identity, `.env`, MCP tokens and the existing ChatGPT connector identity
 
-## Windows PowerShell 5.1 / Docker stderr repair
+## Operational files
 
-- prevents Docker's normal `Unable to find image ... locally` progress message from being promoted to a terminating `RemoteException`
-- invokes the base-backup and isolated-restore scripts directly so genuine exceptions still reach the safe Desktop report
-- retains the dual SHA-256-verified archive destinations introduced in v1.0.1
+- `PDP-ONE-EMERGENCY-START.bat`
+- `PDP-ONE-CREATE-DIAGNOSTICS.bat`
+- `PDP-ONE-LAST-STARTUP-REPORT.json`
+- `PDP-ONE-LAST-DIAGNOSTICS.txt`
+- `PDP-ONE-LAST-DIAGNOSTICS.json`
 
-## Portable backup repair
+## Important
 
-- preserves and displays the redacted root cause when base backup or isolated restore verification fails
-- writes `PDP-ONE-PORTABLE-BACKUP-REPORT.json` on both success and safe failure
-- automatically writes a second SHA-256-verified `.pdpone` copy to `D:\BackUp PDP-0NE-14050429-01`
-- finalizes destination files atomically so incomplete `.partial` files are never treated as valid backups
-
-This fixed trial release includes BACKLOG-001 stable automated deployment, the Health Gate and Approval Gate compatibility fixes, portable encrypted disaster-recovery backups, and one-file Windows restore orchestration.
-
-Important:
-
-- Operational data and secrets are never stored in GitHub.
-- Create the portable backup with `CREATE-PDP-ONE-PORTABLE-BACKUP.bat` and store it off the Windows system drive.
-- Restore a clean Windows installation with `RESTORE-PDP-ONE.bat` and the `.pdpone` backup file.
-- A Windows restart may be required when WSL/Rancher prerequisites are installed; rerun the same restore BAT afterward.
+This hotfix does not change business data or database models. It only changes Windows startup, connectivity verification, self-repair, task registration and safe diagnostics.
