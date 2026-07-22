@@ -1,1 +1,1 @@
-export { default } from "./ProcurementWorkspaceV2";
+export { default } from "./ProcurementWorkspaceV4";
