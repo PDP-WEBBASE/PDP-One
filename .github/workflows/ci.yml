@@ -71,6 +71,7 @@ jobs:
           name: pdp-one-procurement-preview-${{ github.event.pull_request.head.sha }}
           path: dist
           if-no-files-found: error
+          include-hidden-files: true
           retention-days: 7
       - uses: actions/setup-python@v5
         with:
