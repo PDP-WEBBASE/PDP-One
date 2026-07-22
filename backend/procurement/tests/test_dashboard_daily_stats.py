@@ -1,4 +1,4 @@
-from datetime import timedelta
+from datetime import datetime, time, timedelta
 
 from django.contrib.auth import get_user_model
 from django.test import TestCase
@@ -28,7 +28,7 @@ class ProcurementDashboardDailyStatsTests(TestCase):
         now = timezone.now()
         today = timezone.localdate(now)
         start_today = timezone.make_aware(
-            timezone.datetime.combine(today, timezone.datetime.min.time()),
+            datetime.combine(today, time.min),
             timezone.get_current_timezone(),
         )
         start_yesterday = start_today - timedelta(days=1)
