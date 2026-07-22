@@ -61,7 +61,8 @@ class ProcurementAutomationSettingsTests(TestCase):
         self.settings.next_extraction_at = timezone.now()
         self.settings.save()
 
-        result = dispatch_due_extraction()
+        with self.captureOnCommitCallbacks(execute=True):
+            result = dispatch_due_extraction()
         self.assertTrue(result["dispatched"])
         self.assertNotIn("parsnamad_inquiries", result["connector_keys"])
         run = ExtractionRun.objects.get(pk=result["run_id"])
