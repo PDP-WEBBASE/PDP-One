@@ -129,6 +129,33 @@ jobs:
           path: setad-live-test-package
           if-no-files-found: error
           retention-days: 7
+      - name: Build Hezareh and Pars Namad live-test source package
+        if: github.event_name == 'pull_request' && success()
+        shell: bash
+        run: |
+          mkdir -p hezareh-parsnamad-live-test-package
+          git archive --format=zip --output="hezareh-parsnamad-live-test-package/PDP-One-Hezareh-ParsNamad-Live-Test-Source-${{ github.event.pull_request.head.sha }}.zip" HEAD
+          cat > hezareh-parsnamad-live-test-package/README-HEZAREH-PARSNAMAD-LIVE-TEST.txt <<'EOF'
+          PDP One - Hezareh and Pars Namad controlled live test
+
+          1. Extract the source ZIP to a new folder.
+          2. Start Rancher Desktop and wait for Docker to become ready.
+          3. Double-click TEST-HEZAREH-PARSNAMAD-CONNECTORS.bat.
+          4. Four connectors are tested: tenders and inquiries for both sources.
+          5. Five pages are requested for each connector; SETAD is not included.
+          6. The test uses an ephemeral backend container and does not replace the running backend.
+          7. A PostgreSQL backup is created before migration.
+          8. Upload only the generated PDP-ONE-HEZAREH-PARSNAMAD-LIVE-TEST-....zip report.
+             Do not upload the separate database backup.
+          EOF
+      - name: Upload Hezareh and Pars Namad live-test source package
+        if: github.event_name == 'pull_request' && success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pdp-one-hezareh-parsnamad-live-test-${{ github.event.pull_request.head.sha }}
+          path: hezareh-parsnamad-live-test-package
+          if-no-files-found: error
+          retention-days: 7
 
   windows-powershell-51:
     name: Windows PowerShell 5.1 compatibility
