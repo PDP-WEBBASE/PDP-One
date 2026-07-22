@@ -167,4 +167,6 @@ The hotfix remains subject to the normal PDP One controls:
 
 ## Final identifiers
 
-The final commit, Preview ID, backup ID, deployment ID and health results are appended after the guarded deployment is completed.
+- Corrected hotfix candidate: `aba7f77243c69d5725b6a61c86c41afee12f1cc3`
+- Version: `1.0.4-trial`
+- Preview, final backup, deployment and final health identifiers are appended after the guarded deployment is completed.
