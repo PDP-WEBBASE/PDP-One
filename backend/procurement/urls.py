@@ -29,6 +29,7 @@ from .views_direct import (
     OpportunityFollowUpViewSet,
     OpportunityResultViewSet,
 )
+from .views_documents import ProcurementSubmissionDocumentViewSet
 from .views_extraction import ExtractionRunViewSet
 
 router = DefaultRouter()
@@ -43,6 +44,7 @@ router.register("direct-opportunities", DirectOpportunityViewSet, basename="dire
 router.register("opportunity-contacts", OpportunityContactViewSet, basename="opportunity-contact")
 router.register("opportunity-follow-ups", OpportunityFollowUpViewSet, basename="opportunity-follow-up")
 router.register("opportunity-results", OpportunityResultViewSet, basename="opportunity-result")
+router.register("submission-documents", ProcurementSubmissionDocumentViewSet, basename="submission-document")
 router.register("analysis-contexts", AnalysisContextSnapshotViewSet, basename="analysis-context")
 router.register("analysis-context-files", AnalysisContextAttachmentViewSet, basename="analysis-context-file")
 router.register("analysis-requests", AnalysisRequestViewSet, basename="analysis-request")
