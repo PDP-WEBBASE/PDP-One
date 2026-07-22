@@ -12,6 +12,7 @@ class ProcurementConfig(AppConfig):
         from . import (  # noqa: F401
             models_analysis,
             models_automation,
+            models_codes,
             models_direct,
             models_documents,
             tasks_automation,
