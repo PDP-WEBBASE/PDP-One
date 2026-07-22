@@ -2,7 +2,7 @@ from django.db import models, transaction
 from django.db.models.signals import post_save
 from django.dispatch import receiver
 
-from .models import ProcurementNotice
+from .models import ProcurementCase, ProcurementNotice
 from .models_direct import DirectOpportunity
 
 
@@ -73,25 +73,47 @@ def allocate_reference_code(key: str) -> str:
     return f"{PREFIX_BY_KEY[key]}-{value}"
 
 
-@receiver(post_save, sender=ProcurementNotice)
-def ensure_notice_reference_code(sender, instance, created, **kwargs):
-    if hasattr(instance, "reference_record"):
+def _has_reference_record(instance) -> bool:
+    try:
+        instance.reference_record
+    except ProcurementReferenceCode.DoesNotExist:
+        return False
+    return True
+
+
+@receiver(post_save, sender=ProcurementCase)
+def ensure_selected_notice_reference_code(sender, instance, created, **kwargs):
+    notice = instance.notice
+    if _has_reference_record(notice):
         return
     key = (
         ProcurementReferenceSequence.Key.TENDER
-        if instance.resolved_notice_type == ProcurementNotice.NoticeType.TENDER
+        if notice.resolved_notice_type == ProcurementNotice.NoticeType.TENDER
         else ProcurementReferenceSequence.Key.INQUIRY
     )
     ProcurementReferenceCode.objects.create(
         code=allocate_reference_code(key),
         kind=key,
-        notice=instance,
+        notice=notice,
     )
 
 
+DIRECT_CODE_STAGES = {
+    DirectOpportunity.Stage.SELECTED,
+    DirectOpportunity.Stage.PREPARING,
+    DirectOpportunity.Stage.SUBMITTED,
+    DirectOpportunity.Stage.WON,
+    DirectOpportunity.Stage.LOST,
+    DirectOpportunity.Stage.STOPPED,
+    DirectOpportunity.Stage.DEFERRED,
+    DirectOpportunity.Stage.CONVERTED_TO_NOTICE,
+    DirectOpportunity.Stage.CONVERTED_TO_CONTRACT,
+}
+
+
 @receiver(post_save, sender=DirectOpportunity)
-def ensure_direct_reference_code(sender, instance, created, **kwargs):
-    if hasattr(instance, "reference_record"):
+def ensure_selected_direct_reference_code(sender, instance, created, **kwargs):
+    if instance.stage not in DIRECT_CODE_STAGES or _has_reference_record(instance):
         return
     key = ProcurementReferenceSequence.Key.DIRECT
     ProcurementReferenceCode.objects.create(
