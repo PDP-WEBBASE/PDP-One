@@ -21,6 +21,7 @@ from .views_analysis import (
     latest_extraction_run,
     notice_analysis_context,
 )
+from .views_analysis_files import AnalysisContextAttachmentViewSet
 from .views_automation import ProcurementAutomationSettingsViewSet
 from .views_direct import (
     DirectOpportunityViewSet,
@@ -43,6 +44,7 @@ router.register("opportunity-contacts", OpportunityContactViewSet, basename="opp
 router.register("opportunity-follow-ups", OpportunityFollowUpViewSet, basename="opportunity-follow-up")
 router.register("opportunity-results", OpportunityResultViewSet, basename="opportunity-result")
 router.register("analysis-contexts", AnalysisContextSnapshotViewSet, basename="analysis-context")
+router.register("analysis-context-files", AnalysisContextAttachmentViewSet, basename="analysis-context-file")
 router.register("analysis-requests", AnalysisRequestViewSet, basename="analysis-request")
 router.register("analysis-batches", AnalysisBatchViewSet, basename="analysis-batch")
 router.register("analysis-drafts", NoticeAnalysisDraftViewSet, basename="analysis-draft")
