@@ -7,7 +7,7 @@ if not "%errorlevel%"=="0" (
   powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -Command "Start-Process -FilePath $env:PDP_ONE_START -Verb RunAs"
   exit /b
 )
-powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\windows\Start-PDPOne.ps1"
+powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\windows\Start-PDPOne.ps1" -OpenLocalPage -ForceTunnelRepair
 set "PDP_ONE_EXIT=%errorlevel%"
 if not "%PDP_ONE_EXIT%"=="0" pause
 exit /b %PDP_ONE_EXIT%
