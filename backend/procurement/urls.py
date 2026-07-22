@@ -10,6 +10,17 @@ from .views import (
     TenderViewSet,
     procurement_dashboard,
 )
+from .views_analysis import (
+    AnalysisBatchViewSet,
+    AnalysisContextSnapshotViewSet,
+    AnalysisRequestViewSet,
+    NoticeAnalysisDraftViewSet,
+    active_analysis_context,
+    analysis_context_manifest,
+    analysis_queue,
+    latest_extraction_run,
+    notice_analysis_context,
+)
 from .views_direct import (
     DirectOpportunityViewSet,
     OpportunityContactViewSet,
@@ -30,8 +41,17 @@ router.register("direct-opportunities", DirectOpportunityViewSet, basename="dire
 router.register("opportunity-contacts", OpportunityContactViewSet, basename="opportunity-contact")
 router.register("opportunity-follow-ups", OpportunityFollowUpViewSet, basename="opportunity-follow-up")
 router.register("opportunity-results", OpportunityResultViewSet, basename="opportunity-result")
+router.register("analysis-contexts", AnalysisContextSnapshotViewSet, basename="analysis-context")
+router.register("analysis-requests", AnalysisRequestViewSet, basename="analysis-request")
+router.register("analysis-batches", AnalysisBatchViewSet, basename="analysis-batch")
+router.register("analysis-drafts", NoticeAnalysisDraftViewSet, basename="analysis-draft")
 
 urlpatterns = [
     path("", include(router.urls)),
     path("dashboard/", procurement_dashboard, name="procurement-dashboard"),
+    path("analysis/context/manifest/", analysis_context_manifest, name="analysis-context-manifest"),
+    path("analysis/context/active/", active_analysis_context, name="analysis-context-active"),
+    path("analysis/latest-extraction/", latest_extraction_run, name="analysis-latest-extraction"),
+    path("analysis/queue/", analysis_queue, name="analysis-queue"),
+    path("analysis/notices/<uuid:notice_id>/context/", notice_analysis_context, name="notice-analysis-context"),
 ]
