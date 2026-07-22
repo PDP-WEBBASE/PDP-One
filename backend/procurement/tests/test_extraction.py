@@ -83,12 +83,12 @@ class ExtractionTaskTests(TestCase):
             page_cap=2,
         )
         run.connectors.add(connector)
-        first_html = b"""
+        first_html = """
         <div class="table-1"><table class="table table-hover"><tbody>
           <tr><td>10950416</td><td><a href="/tenders/nid10950416">مناقصه خدمات طراحی</a></td>
           <td>استان تهران</td><td>جدید</td><td>1405/05/05</td><td></td><td><i class="fa fa-hourglass-2"></i></td></tr>
         </tbody></table></div>
-        """
+        """.encode("utf-8")
         empty_html = b"<html><body><table></table></body></html>"
         responses = [
             FetchedPage(
