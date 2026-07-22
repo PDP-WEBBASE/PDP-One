@@ -50,6 +50,33 @@ class AnalysisContextSnapshotSerializer(serializers.ModelSerializer):
             "updated_at",
         ]
 
+    def validate_status(self, value):
+        if value == AnalysisContextSnapshot.Status.ACTIVE:
+            raise serializers.ValidationError(
+                "فعال‌سازی Snapshot فقط از عملیات اختصاصی و Audit‌شده «فعال‌سازی نسخه» مجاز است."
+            )
+        return value
+
+    def validate(self, attrs):
+        instance_status = getattr(self.instance, "status", None)
+        if instance_status == AnalysisContextSnapshot.Status.ACTIVE:
+            protected_fields = {
+                "role_text",
+                "base_instructions",
+                "tender_prompt",
+                "inquiry_prompt",
+                "company_profile",
+                "qualifications",
+                "keywords",
+                "experience_summary",
+                "component_versions",
+            }
+            if protected_fields.intersection(attrs):
+                raise serializers.ValidationError(
+                    "نسخه فعال قابل ویرایش مستقیم نیست؛ ابتدا یک Snapshot پیش‌نویس جدید ایجاد کنید."
+                )
+        return attrs
+
 
 class AnalysisRequestSerializer(serializers.ModelSerializer):
     status_label = serializers.CharField(source="get_status_display", read_only=True)
@@ -259,10 +286,7 @@ class NoticeAnalysisDraftSerializer(serializers.ModelSerializer):
             created_by_label="ChatGPT",
             **validated_data,
         )
-        ProcurementNotice.objects.filter(pk=notice.pk).update(
-            is_recommended=draft.is_recommended,
-            processing_status=ProcurementNotice.ProcessingStatus.ANALYZED,
-        )
-        batch.completed_count = batch.completed_count + 1
-        batch.save(update_fields=["completed_count", "updated_at"])
+        notice.is_recommended = draft.is_recommended
+        notice.processing_status = ProcurementNotice.ProcessingStatus.ANALYZED
+        notice.save(update_fields=["is_recommended", "processing_status", "updated_at"])
         return draft
