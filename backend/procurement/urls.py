@@ -21,6 +21,7 @@ from .views_analysis import (
     latest_extraction_run,
     notice_analysis_context,
 )
+from .views_automation import ProcurementAutomationSettingsViewSet
 from .views_direct import (
     DirectOpportunityViewSet,
     OpportunityContactViewSet,
@@ -45,6 +46,7 @@ router.register("analysis-contexts", AnalysisContextSnapshotViewSet, basename="a
 router.register("analysis-requests", AnalysisRequestViewSet, basename="analysis-request")
 router.register("analysis-batches", AnalysisBatchViewSet, basename="analysis-batch")
 router.register("analysis-drafts", NoticeAnalysisDraftViewSet, basename="analysis-draft")
+router.register("automation-settings", ProcurementAutomationSettingsViewSet, basename="automation-settings")
 
 urlpatterns = [
     path("", include(router.urls)),
