@@ -43,6 +43,30 @@ class DirectOpportunityApiTests(TestCase):
         self.assertGreaterEqual(opportunity.next_action_due, before + timedelta(hours=23))
         self.assertLessEqual(opportunity.next_action_due, before + timedelta(hours=25))
 
+    def test_initial_record_accepts_partial_meaningful_information(self):
+        self.client.force_authenticate(self.expert)
+        response = self.client.post(
+            "/api/v1/procurement/direct-opportunities/",
+            {"employer_name": "کارفرمای در حال شناسایی"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 201)
+        opportunity = DirectOpportunity.objects.get()
+        self.assertEqual(opportunity.title, "")
+        self.assertEqual(opportunity.employer_name, "کارفرمای در حال شناسایی")
+        self.assertEqual(opportunity.next_action, "")
+        self.assertEqual(opportunity.stage, DirectOpportunity.Stage.NEW)
+
+    def test_completely_empty_initial_record_is_rejected(self):
+        self.client.force_authenticate(self.expert)
+        response = self.client.post(
+            "/api/v1/procurement/direct-opportunities/",
+            {},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("detail", response.data)
+
     def test_opportunity_can_move_to_selected_stage(self):
         opportunity = self.create_quick_opportunity()
         response = self.client.patch(
