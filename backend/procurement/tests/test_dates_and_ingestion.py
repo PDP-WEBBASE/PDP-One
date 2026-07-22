@@ -1,3 +1,4 @@
+from datetime import datetime, timedelta
 from unittest.mock import patch
 
 from django.test import TestCase
@@ -37,10 +38,13 @@ class SourceDateTests(TestCase):
 
     @patch("procurement.dates.timezone.now")
     def test_relative_deadline_is_converted_from_persian_duration(self, now):
-        fixed_now = timezone.now()
+        fixed_now = timezone.make_aware(
+            datetime(2026, 7, 22, 10, 0, 0),
+            timezone.get_current_timezone(),
+        )
         now.return_value = fixed_now
         parsed, metadata = parse_deadline_value("۴ روز و ۸ ساعت")
-        self.assertEqual(parsed, fixed_now + timezone.timedelta(days=4, hours=8))
+        self.assertEqual(parsed, fixed_now + timedelta(days=4, hours=8))
         self.assertEqual(metadata["calendar_type"], "relative_duration")
         self.assertEqual(metadata["relative_seconds"], 374400)
 
