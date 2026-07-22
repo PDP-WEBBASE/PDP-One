@@ -90,9 +90,37 @@ try {
     $failure = $_.Exception.Message
     if ($productionTouched) {
         Write-Host "Update failed. Starting automatic rollback ..." -ForegroundColor Red
-        & powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "Rollback-PDPOne.ps1") -BackupPath $BackupPath -CodeArchive $CodeArchive -Automatic -RestoreDatabase:$migrationAttempted
+
+        # Do not pass a Boolean value through -RestoreDatabase:$value to a new
+        # powershell.exe process. Windows PowerShell 5.1 serializes that token as
+        # text and switch binding fails. Add the switch only when it is needed.
+        $rollbackArgs = @(
+            "-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
+            (Join-Path $PSScriptRoot "Rollback-PDPOne.ps1"),
+            "-BackupPath", $BackupPath,
+            "-CodeArchive", $CodeArchive,
+            "-Automatic"
+        )
+        if ($migrationAttempted) { $rollbackArgs += "-RestoreDatabase" }
+        & powershell.exe @rollbackArgs
         $rollbackCode = $LASTEXITCODE
-        & powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "New-PDPOneDiagnostics.ps1") -FailureMessage $failure -DeploymentId $DeploymentId -BackupId $backupReport.backup_id -RollbackResult $(if ($rollbackCode -eq 0) { "healthy" } else { "failed" }) -Stage "update"
+
+        # Empty PowerShell arguments disappear at the native-process boundary.
+        # Always provide safe non-empty diagnostic identifiers for manual runs.
+        $diagnosticDeploymentId = $(if ([string]::IsNullOrWhiteSpace($DeploymentId)) { "manual-update" } else { $DeploymentId })
+        $diagnosticBackupId = $(if ($null -ne $backupReport -and -not [string]::IsNullOrWhiteSpace([string]$backupReport.backup_id)) { [string]$backupReport.backup_id } else { "unknown-backup" })
+        $diagnosticRollback = $(if ($rollbackCode -eq 0) { "healthy" } else { "failed" })
+        $diagnosticArgs = @(
+            "-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
+            (Join-Path $PSScriptRoot "New-PDPOneDiagnostics.ps1"),
+            "-FailureMessage", $failure,
+            "-DeploymentId", $diagnosticDeploymentId,
+            "-BackupId", $diagnosticBackupId,
+            "-RollbackResult", $diagnosticRollback,
+            "-Stage", "update"
+        )
+        & powershell.exe @diagnosticArgs
+
         if ($rollbackCode -ne 0) { throw "Update failed and automatic rollback also failed: $failure" }
         throw "Update failed; automatic rollback returned the previous version to health: $failure"
     }
