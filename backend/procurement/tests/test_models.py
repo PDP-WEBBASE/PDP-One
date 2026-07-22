@@ -22,9 +22,25 @@ class ProcurementSeedTests(TestCase):
 
         setad = ProcurementSource.objects.get(key="setad")
         self.assertFalse(setad.enabled)
-        self.assertEqual(setad.status, ProcurementSource.Status.PENDING)
-        self.assertFalse(ProcurementConnector.objects.get(key="setad_tenders").enabled)
-        self.assertFalse(ProcurementConnector.objects.get(key="setad_inquiries").enabled)
+        self.assertEqual(setad.status, ProcurementSource.Status.INACTIVE)
+        self.assertEqual(setad.base_url, "https://setadiran.ir")
+        self.assertEqual(
+            setad.configuration["public_hosts"],
+            ["etend.setadiran.ir", "eproc.setadiran.ir"],
+        )
+
+        tenders = ProcurementConnector.objects.get(key="setad_tenders")
+        inquiries = ProcurementConnector.objects.get(key="setad_inquiries")
+        self.assertFalse(tenders.enabled)
+        self.assertFalse(inquiries.enabled)
+        self.assertEqual(tenders.status, ProcurementConnector.Status.INACTIVE)
+        self.assertEqual(inquiries.status, ProcurementConnector.Status.INACTIVE)
+        self.assertEqual(tenders.parser_version, "setad-etend-json-v1")
+        self.assertEqual(inquiries.parser_version, "setad-eproc-needs-html-v1")
+        self.assertFalse(tenders.requires_browser)
+        self.assertFalse(inquiries.requires_browser)
+        self.assertFalse(tenders.supports_detail)
+        self.assertFalse(inquiries.supports_detail)
 
     def test_connector_type_is_unique_per_source(self):
         source = ProcurementSource.objects.get(key="hezareh")
