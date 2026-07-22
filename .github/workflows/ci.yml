@@ -104,6 +104,31 @@ jobs:
           path: backend-test.log
           if-no-files-found: warn
           retention-days: 7
+      - name: Build controlled SETAD live-test source package
+        if: github.event_name == 'pull_request' && success()
+        shell: bash
+        run: |
+          mkdir -p setad-live-test-package
+          git archive --format=zip --output="setad-live-test-package/PDP-One-SETAD-Live-Test-Source-${{ github.event.pull_request.head.sha }}.zip" HEAD
+          cat > setad-live-test-package/README-SETAD-LIVE-TEST.txt <<'EOF'
+          PDP One - SETAD controlled live test
+
+          1. Extract the source ZIP to a new folder.
+          2. Start Rancher Desktop and wait for Docker to become ready.
+          3. Double-click TEST-SETAD-CONNECTORS.bat.
+          4. The test uses an ephemeral backend container and does not replace the running backend.
+          5. A PostgreSQL backup is created before migration.
+          6. Upload only the generated PDP-ONE-SETAD-LIVE-TEST-....zip report.
+             Do not upload the separate database backup.
+          EOF
+      - name: Upload controlled SETAD live-test source package
+        if: github.event_name == 'pull_request' && success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pdp-one-setad-live-test-${{ github.event.pull_request.head.sha }}
+          path: setad-live-test-package
+          if-no-files-found: error
+          retention-days: 7
 
   windows-powershell-51:
     name: Windows PowerShell 5.1 compatibility
