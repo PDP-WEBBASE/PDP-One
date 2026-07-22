@@ -1,3 +1,5 @@
+from unittest.mock import patch
+
 from django.test import TestCase
 from django.utils import timezone
 
@@ -23,6 +25,24 @@ class SourceDateTests(TestCase):
         self.assertTrue(timezone.is_aware(parsed))
         self.assertEqual(metadata["calendar_type"], "gregorian")
         self.assertEqual(metadata["normalized_date"], "2026-07-25")
+        self.assertEqual(parsed.hour, 0)
+
+    def test_jalali_deadline_preserves_exact_time(self):
+        parsed, metadata = parse_deadline_value("1405/05/20 19:00:00")
+        self.assertIsNotNone(parsed)
+        self.assertEqual(parsed.hour, 19)
+        self.assertEqual(parsed.minute, 0)
+        self.assertEqual(metadata["calendar_type"], "jalali")
+        self.assertIn("normalized_datetime", metadata)
+
+    @patch("procurement.dates.timezone.now")
+    def test_relative_deadline_is_converted_from_persian_duration(self, now):
+        fixed_now = timezone.now()
+        now.return_value = fixed_now
+        parsed, metadata = parse_deadline_value("۴ روز و ۸ ساعت")
+        self.assertEqual(parsed, fixed_now + timezone.timedelta(days=4, hours=8))
+        self.assertEqual(metadata["calendar_type"], "relative_duration")
+        self.assertEqual(metadata["relative_seconds"], 374400)
 
     def test_non_date_text_is_kept_as_invalid_metadata(self):
         parsed, metadata = parse_date_value("پس از دریافت اسناد")
