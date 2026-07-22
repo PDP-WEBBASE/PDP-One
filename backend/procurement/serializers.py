@@ -141,6 +141,7 @@ class ProcurementCaseSerializer(serializers.ModelSerializer):
 
 
 class ProcurementNoticeListSerializer(serializers.ModelSerializer):
+    reference_code = serializers.CharField(source="reference_record.code", read_only=True)
     notice_type_label = serializers.CharField(source="get_resolved_notice_type_display", read_only=True)
     type_resolution_status_label = serializers.CharField(source="get_type_resolution_status_display", read_only=True)
     processing_status_label = serializers.CharField(source="get_processing_status_display", read_only=True)
@@ -151,7 +152,7 @@ class ProcurementNoticeListSerializer(serializers.ModelSerializer):
     class Meta:
         model = ProcurementNotice
         fields = [
-            "id", "resolved_notice_type", "notice_type_label", "type_resolution_status",
+            "id", "reference_code", "resolved_notice_type", "notice_type_label", "type_resolution_status",
             "type_resolution_status_label", "title", "employer_name", "notice_number", "province",
             "published_date", "submission_deadline", "processing_status", "processing_status_label",
             "is_recommended", "case_stage", "case_stage_label", "source_count", "first_seen_at",
