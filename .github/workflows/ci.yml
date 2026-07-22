@@ -57,9 +57,22 @@ jobs:
       - name: Verify Python syntax and migrations
         env:
           DJANGO_SETTINGS_MODULE: config.settings_test
+        shell: bash
         run: |
           python -m compileall -q backend services/pdp_mcp
-          python backend/manage.py makemigrations --check --dry-run
+          set +e
+          python backend/manage.py makemigrations --check --dry-run --verbosity 3 > migration-check.txt 2>&1
+          status=$?
+          cat migration-check.txt
+          exit $status
+      - name: Upload migration diagnostic
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: migration-check-${{ github.run_id }}
+          path: migration-check.txt
+          if-no-files-found: ignore
+          retention-days: 1
       - name: Test signed deployment queue
         env:
           PYTHONPATH: services/pdp_mcp
