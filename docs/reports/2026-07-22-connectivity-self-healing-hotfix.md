@@ -167,6 +167,6 @@ The hotfix remains subject to the normal PDP One controls:
 
 ## Final identifiers
 
-- Corrected hotfix candidate: `574f971c62cd4511fab0ddce6104389559db0f60`
+- Corrected hotfix candidate: the exact current Head SHA of PR #7
 - Version: `1.0.4-trial`
 - Preview, final backup, deployment and final health identifiers are appended after the guarded deployment is completed.
