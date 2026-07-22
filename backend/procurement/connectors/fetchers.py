@@ -1,8 +1,10 @@
 import html as html_module
 import re
 import time
+from http.client import RemoteDisconnected
 from http.cookiejar import CookieJar
-from urllib.parse import urlencode, urlparse
+from urllib.error import HTTPError, URLError
+from urllib.parse import urlencode
 from urllib.request import HTTPCookieProcessor, Request, build_opener
 
 from procurement.http import (
@@ -95,14 +97,24 @@ class SessionFetcherBase:
                     )
             except SourceFetchError:
                 raise
-            except Exception as exc:
-                retryable = exc.__class__.__name__ in {
-                    "URLError", "TimeoutError", "OSError", "RemoteDisconnected"
-                }
+            except HTTPError as exc:
+                last_error = SourceFetchError(
+                    f"Source returned HTTP {exc.code}.",
+                    category="http",
+                    retryable=500 <= exc.code < 600 or exc.code == 429,
+                    status_code=exc.code,
+                )
+            except (URLError, TimeoutError, OSError, RemoteDisconnected) as exc:
                 last_error = SourceFetchError(
                     f"Source connection failed: {exc.__class__.__name__}.",
-                    category="network" if retryable else "unexpected",
-                    retryable=retryable,
+                    category="network",
+                    retryable=True,
+                )
+            except Exception as exc:
+                last_error = SourceFetchError(
+                    f"Source request failed: {exc.__class__.__name__}.",
+                    category="unexpected",
+                    retryable=False,
                 )
             if last_error is None or not last_error.retryable or attempt >= self.retry_count:
                 break
@@ -129,9 +141,12 @@ class SetadEtendFetcher(SessionFetcherBase):
     INDEX_URL = "https://etend.setadiran.ir/etend/index.action"
     WELCOME_URL = "https://etend.setadiran.ir/etend/welcome.action"
     LIST_URL = "https://etend.setadiran.ir/etend/callMainPageCartable-anonymous.action"
-    TOKEN_RE = re.compile(
-        r'<input\b(?=[^>]*\bname\s*=\s*["\']csrf_token["\'])[^>]*\bvalue\s*=\s*["\']([^"\']+)["\'][^>]*>',
-        re.IGNORECASE | re.DOTALL,
+    TOKEN_PATTERNS = (
+        re.compile(
+            r'<input\b(?=[^>]*\bname\s*=\s*["\']csrf_token["\'])[^>]*\bvalue\s*=\s*["\']([^"\']+)["\'][^>]*>',
+            re.IGNORECASE | re.DOTALL,
+        ),
+        re.compile(r'["\']csrf_token["\']\s*[,=:]\s*["\']([A-Za-z0-9_-]+)["\']', re.IGNORECASE),
     )
 
     def __init__(self, *, allowed_host: str, timeout_seconds: int, retry_count: int, rows: int = 30):
@@ -173,14 +188,17 @@ class SetadEtendFetcher(SessionFetcherBase):
             expected_content_types={"text/html", "application/xhtml+xml"},
             safe_url=self.WELCOME_URL,
         )
-        match = self.TOKEN_RE.search(welcome.text)
-        if not match:
+        for pattern in self.TOKEN_PATTERNS:
+            match = pattern.search(welcome.text)
+            if match:
+                self.csrf_token = match.group(1)
+                break
+        if not self.csrf_token:
             raise SourceFetchError(
                 "SETAD eTender CSRF token was not available in the public session.",
                 category="security_challenge",
                 retryable=True,
             )
-        self.csrf_token = match.group(1)
 
     def fetch_list(self, page_number: int, page_url: str) -> FetchedPage:
         self._ensure_session()
@@ -254,8 +272,8 @@ class SetadEprocFetcher(SessionFetcherBase):
 
     def fetch_list(self, page_number: int, page_url: str) -> FetchedPage:
         self._ensure_first_page()
-        if page_number <= 1:
-            return self.first_page  # type: ignore[return-value]
+        if page_number <= 1 and self.first_page is not None:
+            return self.first_page
         if not self.page_parameter:
             raise SourceFetchError(
                 "SETAD eProc pagination parameter was not found.",
