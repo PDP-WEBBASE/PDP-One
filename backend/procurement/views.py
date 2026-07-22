@@ -23,6 +23,7 @@ from .serializers import (
 
 class ProcurementNoticeViewSet(viewsets.ReadOnlyModelViewSet):
     search_fields = [
+        "reference_record__code",
         "title",
         "normalized_title",
         "summary",
@@ -52,7 +53,7 @@ class ProcurementNoticeViewSet(viewsets.ReadOnlyModelViewSet):
     def get_queryset(self):
         queryset = (
             ProcurementNotice.objects.filter(soft_deleted_at__isnull=True)
-            .select_related("case", "case__responsible")
+            .select_related("case", "case__responsible", "reference_record")
             .prefetch_related("source_links__source_notice__connector__source")
             .annotate(source_count=Count("source_links"))
         )
@@ -83,8 +84,16 @@ class ProcurementCaseViewSet(
     GenericViewSet,
 ):
     serializer_class = ProcurementCaseSerializer
-    queryset = ProcurementCase.objects.select_related("notice", "responsible", "created_by").all()
-    search_fields = ["notice__title", "notice__employer_name", "next_action", "decision_reason"]
+    queryset = ProcurementCase.objects.select_related(
+        "notice", "notice__reference_record", "responsible", "created_by"
+    ).all()
+    search_fields = [
+        "notice__reference_record__code",
+        "notice__title",
+        "notice__employer_name",
+        "next_action",
+        "decision_reason",
+    ]
     filterset_fields = ["stage", "responsible", "notice__resolved_notice_type"]
     ordering_fields = ["next_action_due", "created_at", "updated_at", "progress"]
     ordering = ["next_action_due", "-created_at"]
@@ -237,7 +246,8 @@ def procurement_dashboard(request):
                     source__enabled=True,
                 ).count(),
                 "pending_connectors": ProcurementConnector.objects.filter(
-                    Q(status=ProcurementConnector.Status.PENDING) | Q(source__status=ProcurementSource.Status.PENDING)
+                    Q(status=ProcurementConnector.Status.PENDING)
+                    | Q(source__status=ProcurementSource.Status.PENDING)
                 ).count(),
             },
         }
