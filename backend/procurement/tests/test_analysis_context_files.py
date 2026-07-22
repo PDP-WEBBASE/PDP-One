@@ -1,4 +1,3 @@
-import shutil
 import tempfile
 
 from django.contrib.auth import get_user_model
@@ -11,12 +10,6 @@ from procurement.models_analysis import AnalysisContextAttachment, AnalysisConte
 
 @override_settings(MEDIA_ROOT=tempfile.mkdtemp(prefix="pdp-context-files-"))
 class AnalysisContextFileTests(TestCase):
-    @classmethod
-    def tearDownClass(cls):
-        media_root = cls.settings(MEDIA_ROOT=tempfile.gettempdir())
-        del media_root
-        super().tearDownClass()
-
     def setUp(self):
         User = get_user_model()
         self.manager = User.objects.create_user(
