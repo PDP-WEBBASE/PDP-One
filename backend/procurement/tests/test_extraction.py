@@ -50,9 +50,31 @@ class ExtractionRunApiTests(TestCase):
         self.assertEqual(list(run.connectors.values_list("key", flat=True)), ["hezareh_tenders"])
         delay.assert_called_once_with(str(run.id))
 
-    def test_disabled_connector_is_rejected(self):
+    @patch("procurement.views_extraction.run_extraction.delay")
+    def test_manager_can_queue_approved_setad_connector(self, delay):
         self.client.force_authenticate(self.manager)
         setad = ProcurementConnector.objects.get(key="setad_tenders")
+        with self.captureOnCommitCallbacks(execute=True):
+            response = self.client.post(
+                "/api/v1/procurement/extraction-runs/",
+                {
+                    "connector_ids": [str(setad.id)],
+                    "include_details": False,
+                    "page_cap": 2,
+                },
+                format="json",
+            )
+        self.assertEqual(response.status_code, 201)
+        run = ExtractionRun.objects.get()
+        self.assertEqual(list(run.connectors.values_list("key", flat=True)), ["setad_tenders"])
+        delay.assert_called_once_with(str(run.id))
+
+    def test_explicitly_disabled_connector_is_rejected(self):
+        self.client.force_authenticate(self.manager)
+        setad = ProcurementConnector.objects.get(key="setad_tenders")
+        setad.enabled = False
+        setad.status = ProcurementConnector.Status.INACTIVE
+        setad.save(update_fields=["enabled", "status", "updated_at"])
         response = self.client.post(
             "/api/v1/procurement/extraction-runs/",
             {"connector_ids": [str(setad.id)]},
@@ -120,6 +142,9 @@ class ExtractionTaskTests(TestCase):
 
     def test_task_cancels_when_all_selected_connectors_are_disabled(self):
         connector = ProcurementConnector.objects.get(key="setad_tenders")
+        connector.enabled = False
+        connector.status = ProcurementConnector.Status.INACTIVE
+        connector.save(update_fields=["enabled", "status", "updated_at"])
         run = ExtractionRun.objects.create(status=ExtractionRun.Status.QUEUED)
         run.connectors.add(connector)
 
