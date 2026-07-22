@@ -1,5 +1,7 @@
 import hashlib
 import json
+import uuid
+from pathlib import Path
 
 from django.conf import settings
 from django.core.validators import MaxValueValidator, MinValueValidator
@@ -8,6 +10,11 @@ from django.utils import timezone
 
 from .models import ProcurementNotice, TimestampedModel
 from .models_extraction import ExtractionRun
+
+
+def analysis_context_upload_path(instance, filename):
+    suffix = Path(filename).suffix.lower()[:12]
+    return f"procurement/analysis-context/{instance.context_snapshot_id}/{uuid.uuid4().hex}{suffix}"
 
 
 class AnalysisContextSnapshot(TimestampedModel):
@@ -20,6 +27,7 @@ class AnalysisContextSnapshot(TimestampedModel):
     status = models.CharField(max_length=16, choices=Status.choices, default=Status.DRAFT)
     role_text = models.TextField()
     base_instructions = models.TextField()
+    analysis_prompt = models.TextField(blank=True)
     tender_prompt = models.TextField(blank=True)
     inquiry_prompt = models.TextField(blank=True)
     company_profile = models.JSONField(default=dict, blank=True)
@@ -48,8 +56,7 @@ class AnalysisContextSnapshot(TimestampedModel):
         payload = {
             "role_text": self.role_text,
             "base_instructions": self.base_instructions,
-            "tender_prompt": self.tender_prompt,
-            "inquiry_prompt": self.inquiry_prompt,
+            "analysis_prompt": self.analysis_prompt,
             "company_profile": self.company_profile,
             "qualifications": self.qualifications,
             "keywords": self.keywords,
@@ -60,6 +67,13 @@ class AnalysisContextSnapshot(TimestampedModel):
         return hashlib.sha256(encoded).hexdigest()
 
     def save(self, *args, **kwargs):
+        if self.analysis_prompt:
+            self.tender_prompt = self.analysis_prompt
+            self.inquiry_prompt = self.analysis_prompt
+        else:
+            self.analysis_prompt = self.tender_prompt or self.inquiry_prompt
+            self.tender_prompt = self.analysis_prompt
+            self.inquiry_prompt = self.analysis_prompt
         self.content_hash = self.calculate_content_hash()
         if self.status == self.Status.ACTIVE and self.activated_at is None:
             self.activated_at = timezone.now()
@@ -67,6 +81,44 @@ class AnalysisContextSnapshot(TimestampedModel):
 
     def __str__(self):
         return f"Analysis context v{self.version}"
+
+
+class AnalysisContextAttachment(TimestampedModel):
+    class Category(models.TextChoices):
+        PROMPT_REFERENCE = "prompt_reference", "مرجع نقش و Prompt"
+        KEYWORDS = "keywords", "کلیدواژه‌ها"
+        COMPANY_PROFILE = "company_profile", "پروفایل شرکت"
+        QUALIFICATIONS = "qualifications", "صلاحیت‌ها"
+        RESUME = "resume", "رزومه و سوابق"
+        OTHER = "other", "سایر"
+
+    context_snapshot = models.ForeignKey(
+        AnalysisContextSnapshot,
+        on_delete=models.CASCADE,
+        related_name="attachments",
+    )
+    category = models.CharField(max_length=32, choices=Category.choices)
+    file = models.FileField(upload_to=analysis_context_upload_path)
+    original_name = models.CharField(max_length=255)
+    content_type = models.CharField(max_length=120, blank=True)
+    size_bytes = models.PositiveBigIntegerField(default=0)
+    checksum_sha256 = models.CharField(max_length=64)
+    uploaded_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="procurement_analysis_context_files",
+    )
+
+    class Meta:
+        ordering = ["category", "original_name"]
+        indexes = [
+            models.Index(fields=["context_snapshot", "category"], name="proc_ctx_file_cat_idx"),
+        ]
+
+    def __str__(self):
+        return self.original_name
 
 
 class AnalysisRequest(TimestampedModel):
