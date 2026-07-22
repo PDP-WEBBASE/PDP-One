@@ -57,22 +57,9 @@ jobs:
       - name: Verify Python syntax and migrations
         env:
           DJANGO_SETTINGS_MODULE: config.settings_test
-        shell: bash
         run: |
           python -m compileall -q backend services/pdp_mcp
-          set +e
-          python backend/manage.py makemigrations --check --dry-run --verbosity 3 > migration-check.txt 2>&1
-          status=$?
-          cat migration-check.txt
-          exit $status
-      - name: Upload migration diagnostic
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: migration-check-${{ github.run_id }}
-          path: migration-check.txt
-          if-no-files-found: ignore
-          retention-days: 1
+          python backend/manage.py makemigrations --check --dry-run
       - name: Test signed deployment queue
         env:
           PYTHONPATH: services/pdp_mcp
@@ -81,6 +68,21 @@ jobs:
         env:
           DJANGO_SETTINGS_MODULE: config.settings_test
         run: python backend/manage.py test core.tests procurement.tests -v 2
+
+  migration-diagnostic:
+    name: Temporary migration diagnostic
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+      - run: pip install -r backend/requirements.txt
+      - name: Print proposed migration operations
+        env:
+          DJANGO_SETTINGS_MODULE: config.settings_test
+        run: python backend/manage.py makemigrations --dry-run --verbosity 3
 
   windows-powershell-51:
     name: Windows PowerShell 5.1 compatibility
