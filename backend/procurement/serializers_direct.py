@@ -123,6 +123,11 @@ class DirectOpportunityListSerializer(serializers.ModelSerializer):
             "created_at",
             "updated_at",
         ]
+        extra_kwargs = {
+            "title": {"required": False, "allow_blank": True, "default": ""},
+            "employer_name": {"required": False, "allow_blank": True, "default": ""},
+            "next_action": {"required": False, "allow_blank": True, "default": ""},
+        }
 
     def validate_stage(self, value):
         terminal_stages = {
@@ -167,6 +172,34 @@ class DirectOpportunityDetailSerializer(DirectOpportunityListSerializer):
             "created_by",
         ]
         read_only_fields = DirectOpportunityListSerializer.Meta.read_only_fields + ["created_by"]
+        extra_kwargs = {
+            **DirectOpportunityListSerializer.Meta.extra_kwargs,
+            "description": {"required": False, "allow_blank": True},
+            "city": {"required": False, "allow_blank": True},
+            "domain": {"required": False, "allow_blank": True},
+            "province": {"required": False, "allow_blank": True},
+            "source_text": {"required": False, "allow_blank": True},
+        }
+
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+        if self.instance is not None:
+            return attrs
+        meaningful_fields = (
+            "title",
+            "employer_name",
+            "description",
+            "domain",
+            "province",
+            "city",
+            "source_text",
+            "next_action",
+        )
+        if not any(str(attrs.get(field, "")).strip() for field in meaningful_fields):
+            raise serializers.ValidationError(
+                {"detail": "برای ثبت اولیه، واردکردن حداقل یک اطلاعات معنادار الزامی است."}
+            )
+        return attrs
 
     def create(self, validated_data):
         contacts = validated_data.pop("contacts", [])
