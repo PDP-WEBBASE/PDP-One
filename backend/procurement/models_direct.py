@@ -40,6 +40,7 @@ class DirectOpportunity(TimestampedModel):
         REVIEWING = "reviewing", "در حال بررسی"
         FOLLOWING_UP = "following_up", "در حال پیگیری"
         NEGOTIATING = "negotiating", "در حال مذاکره"
+        SELECTED = "selected", "منتخب"
         PREPARING = "preparing", "در دست تهیه پیشنهاد"
         SUBMITTED = "submitted", "پیشنهاد ارسال‌شده"
         WON = "won", "موفق"
