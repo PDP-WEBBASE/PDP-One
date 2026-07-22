@@ -5,7 +5,7 @@ from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
 from django.utils import timezone
 
-from procurement.models import NoticeSourceLink, ProcurementConnector, ProcurementNotice, SourceNotice
+from procurement.models import NoticeSourceLink, ProcurementConnector, SourceNotice
 from procurement.models_extraction import ExtractionRun, ExtractionRunItem
 from procurement.tasks import run_extraction
 
@@ -17,9 +17,31 @@ class Command(BaseCommand):
     )
 
     def add_arguments(self, parser):
-        parser.add_argument("--run-id", required=True)
+        parser.add_argument("--run-id", default="")
         parser.add_argument("--pages", type=int, default=5)
         parser.add_argument("--report", default="")
+
+    def _find_previous_run(self, connector: ProcurementConnector, run_id: str) -> ExtractionRun:
+        if run_id:
+            try:
+                return ExtractionRun.objects.get(pk=run_id)
+            except ExtractionRun.DoesNotExist as exc:
+                raise CommandError("The previous controlled test run was not found.") from exc
+
+        candidates = (
+            ExtractionRun.objects.filter(connectors=connector)
+            .prefetch_related("connectors")
+            .order_by("-created_at")[:25]
+        )
+        for candidate in candidates:
+            summary = candidate.summary or {}
+            requested = summary.get("requested_connector_keys") or []
+            if summary.get("controlled_live_test") and "parsnamad_tenders" in requested:
+                if not summary.get("parsnamad_tender_cleanup"):
+                    return candidate
+        raise CommandError(
+            "No unrepaired controlled Pars Namad tender test run was found."
+        )
 
     @transaction.atomic
     def _cleanup(self, run: ExtractionRun, connector: ProcurementConnector) -> dict:
@@ -99,14 +121,11 @@ class Command(BaseCommand):
         if pages < 1 or pages > 10:
             raise CommandError("--pages must be between 1 and 10.")
 
-        try:
-            previous_run = ExtractionRun.objects.get(pk=options["run_id"])
-        except ExtractionRun.DoesNotExist as exc:
-            raise CommandError("The previous controlled test run was not found.") from exc
-
         connector = ProcurementConnector.objects.select_related("source").get(
             key="parsnamad_tenders"
         )
+        previous_run = self._find_previous_run(connector, options["run_id"].strip())
+
         connector.enabled = True
         connector.status = ProcurementConnector.Status.ACTIVE
         connector.list_url_template = "https://www.parsnamaddata.com/tender/page-{page}"
@@ -175,7 +194,9 @@ class Command(BaseCommand):
                 "key": connector.key,
                 "url_template": connector.list_url_template,
                 "parser_version": connector.parser_version,
-                "summary": (retest.summary.get("connectors") or {}).get(connector.key, {}),
+                "summary": (retest.summary.get("connectors") or {}).get(
+                    connector.key, {}
+                ),
                 "sample_records": samples,
                 "errors": errors,
             },
