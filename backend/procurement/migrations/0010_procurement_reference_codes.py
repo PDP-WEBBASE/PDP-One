@@ -8,6 +8,18 @@ PREFIX_BY_KIND = {
     "direct": "DIR",
 }
 
+DIRECT_CODE_STAGES = [
+    "selected",
+    "preparing",
+    "submitted",
+    "won",
+    "lost",
+    "stopped",
+    "deferred",
+    "converted_to_notice",
+    "converted_to_contract",
+]
+
 
 def seed_reference_codes(apps, schema_editor):
     Sequence = apps.get_model("procurement", "ProcurementReferenceSequence")
@@ -17,7 +29,8 @@ def seed_reference_codes(apps, schema_editor):
 
     counters = {"tender": 10000, "inquiry": 10000, "direct": 10000}
 
-    for notice in Notice.objects.order_by("created_at", "id").iterator():
+    selected_notices = Notice.objects.filter(case__isnull=False).order_by("case__created_at", "id")
+    for notice in selected_notices.iterator():
         kind = notice.resolved_notice_type
         value = counters[kind]
         Reference.objects.create(
@@ -27,7 +40,8 @@ def seed_reference_codes(apps, schema_editor):
         )
         counters[kind] = value + 1
 
-    for opportunity in Direct.objects.order_by("created_at", "id").iterator():
+    selected_direct = Direct.objects.filter(stage__in=DIRECT_CODE_STAGES).order_by("created_at", "id")
+    for opportunity in selected_direct.iterator():
         value = counters["direct"]
         Reference.objects.create(
             code=f"DIR-{value}",
