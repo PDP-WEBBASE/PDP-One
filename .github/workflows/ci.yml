@@ -156,6 +156,32 @@ jobs:
           path: hezareh-parsnamad-live-test-package
           if-no-files-found: error
           retention-days: 7
+      - name: Build Pars Namad tender repair and retest package
+        if: github.event_name == 'pull_request' && success()
+        shell: bash
+        run: |
+          mkdir -p parsnamad-tender-repair-package
+          git archive --format=zip --output="parsnamad-tender-repair-package/PDP-One-ParsNamad-Tender-Repair-Source-${{ github.event.pull_request.head.sha }}.zip" HEAD
+          cat > parsnamad-tender-repair-package/README-PARSNAMAD-TENDER-REPAIR.txt <<'EOF'
+          PDP One - Pars Namad tender repair and five-page retest
+
+          1. Extract the source ZIP to a new folder.
+          2. Start Rancher Desktop and wait for Docker to become ready.
+          3. Double-click REPAIR-RETEST-PARSNAMAD-TENDERS.bat.
+          4. A PostgreSQL backup is created before any cleanup.
+          5. Only new, unprotected records from the incorrect controlled test are removed.
+          6. The corrected tender route is tested for five pages.
+          7. Upload only the generated PDP-ONE-PARSNAMAD-TENDER-REPAIR-....zip report.
+             Do not upload the separate database backup.
+          EOF
+      - name: Upload Pars Namad tender repair and retest package
+        if: github.event_name == 'pull_request' && success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pdp-one-parsnamad-tender-repair-${{ github.event.pull_request.head.sha }}
+          path: parsnamad-tender-repair-package
+          if-no-files-found: error
+          retention-days: 7
 
   windows-powershell-51:
     name: Windows PowerShell 5.1 compatibility
