@@ -21,20 +21,21 @@ class ProcurementSeedTests(TestCase):
         self.assertTrue(ProcurementSource.objects.get(key="parsnamad").enabled)
 
         setad = ProcurementSource.objects.get(key="setad")
-        self.assertFalse(setad.enabled)
-        self.assertEqual(setad.status, ProcurementSource.Status.INACTIVE)
+        self.assertTrue(setad.enabled)
+        self.assertEqual(setad.status, ProcurementSource.Status.ACTIVE)
         self.assertEqual(setad.base_url, "https://setadiran.ir")
         self.assertEqual(
             setad.configuration["public_hosts"],
             ["etend.setadiran.ir", "eproc.setadiran.ir"],
         )
+        self.assertEqual(setad.configuration["activation_approved_at"], "2026-07-23")
 
         tenders = ProcurementConnector.objects.get(key="setad_tenders")
         inquiries = ProcurementConnector.objects.get(key="setad_inquiries")
-        self.assertFalse(tenders.enabled)
-        self.assertFalse(inquiries.enabled)
-        self.assertEqual(tenders.status, ProcurementConnector.Status.INACTIVE)
-        self.assertEqual(inquiries.status, ProcurementConnector.Status.INACTIVE)
+        self.assertTrue(tenders.enabled)
+        self.assertTrue(inquiries.enabled)
+        self.assertEqual(tenders.status, ProcurementConnector.Status.ACTIVE)
+        self.assertEqual(inquiries.status, ProcurementConnector.Status.ACTIVE)
         self.assertEqual(tenders.parser_version, "setad-etend-json-v1")
         self.assertEqual(inquiries.parser_version, "setad-eproc-needs-html-v1")
         self.assertFalse(tenders.requires_browser)
