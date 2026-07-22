@@ -48,6 +48,30 @@ jobs:
       - run: npm ci
       - run: npm run lint
       - run: npm test
+      - name: Add procurement preview manifest
+        if: github.event_name == 'pull_request'
+        shell: bash
+        run: |
+          mkdir -p dist/.pdpone-preview
+          cat > dist/.pdpone-preview/manifest.json <<EOF
+          {
+            "repository": "${GITHUB_REPOSITORY}",
+            "commit": "${{ github.event.pull_request.head.sha }}",
+            "pull_request": ${{ github.event.pull_request.number }},
+            "preview_route": "/procurement",
+            "production_changed": false,
+            "database_migrated": false,
+            "deployment_authorized": false
+          }
+          EOF
+      - name: Upload procurement preview artifact
+        if: github.event_name == 'pull_request'
+        uses: actions/upload-artifact@v4
+        with:
+          name: pdp-one-procurement-preview-${{ github.event.pull_request.head.sha }}
+          path: dist
+          if-no-files-found: error
+          retention-days: 7
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
