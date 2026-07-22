@@ -60,7 +60,7 @@ class HezarehParserTests(SimpleTestCase):
 
 
 class ParsNamadParserTests(SimpleTestCase):
-    def test_tender_page_with_inquiry_title_is_marked_for_review(self):
+    def test_tender_page_with_one_inquiry_title_is_marked_for_review(self):
         html = """
         <table><tbody id="search_result_list">
           <tr class="text-center">
@@ -75,7 +75,7 @@ class ParsNamadParserTests(SimpleTestCase):
         """
         page = ParsNamadParser("https://www.parsnamaddata.com", "tender").parse_list(
             html,
-            "https://www.parsnamaddata.com/tenders/page/1",
+            "https://www.parsnamaddata.com/tender/page-1",
         )
         self.assertEqual(len(page.notices), 1)
         notice = page.notices[0]
@@ -83,6 +83,24 @@ class ParsNamadParserTests(SimpleTestCase):
         self.assertEqual(notice.type_resolution_status, "needs_review")
         self.assertTrue(notice.metadata["is_new_on_source"])
         self.assertFalse(notice.metadata["is_special_on_source"])
+
+    def test_dominant_inquiry_page_is_rejected_for_tender_connector(self):
+        rows = []
+        for index in range(1, 5):
+            rows.append(
+                f"""
+                <tr class="text-center">
+                  <th>{index}</th><td></td>
+                  <td><a href="/inquiry/{index}">استعلام خرید کالای {index}</a></td>
+                  <td><a href="/inquiry/{index}">{1000 + index}</a></td>
+                  <td>1405/05/01</td><td></td><td>تهران</td>
+                </tr>
+                """
+            )
+        html = f'<table><tbody id="search_result_list">{"".join(rows)}</tbody></table>'
+        parser = ParsNamadParser("https://www.parsnamaddata.com", "tender")
+        with self.assertRaisesRegex(ValueError, "type mismatch"):
+            parser.parse_list(html, "https://www.parsnamaddata.com/tenders/page/1")
 
     def test_json_ld_detail_is_preferred(self):
         payload = {
