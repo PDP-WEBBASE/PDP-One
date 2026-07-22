@@ -5,6 +5,7 @@ from django.test import TestCase
 from django.utils import timezone
 from rest_framework.test import APIClient
 
+from core.models import AuditEvent
 from procurement.models_direct import DirectOpportunity, OpportunityFollowUp, OpportunityResult
 
 
@@ -42,6 +43,17 @@ class DirectOpportunityApiTests(TestCase):
         self.assertGreaterEqual(opportunity.next_action_due, before + timedelta(hours=23))
         self.assertLessEqual(opportunity.next_action_due, before + timedelta(hours=25))
 
+    def test_opportunity_can_move_to_selected_stage(self):
+        opportunity = self.create_quick_opportunity()
+        response = self.client.patch(
+            f"/api/v1/procurement/direct-opportunities/{opportunity.id}/",
+            {"stage": DirectOpportunity.Stage.SELECTED},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 200)
+        opportunity.refresh_from_db()
+        self.assertEqual(opportunity.stage, DirectOpportunity.Stage.SELECTED)
+
     def test_follow_up_updates_next_action_and_stage(self):
         opportunity = self.create_quick_opportunity()
         next_due = timezone.now() + timedelta(days=3)
@@ -71,6 +83,34 @@ class DirectOpportunityApiTests(TestCase):
         )
         self.assertEqual(response.status_code, 400)
         self.assertIn("stage", response.data)
+
+    def test_soft_delete_requires_reason_and_keeps_database_record(self):
+        opportunity = self.create_quick_opportunity()
+        response = self.client.post(
+            f"/api/v1/procurement/direct-opportunities/{opportunity.id}/soft-delete/",
+            {},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 400)
+
+        response = self.client.post(
+            f"/api/v1/procurement/direct-opportunities/{opportunity.id}/soft-delete/",
+            {"reason": "تصمیم مدیریت"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 200)
+        opportunity.refresh_from_db()
+        self.assertIsNotNone(opportunity.soft_deleted_at)
+        self.assertTrue(DirectOpportunity.objects.filter(pk=opportunity.pk).exists())
+        self.assertFalse(
+            DirectOpportunity.objects.filter(soft_deleted_at__isnull=True, pk=opportunity.pk).exists()
+        )
+        self.assertTrue(
+            AuditEvent.objects.filter(
+                action="procurement.direct_opportunity.soft_delete",
+                target_id=str(opportunity.id),
+            ).exists()
+        )
 
     def test_only_manager_can_register_result(self):
         opportunity = self.create_quick_opportunity()
