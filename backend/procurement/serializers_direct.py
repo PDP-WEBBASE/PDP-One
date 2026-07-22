@@ -12,16 +12,8 @@ class OpportunityContactSerializer(serializers.ModelSerializer):
     class Meta:
         model = OpportunityContact
         fields = [
-            "id",
-            "name",
-            "position",
-            "organization",
-            "phone",
-            "email",
-            "how_met",
-            "notes",
-            "created_at",
-            "updated_at",
+            "id", "name", "position", "organization", "phone", "email", "how_met",
+            "notes", "created_at", "updated_at",
         ]
         read_only_fields = ["id", "created_at", "updated_at"]
 
@@ -33,18 +25,9 @@ class OpportunityFollowUpSerializer(serializers.ModelSerializer):
     class Meta:
         model = OpportunityFollowUp
         fields = [
-            "id",
-            "opportunity",
-            "follow_up_type",
-            "follow_up_type_label",
-            "occurred_at",
-            "summary",
-            "next_action",
-            "next_action_due",
-            "created_by",
-            "created_by_username",
-            "created_at",
-            "updated_at",
+            "id", "opportunity", "follow_up_type", "follow_up_type_label", "occurred_at",
+            "summary", "next_action", "next_action_due", "created_by",
+            "created_by_username", "created_at", "updated_at",
         ]
         read_only_fields = ["id", "created_by", "created_at", "updated_at"]
 
@@ -56,18 +39,8 @@ class OpportunityResultSerializer(serializers.ModelSerializer):
     class Meta:
         model = OpportunityResult
         fields = [
-            "id",
-            "opportunity",
-            "outcome",
-            "outcome_label",
-            "result_date",
-            "reason",
-            "notes",
-            "contract",
-            "created_by",
-            "created_by_username",
-            "created_at",
-            "updated_at",
+            "id", "opportunity", "outcome", "outcome_label", "result_date", "reason",
+            "notes", "contract", "created_by", "created_by_username", "created_at", "updated_at",
         ]
         read_only_fields = ["id", "created_by", "created_at", "updated_at"]
 
@@ -86,6 +59,7 @@ class OpportunityResultSerializer(serializers.ModelSerializer):
 
 
 class DirectOpportunityListSerializer(serializers.ModelSerializer):
+    reference_code = serializers.CharField(source="reference_record.code", read_only=True)
     opportunity_type_label = serializers.CharField(source="get_opportunity_type_display", read_only=True)
     stage_label = serializers.CharField(source="get_stage_display", read_only=True)
     probability_label = serializers.CharField(source="get_probability_display", read_only=True)
@@ -95,33 +69,14 @@ class DirectOpportunityListSerializer(serializers.ModelSerializer):
     class Meta:
         model = DirectOpportunity
         fields = [
-            "id",
-            "title",
-            "employer_name",
-            "opportunity_type",
-            "opportunity_type_label",
-            "stage",
-            "stage_label",
-            "responsible",
-            "responsible_username",
-            "next_action",
-            "next_action_due",
-            "domain",
-            "province",
-            "probability",
-            "probability_label",
-            "probability_percent",
-            "last_activity_at",
-            "follow_up_count",
-            "created_at",
-            "updated_at",
+            "id", "reference_code", "title", "employer_name", "opportunity_type",
+            "opportunity_type_label", "stage", "stage_label", "responsible",
+            "responsible_username", "next_action", "next_action_due", "domain", "province",
+            "probability", "probability_label", "probability_percent", "last_activity_at",
+            "follow_up_count", "created_at", "updated_at",
         ]
         read_only_fields = [
-            "id",
-            "last_activity_at",
-            "follow_up_count",
-            "created_at",
-            "updated_at",
+            "id", "reference_code", "last_activity_at", "follow_up_count", "created_at", "updated_at",
         ]
         extra_kwargs = {
             "title": {"required": False, "allow_blank": True, "default": ""},
@@ -145,11 +100,8 @@ class DirectOpportunityListSerializer(serializers.ModelSerializer):
 
 class DirectOpportunityDetailSerializer(DirectOpportunityListSerializer):
     contact_ids = serializers.PrimaryKeyRelatedField(
-        source="contacts",
-        many=True,
-        queryset=OpportunityContact.objects.all(),
-        required=False,
-        write_only=True,
+        source="contacts", many=True, queryset=OpportunityContact.objects.all(),
+        required=False, write_only=True,
     )
     contacts = OpportunityContactSerializer(many=True, read_only=True)
     primary_contact_detail = OpportunityContactSerializer(source="primary_contact", read_only=True)
@@ -158,18 +110,9 @@ class DirectOpportunityDetailSerializer(DirectOpportunityListSerializer):
 
     class Meta(DirectOpportunityListSerializer.Meta):
         fields = DirectOpportunityListSerializer.Meta.fields + [
-            "description",
-            "city",
-            "estimated_value_rials",
-            "confidentiality",
-            "source_text",
-            "primary_contact",
-            "primary_contact_detail",
-            "contact_ids",
-            "contacts",
-            "follow_ups",
-            "result",
-            "created_by",
+            "description", "city", "estimated_value_rials", "confidentiality", "source_text",
+            "primary_contact", "primary_contact_detail", "contact_ids", "contacts", "follow_ups",
+            "result", "created_by",
         ]
         read_only_fields = DirectOpportunityListSerializer.Meta.read_only_fields + ["created_by"]
         extra_kwargs = {
@@ -186,14 +129,7 @@ class DirectOpportunityDetailSerializer(DirectOpportunityListSerializer):
         if self.instance is not None:
             return attrs
         meaningful_fields = (
-            "title",
-            "employer_name",
-            "description",
-            "domain",
-            "province",
-            "city",
-            "source_text",
-            "next_action",
+            "title", "employer_name", "description", "domain", "province", "city",
         )
         if not any(str(attrs.get(field, "")).strip() for field in meaningful_fields):
             raise serializers.ValidationError(
