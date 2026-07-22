@@ -32,7 +32,10 @@ class DirectOpportunityViewSet(
     mixins.UpdateModelMixin,
     GenericViewSet,
 ):
-    search_fields = ["title", "employer_name", "description", "domain", "province", "city", "next_action"]
+    search_fields = [
+        "reference_record__code", "title", "employer_name", "description",
+        "domain", "province", "city", "next_action",
+    ]
     filterset_fields = ["opportunity_type", "stage", "responsible", "province", "probability", "confidentiality"]
     ordering_fields = ["next_action_due", "last_activity_at", "created_at", "updated_at", "probability_percent"]
     ordering = ["next_action_due", "-last_activity_at"]
@@ -40,7 +43,10 @@ class DirectOpportunityViewSet(
     def get_queryset(self):
         return (
             DirectOpportunity.objects.filter(soft_deleted_at__isnull=True)
-            .select_related("responsible", "created_by", "primary_contact", "result", "result__contract")
+            .select_related(
+                "responsible", "created_by", "primary_contact", "result", "result__contract",
+                "reference_record",
+            )
             .prefetch_related("contacts", "follow_ups__created_by")
             .annotate(follow_up_count=Count("follow_ups"))
         )
@@ -63,6 +69,7 @@ class DirectOpportunityViewSet(
             target_type="direct_opportunity",
             target_id=str(opportunity.id),
             payload={
+                "reference_code": opportunity.reference_record.code,
                 "title": opportunity.title,
                 "employer_name": opportunity.employer_name,
                 "stage": opportunity.stage,
@@ -139,13 +146,7 @@ class OpportunityFollowUpViewSet(
         if opportunity.stage in {DirectOpportunity.Stage.NEW, DirectOpportunity.Stage.REVIEWING}:
             opportunity.stage = DirectOpportunity.Stage.FOLLOWING_UP
         opportunity.save(
-            update_fields=[
-                "last_activity_at",
-                "next_action",
-                "next_action_due",
-                "stage",
-                "updated_at",
-            ]
+            update_fields=["last_activity_at", "next_action", "next_action_due", "stage", "updated_at"]
         )
         AuditEvent.objects.create(
             actor=self.request.user.username,
