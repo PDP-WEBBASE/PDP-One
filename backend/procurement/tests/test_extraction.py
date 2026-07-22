@@ -1,4 +1,4 @@
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from django.contrib.auth import get_user_model
 from django.test import TestCase
@@ -50,7 +50,7 @@ class ExtractionRunApiTests(TestCase):
         self.assertEqual(list(run.connectors.values_list("key", flat=True)), ["hezareh_tenders"])
         delay.assert_called_once_with(str(run.id))
 
-    def test_disabled_pending_connector_is_rejected(self):
+    def test_disabled_connector_is_rejected(self):
         self.client.force_authenticate(self.manager)
         setad = ProcurementConnector.objects.get(key="setad_tenders")
         response = self.client.post(
@@ -104,7 +104,9 @@ class ExtractionTaskTests(TestCase):
                 text=empty_html.decode("utf-8"),
             ),
         ]
-        with patch("procurement.tasks.fetch_public_html", side_effect=responses):
+        fake_fetcher = Mock()
+        fake_fetcher.fetch_list.side_effect = responses
+        with patch("procurement.tasks.fetcher_for", return_value=fake_fetcher):
             result = run_extraction(str(run.id))
 
         run.refresh_from_db()
@@ -114,6 +116,7 @@ class ExtractionTaskTests(TestCase):
         self.assertEqual(run.records_new, 1)
         self.assertEqual(ProcurementNotice.objects.count(), 1)
         self.assertEqual(result["status"], ExtractionRun.Status.SUCCEEDED_WITH_WARNINGS)
+        self.assertEqual(fake_fetcher.fetch_list.call_count, 2)
 
     def test_task_cancels_when_all_selected_connectors_are_disabled(self):
         connector = ProcurementConnector.objects.get(key="setad_tenders")
