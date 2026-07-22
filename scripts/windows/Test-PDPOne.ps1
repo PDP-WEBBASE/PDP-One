@@ -57,9 +57,9 @@ foreach ($service in @("worker", "beat", "mcp")) {
     if ($state -ne "running") { throw "$service is not running." }
 }
 
-$local = Invoke-PDPOneHealthRequest -Url "http://127.0.0.1:8080/healthz" -ExpectedPattern '(?i)(PDP One ready|healthy|ready|ok)'
+$null = Invoke-PDPOneHealthRequest -Url "http://127.0.0.1:8080/healthz" -ExpectedPattern '(?i)(PDP One ready|healthy|ready|ok)'
 $apiToken = Get-PDPOneEnvValue $envPath "PDP_MCP_TOKEN"
-$api = Invoke-PDPOneHealthRequest -Url "http://127.0.0.1:8080/api/v1/system-status/" -Headers @{ Authorization = "Bearer $apiToken" } -ExpectedPattern '(?i)database'
+$null = Invoke-PDPOneHealthRequest -Url "http://127.0.0.1:8080/api/v1/system-status/" -Headers @{ Authorization = "Bearer $apiToken" } -ExpectedPattern '(?i)database'
 
 & docker compose exec -T mcp python -c "import socket; s=socket.create_connection(('127.0.0.1',8010),5); s.close()" *> $null
 if ($LASTEXITCODE -ne 0) { throw "MCP service did not accept a local connection." }
@@ -72,10 +72,12 @@ if ($tailscaleStatus -notmatch '"BackendState"\s*:\s*"Running"') { throw "Tailsc
 $funnelStatus = (& docker compose --profile tunnel exec -T tailscale tailscale --socket=/tmp/tailscaled.sock funnel status 2>$null | Out-String)
 if ($funnelStatus -notmatch '(?i)Funnel on|Available on the internet|proxy http://127\.0\.0\.1:80') { throw "Tailscale Funnel health failed." }
 
+$publicHealth = $null
 if (-not $SkipPublicCheck) {
     $publicBase = Get-PDPOneEnvValue $envPath "PDP_PUBLIC_BASE_URL"
     if (-not $publicBase) { throw "PDP_PUBLIC_BASE_URL is missing; run CONNECT-CHATGPT.bat once." }
-    $public = Invoke-PDPOneHealthRequest -Url "$($publicBase.TrimEnd('/'))/healthz" -ExpectedPattern '(?i)(PDP One ready|healthy|ready|ok)' -Attempts 12
+    $publicHealth = Test-PDPOnePublicHealth -Url "$($publicBase.TrimEnd('/'))/healthz" -ExpectedPattern 'PDP One ready' -TimeoutSeconds 35
+    if (-not $publicHealth.Success) { throw "Public health check failed: $($publicHealth.Detail)" }
 }
 
 $report = [ordered]@{
@@ -85,9 +87,11 @@ $report = [ordered]@{
     persisted_counts = $counts.Trim()
     token_continuity = $true
     public_check = (-not $SkipPublicCheck)
+    public_health_method = $(if ($null -ne $publicHealth) { $publicHealth.Method } else { "skipped" })
+    local_dns_degraded = $(if ($null -ne $publicHealth) { [bool]$publicHealth.LocalDnsDegraded } else { $false })
     chatgpt_tool_check = $(if ($SkipChatGPTToolCheck) { "deferred-to-connected-app" } else { "requires-connected-app-observation" })
 }
 $reportDir = Join-Path $ProjectRoot "work\reports"
 New-Item -ItemType Directory -Force -Path $reportDir | Out-Null
-$report | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $reportDir "health-latest.json") -Encoding UTF8
+Write-PDPOneJsonFile -Path (Join-Path $reportDir "health-latest.json") -Value $report
 Write-Host "All locally verifiable PDP One health layers are healthy. ChatGPT tool health is reported separately through the connected app." -ForegroundColor Green
