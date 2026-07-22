@@ -59,7 +59,7 @@ class OpportunityResultSerializer(serializers.ModelSerializer):
 
 
 class DirectOpportunityListSerializer(serializers.ModelSerializer):
-    reference_code = serializers.CharField(source="reference_record.code", read_only=True)
+    reference_code = serializers.SerializerMethodField()
     opportunity_type_label = serializers.CharField(source="get_opportunity_type_display", read_only=True)
     stage_label = serializers.CharField(source="get_stage_display", read_only=True)
     probability_label = serializers.CharField(source="get_probability_display", read_only=True)
@@ -83,6 +83,12 @@ class DirectOpportunityListSerializer(serializers.ModelSerializer):
             "employer_name": {"required": False, "allow_blank": True, "default": ""},
             "next_action": {"required": False, "allow_blank": True, "default": ""},
         }
+
+    def get_reference_code(self, obj):
+        try:
+            return obj.reference_record.code
+        except AttributeError:
+            return None
 
     def validate_stage(self, value):
         terminal_stages = {
