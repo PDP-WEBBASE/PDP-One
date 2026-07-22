@@ -1,3 +1,5 @@
+from datetime import datetime, time, timedelta
+
 from django.db.models import Count, Q
 from django.utils import timezone
 from rest_framework import mixins, viewsets
@@ -159,9 +161,25 @@ class ProcurementConnectorViewSet(
         )
 
 
+def _daily_notice_stats(notices, start_at, end_at):
+    period = notices.filter(first_seen_at__gte=start_at, first_seen_at__lt=end_at)
+    return {
+        "total": period.count(),
+        "tenders": period.filter(resolved_notice_type=ProcurementNotice.NoticeType.TENDER).count(),
+        "inquiries": period.filter(resolved_notice_type=ProcurementNotice.NoticeType.INQUIRY).count(),
+        "recommended": period.filter(is_recommended=True).count(),
+    }
+
+
 @api_view(["GET"])
 def procurement_dashboard(request):
     now = timezone.now()
+    current_timezone = timezone.get_current_timezone()
+    today = timezone.localdate(now)
+    today_start = timezone.make_aware(datetime.combine(today, time.min), current_timezone)
+    tomorrow_start = today_start + timedelta(days=1)
+    yesterday_start = today_start - timedelta(days=1)
+
     notices = ProcurementNotice.objects.filter(soft_deleted_at__isnull=True)
     cases = ProcurementCase.objects.select_related("notice")
     active_cases = cases.exclude(
@@ -185,6 +203,10 @@ def procurement_dashboard(request):
     )
     return Response(
         {
+            "daily_notices": {
+                "today": _daily_notice_stats(notices, today_start, tomorrow_start),
+                "yesterday": _daily_notice_stats(notices, yesterday_start, today_start),
+            },
             "notices": {
                 "total": notices.count(),
                 "tenders": notices.filter(resolved_notice_type=ProcurementNotice.NoticeType.TENDER).count(),
