@@ -64,8 +64,17 @@ $null = Invoke-PDPOneHealthRequest -Url "http://127.0.0.1:8080/api/v1/system-sta
 & docker compose exec -T mcp python -c "import socket; s=socket.create_connection(('127.0.0.1',8010),5); s.close()" *> $null
 if ($LASTEXITCODE -ne 0) { throw "MCP service did not accept a local connection." }
 
-$counts = & docker compose exec -T backend python manage.py shell -c "from core.models import Contract,Receivable; print(str(Contract.objects.count())+','+str(Receivable.objects.count()))"
-if ($LASTEXITCODE -ne 0 -or $counts -notmatch '\d+,\d+') { throw "Persisted sample-data check failed." }
+# Django's shell may print informational lines before the requested value.
+# Parse one exact count line instead of applying -notmatch to an output array,
+# because array comparison returns every non-matching line and can become truthy.
+$countLines = @(& docker compose exec -T backend python manage.py shell -c "from core.models import Contract,Receivable; print(str(Contract.objects.count())+','+str(Receivable.objects.count()))" 2>&1)
+$countExitCode = $LASTEXITCODE
+$countText = ($countLines | Out-String)
+$countMatch = [regex]::Match($countText, '(?m)^\s*(\d+),(\d+)\s*$')
+if ($countExitCode -ne 0 -or -not $countMatch.Success) {
+    throw "Persisted sample-data check failed. Command exit code: $countExitCode."
+}
+$countSummary = $countMatch.Value.Trim()
 
 $tailscaleStatus = (& docker compose --profile tunnel exec -T tailscale tailscale --socket=/tmp/tailscaled.sock status --json 2>$null | Out-String)
 if ($tailscaleStatus -notmatch '"BackendState"\s*:\s*"Running"') { throw "Tailscale health failed." }
@@ -84,7 +93,7 @@ $report = [ordered]@{
     checked_at = (Get-Date).ToUniversalTime().ToString("o")
     status = "healthy"
     services = $required
-    persisted_counts = $counts.Trim()
+    persisted_counts = $countSummary
     token_continuity = $true
     public_check = (-not $SkipPublicCheck)
     public_health_method = $(if ($null -ne $publicHealth) { $publicHealth.Method } else { "skipped" })
