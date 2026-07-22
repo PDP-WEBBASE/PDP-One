@@ -131,4 +131,4 @@ class ProcurementNoticeApiTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.data["notices"]["total"], 2)
         self.assertEqual(response.data["cases"]["active"], 1)
-        self.assertEqual(response.data["sources"]["enabled_connectors"], 4)
+        self.assertEqual(response.data["sources"]["enabled_connectors"], 6)
