@@ -6,7 +6,8 @@ from celery import shared_task
 from django.utils import timezone
 
 from procurement.connectors import parser_for
-from procurement.http import SourceFetchError, fetch_public_html
+from procurement.connectors.fetchers import fetcher_for
+from procurement.http import SourceFetchError
 from procurement.ingestion import ingest_parsed_notice
 from procurement.models import ProcurementConnector, ProcurementSource
 from procurement.models_extraction import (
@@ -34,6 +35,7 @@ def _execute_connector(run: ExtractionRun, connector: ProcurementConnector) -> d
     source = connector.source
     allowed_host = urlparse(source.base_url).hostname or ""
     parser = parser_for(connector.key, source.base_url, connector.notice_type)
+    fetcher = fetcher_for(connector, allowed_host=allowed_host)
     page_cap = min(run.page_cap or connector.max_pages, connector.max_pages)
     summary = {
         "status": "succeeded",
@@ -49,12 +51,7 @@ def _execute_connector(run: ExtractionRun, connector: ProcurementConnector) -> d
     for page_number in range(1, page_cap + 1):
         page_url = connector.list_url_template.format(page=page_number)
         try:
-            fetched = fetch_public_html(
-                page_url,
-                allowed_host=allowed_host,
-                timeout_seconds=connector.timeout_seconds,
-                retry_count=connector.retry_count,
-            )
+            fetched = fetcher.fetch_list(page_number, page_url)
         except SourceFetchError as exc:
             ExtractionPage.objects.create(
                 run=run,
@@ -139,12 +136,7 @@ def _execute_connector(run: ExtractionRun, connector: ProcurementConnector) -> d
             detail = None
             if run.include_details and connector.supports_detail and parsed.detail_url:
                 try:
-                    detail_page = fetch_public_html(
-                        parsed.detail_url,
-                        allowed_host=allowed_host,
-                        timeout_seconds=connector.timeout_seconds,
-                        retry_count=connector.retry_count,
-                    )
+                    detail_page = fetcher.fetch_detail(parsed.detail_url)
                     detail = parser.parse_detail(detail_page.text)
                     if detail.get("detail_status") == "security_challenge":
                         summary["warnings"] += 1
