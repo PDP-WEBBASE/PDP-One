@@ -106,6 +106,32 @@ It removes MCP path tokens, API tokens, passwords, authorization values and secr
 
 After the one-time connector configuration exists, `CONNECT-CHATGPT.bat` now uses stable startup and repair instead of repeating first-time connector setup. It does not rotate tokens or change Windows DNS.
 
+## First manual update incident and corrective repair
+
+The first emergency update from commit `19570a0f935f1625a02401f56bcc3c94f550ce4d` copied and started the new services, and the public MCP route became reachable. The updater then reported failure because three independent failure-path defects were exposed on real Windows PowerShell 5.1:
+
+1. `manage.py shell` emitted an informational line before `9,2`. Applying `-notmatch` directly to the output array returned the non-matching informational line and caused a false persisted-data failure.
+2. `-RestoreDatabase:$migrationAttempted` was forwarded to a child `powershell.exe`; Windows PowerShell 5.1 treated the Boolean expression as text and could not bind it to a switch.
+3. the manual deployment ID was empty, so forwarding `-DeploymentId $DeploymentId` produced a parameter with no argument and prevented Diagnostic generation.
+
+Corrective changes:
+
+- the Django output is converted to one text block and an exact `digits,digits` line is parsed;
+- the rollback switch is appended as a standalone argument only when database restoration is required;
+- manual diagnostics always receive non-empty safe identifiers;
+- native Windows PowerShell 5.1 regression tests cover all three cases.
+
+Confirmed after the failed updater window:
+
+- ChatGPT MCP access returned;
+- database status: connected;
+- contracts: 9;
+- receivables: 2;
+- deployment agent: configured and queue available;
+- no data-loss evidence was observed.
+
+The update was not marked successful because the updater's final state and Scheduled Task registration were not completed. A corrected guarded deployment is still required.
+
 ## Data and security impact
 
 Not changed:
