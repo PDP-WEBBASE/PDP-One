@@ -10,12 +10,14 @@ def configure_setad(apps, schema_editor):
         defaults={
             "name": "ستاد ایران",
             "base_url": "https://setadiran.ir",
-            "enabled": False,
-            "status": "inactive",
+            "enabled": True,
+            "status": "active",
             "configuration": {
                 "public_hosts": ["etend.setadiran.ir", "eproc.setadiran.ir"],
                 "source_analysis_completed_at": "2026-07-22",
+                "activation_approved_at": "2026-07-23",
                 "details_policy": "public-list-only; no captcha bypass",
+                "automatic_extraction_requires_global_schedule": True,
             },
         },
     )
@@ -25,8 +27,8 @@ def configure_setad(apps, schema_editor):
         defaults={
             "source": source,
             "notice_type": "tender",
-            "enabled": False,
-            "status": "inactive",
+            "enabled": True,
+            "status": "active",
             "list_url_template": (
                 "https://etend.setadiran.ir/etend/"
                 "callMainPageCartable-anonymous.action?page={page}"
@@ -46,8 +48,8 @@ def configure_setad(apps, schema_editor):
         defaults={
             "source": source,
             "notice_type": "inquiry",
-            "enabled": False,
-            "status": "inactive",
+            "enabled": True,
+            "status": "active",
             "list_url_template": "https://eproc.setadiran.ir/eproc/needs.do?page={page}",
             "parser_version": "setad-eproc-needs-html-v1",
             "supports_detail": False,
