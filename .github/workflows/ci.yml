@@ -73,16 +73,17 @@ jobs:
     name: Temporary migration diagnostic
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.13"
-          cache: pip
-      - run: pip install -r backend/requirements.txt
       - name: Print proposed migration operations
         env:
-          DJANGO_SETTINGS_MODULE: config.settings_test
-        run: python backend/manage.py makemigrations --dry-run --verbosity 3
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_HEAD_REF: ${{ github.head_ref }}
+        shell: bash
+        run: |
+          branch="${GITHUB_HEAD_REF:-main}"
+          git clone --quiet --depth 1 --branch "$branch" "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" repo
+          python3 -m pip install --quiet --disable-pip-version-check -r repo/backend/requirements.txt
+          cd repo
+          DJANGO_SETTINGS_MODULE=config.settings_test python3 backend/manage.py makemigrations --dry-run --verbosity 3
 
   windows-powershell-51:
     name: Windows PowerShell 5.1 compatibility
