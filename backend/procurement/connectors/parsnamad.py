@@ -1,4 +1,5 @@
 import json
+import math
 from typing import Any
 
 from bs4 import BeautifulSoup
@@ -18,6 +19,8 @@ class ParsNamadParser:
         soup = BeautifulSoup(html, "html.parser")
         notices: list[ParsedNotice] = []
         warnings: list[str] = []
+        detected_counts = {"tender": 0, "inquiry": 0}
+
         for position, row in enumerate(soup.select(self.row_selector), start=1):
             cells = row.find_all(["td", "th"], recursive=False)
             if len(cells) < 7:
@@ -25,21 +28,43 @@ class ParsNamadParser:
                 continue
             title_link = cells[2].select_one("a[href]")
             code_link = cells[3].select_one("a[href]")
-            title = normalize_text(title_link.get_text(" ", strip=True) if title_link else cells[2].get_text(" ", strip=True))
-            source_record_id = normalize_text(code_link.get_text(" ", strip=True) if code_link else cells[3].get_text(" ", strip=True))
+            title = normalize_text(
+                title_link.get_text(" ", strip=True)
+                if title_link
+                else cells[2].get_text(" ", strip=True)
+            )
+            source_record_id = normalize_text(
+                code_link.get_text(" ", strip=True)
+                if code_link
+                else cells[3].get_text(" ", strip=True)
+            )
             if not source_record_id or not title:
                 warnings.append(f"row-{position}: missing source id or title")
                 continue
-            detail_href = title_link.get("href") if title_link else (code_link.get("href") if code_link else "")
+            detail_href = (
+                title_link.get("href")
+                if title_link
+                else (code_link.get("href") if code_link else "")
+            )
             detail_url = absolute_url(self.base_url, detail_href)
             published_raw = normalize_text(cells[4].get_text(" ", strip=True))
             province = normalize_text(cells[6].get_text(" ", strip=True))
-            image_sources = [normalize_text(img.get("src")) for img in cells[5].select("img[src]")]
+            image_sources = [
+                normalize_text(img.get("src")) for img in cells[5].select("img[src]")
+            ]
             is_new = any("new-large" in source for source in image_sources)
             is_old = any("old-large" in source for source in image_sources)
-            is_special = any("special-large" in source and "special-dis" not in source for source in image_sources)
-            has_ladder = any("ladder-large" in source and "ladder-dis" not in source for source in image_sources)
+            is_special = any(
+                "special-large" in source and "special-dis" not in source
+                for source in image_sources
+            )
+            has_ladder = any(
+                "ladder-large" in source and "ladder-dis" not in source
+                for source in image_sources
+            )
             detected, resolution_status = detect_notice_type(title, self.declared_type)
+            if detected in detected_counts:
+                detected_counts[detected] += 1
             raw_payload = {
                 "published_raw": published_raw,
                 "province_raw": province,
@@ -71,6 +96,17 @@ class ParsNamadParser:
                 )
             )
 
+        if notices:
+            opposite_type = "inquiry" if self.declared_type == "tender" else "tender"
+            mismatch_count = detected_counts[opposite_type]
+            mismatch_limit = max(3, math.ceil(len(notices) * 0.8))
+            if mismatch_count >= mismatch_limit:
+                raise ValueError(
+                    "Pars Namad page type mismatch: "
+                    f"connector={self.declared_type}, detected={opposite_type}, "
+                    f"mismatch_count={mismatch_count}, total={len(notices)}"
+                )
+
         next_page_urls = []
         seen = set()
         for anchor in soup.select("ul.pagination a[href], a.page-link[href]"):
@@ -87,8 +123,14 @@ class ParsNamadParser:
         event = self._event_json_ld(soup)
         if not event:
             return {"detail_status": "failed"}
-        address = event.get("location", {}).get("address", {}) if isinstance(event.get("location"), dict) else {}
-        province = normalize_text(address.get("streetAddrees") or address.get("streetAddress") or "")
+        address = (
+            event.get("location", {}).get("address", {})
+            if isinstance(event.get("location"), dict)
+            else {}
+        )
+        province = normalize_text(
+            address.get("streetAddrees") or address.get("streetAddress") or ""
+        )
         if province.endswith(", ایران"):
             province = province[:-7].strip()
         title = normalize_text(event.get("name"))
