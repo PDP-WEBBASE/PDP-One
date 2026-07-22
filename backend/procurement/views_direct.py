@@ -2,7 +2,9 @@ from datetime import timedelta
 
 from django.db.models import Count
 from django.utils import timezone
-from rest_framework import mixins, viewsets
+from rest_framework import mixins, status
+from rest_framework.decorators import action
+from rest_framework.response import Response
 from rest_framework.viewsets import GenericViewSet
 
 from core.models import AuditEvent
@@ -78,6 +80,27 @@ class DirectOpportunityViewSet(
             target_id=str(opportunity.id),
             payload={"stage_before": before_stage, "stage_after": opportunity.stage},
         )
+
+    @action(detail=True, methods=["post"], url_path="soft-delete")
+    def soft_delete(self, request, pk=None):
+        opportunity = self.get_object()
+        reason = str(request.data.get("reason", "")).strip()
+        if not reason:
+            return Response(
+                {"reason": ["برای حذف از فهرست، ثبت دلیل الزامی است."]},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        opportunity.soft_deleted_at = timezone.now()
+        opportunity.last_activity_at = timezone.now()
+        opportunity.save(update_fields=["soft_deleted_at", "last_activity_at", "updated_at"])
+        AuditEvent.objects.create(
+            actor=request.user.username,
+            action="procurement.direct_opportunity.soft_delete",
+            target_type="direct_opportunity",
+            target_id=str(opportunity.id),
+            payload={"reason": reason, "stage": opportunity.stage},
+        )
+        return Response({"deleted": True, "id": str(opportunity.id), "reason": reason})
 
 
 class OpportunityContactViewSet(
