@@ -1,3 +1,6 @@
+import hashlib
+from pathlib import Path
+
 from django.db import transaction
 from django.utils import timezone
 from rest_framework import serializers
@@ -6,6 +9,7 @@ from .analysis_utils import get_active_context, notice_basis_hash
 from .models import ProcurementNotice
 from .models_analysis import (
     AnalysisBatch,
+    AnalysisContextAttachment,
     AnalysisContextSnapshot,
     AnalysisRequest,
     NoticeAnalysisDraft,
@@ -13,9 +17,73 @@ from .models_analysis import (
 from .models_extraction import ExtractionRun
 
 
+class AnalysisContextAttachmentSerializer(serializers.ModelSerializer):
+    category_label = serializers.CharField(source="get_category_display", read_only=True)
+    uploaded_by_username = serializers.CharField(source="uploaded_by.username", read_only=True)
+
+    class Meta:
+        model = AnalysisContextAttachment
+        fields = [
+            "id",
+            "context_snapshot",
+            "category",
+            "category_label",
+            "file",
+            "original_name",
+            "content_type",
+            "size_bytes",
+            "checksum_sha256",
+            "uploaded_by",
+            "uploaded_by_username",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = [
+            "id",
+            "original_name",
+            "content_type",
+            "size_bytes",
+            "checksum_sha256",
+            "uploaded_by",
+            "created_at",
+            "updated_at",
+        ]
+        extra_kwargs = {"file": {"write_only": True}}
+
+    def validate_context_snapshot(self, value):
+        if value.status != AnalysisContextSnapshot.Status.DRAFT:
+            raise serializers.ValidationError("فایل فقط به Snapshot پیش‌نویس قابل پیوست است.")
+        return value
+
+    def validate_file(self, value):
+        allowed = {".txt", ".md", ".pdf", ".doc", ".docx"}
+        suffix = Path(value.name).suffix.lower()
+        if suffix not in allowed:
+            raise serializers.ValidationError("فقط فایل‌های TXT، MD، PDF، DOC و DOCX مجاز هستند.")
+        if value.size > 20 * 1024 * 1024:
+            raise serializers.ValidationError("حداکثر حجم هر فایل ۲۰ مگابایت است.")
+        return value
+
+    def create(self, validated_data):
+        uploaded = validated_data["file"]
+        digest = hashlib.sha256()
+        for chunk in uploaded.chunks():
+            digest.update(chunk)
+        uploaded.seek(0)
+        return AnalysisContextAttachment.objects.create(
+            original_name=Path(uploaded.name).name[:255],
+            content_type=getattr(uploaded, "content_type", "")[:120],
+            size_bytes=uploaded.size,
+            checksum_sha256=digest.hexdigest(),
+            uploaded_by=self.context["request"].user,
+            **validated_data,
+        )
+
+
 class AnalysisContextSnapshotSerializer(serializers.ModelSerializer):
     status_label = serializers.CharField(source="get_status_display", read_only=True)
     activated_by_username = serializers.CharField(source="activated_by.username", read_only=True)
+    attachments = AnalysisContextAttachmentSerializer(many=True, read_only=True)
 
     class Meta:
         model = AnalysisContextSnapshot
@@ -26,6 +94,7 @@ class AnalysisContextSnapshotSerializer(serializers.ModelSerializer):
             "status_label",
             "role_text",
             "base_instructions",
+            "analysis_prompt",
             "tender_prompt",
             "inquiry_prompt",
             "company_profile",
@@ -35,6 +104,7 @@ class AnalysisContextSnapshotSerializer(serializers.ModelSerializer):
             "component_versions",
             "changed_components",
             "content_hash",
+            "attachments",
             "activated_at",
             "activated_by",
             "activated_by_username",
@@ -50,31 +120,17 @@ class AnalysisContextSnapshotSerializer(serializers.ModelSerializer):
             "updated_at",
         ]
 
-    def validate_status(self, value):
-        if value == AnalysisContextSnapshot.Status.ACTIVE:
-            raise serializers.ValidationError(
-                "فعال‌سازی Snapshot فقط از عملیات اختصاصی و Audit‌شده «فعال‌سازی نسخه» مجاز است."
-            )
-        return value
-
     def validate(self, attrs):
-        instance_status = getattr(self.instance, "status", None)
-        if instance_status == AnalysisContextSnapshot.Status.ACTIVE:
-            protected_fields = {
-                "role_text",
-                "base_instructions",
-                "tender_prompt",
-                "inquiry_prompt",
-                "company_profile",
-                "qualifications",
-                "keywords",
-                "experience_summary",
-                "component_versions",
-            }
-            if protected_fields.intersection(attrs):
-                raise serializers.ValidationError(
-                    "نسخه فعال قابل ویرایش مستقیم نیست؛ ابتدا یک Snapshot پیش‌نویس جدید ایجاد کنید."
-                )
+        status_value = attrs.get("status", getattr(self.instance, "status", AnalysisContextSnapshot.Status.DRAFT))
+        if status_value == AnalysisContextSnapshot.Status.ACTIVE:
+            raise serializers.ValidationError({"status": "فعال‌سازی فقط از مسیر اختصاصی و Audit‌شده انجام می‌شود."})
+        prompt = attrs.get("analysis_prompt")
+        if prompt is None:
+            prompt = attrs.get("tender_prompt") or attrs.get("inquiry_prompt")
+        if prompt is not None:
+            attrs["analysis_prompt"] = prompt
+            attrs["tender_prompt"] = prompt
+            attrs["inquiry_prompt"] = prompt
         return attrs
 
 
