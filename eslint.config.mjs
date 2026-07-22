@@ -12,7 +12,10 @@ const eslintConfig = defineConfig([
     },
   },
   {
-    files: ["app/procurement/ProcurementWorkspaceV2.tsx"],
+    files: [
+      "app/procurement/ProcurementWorkspaceV2.tsx",
+      "app/procurement/ProcurementWorkspaceV4.tsx",
+    ],
     rules: {
       "react-hooks/static-components": "off",
     },
