@@ -18,44 +18,16 @@ class ProcurementConnectorSerializer(serializers.ModelSerializer):
     class Meta:
         model = ProcurementConnector
         fields = [
-            "id",
-            "source",
-            "key",
-            "notice_type",
-            "notice_type_label",
-            "enabled",
-            "status",
-            "status_label",
-            "list_url_template",
-            "parser_version",
-            "supports_detail",
-            "requires_browser",
-            "page_size_hint",
-            "max_pages",
-            "timeout_seconds",
-            "retry_count",
-            "overlap_days",
-            "last_success_at",
-            "last_failure_at",
-            "last_successful_page",
-            "created_at",
-            "updated_at",
+            "id", "source", "key", "notice_type", "notice_type_label", "enabled", "status",
+            "status_label", "list_url_template", "parser_version", "supports_detail",
+            "requires_browser", "page_size_hint", "max_pages", "timeout_seconds", "retry_count",
+            "overlap_days", "last_success_at", "last_failure_at", "last_successful_page",
+            "created_at", "updated_at",
         ]
         read_only_fields = [
-            "id",
-            "source",
-            "key",
-            "notice_type",
-            "list_url_template",
-            "parser_version",
-            "supports_detail",
-            "requires_browser",
-            "page_size_hint",
-            "last_success_at",
-            "last_failure_at",
-            "last_successful_page",
-            "created_at",
-            "updated_at",
+            "id", "source", "key", "notice_type", "list_url_template", "parser_version",
+            "supports_detail", "requires_browser", "page_size_hint", "last_success_at",
+            "last_failure_at", "last_successful_page", "created_at", "updated_at",
         ]
 
     def validate_status(self, value):
@@ -71,10 +43,9 @@ class ProcurementConnectorSerializer(serializers.ModelSerializer):
     def update(self, instance, validated_data):
         enabled = validated_data.get("enabled", instance.enabled)
         if "status" not in validated_data:
-            if enabled:
-                if instance.status == ProcurementConnector.Status.INACTIVE:
-                    validated_data["status"] = ProcurementConnector.Status.ACTIVE
-            else:
+            if enabled and instance.status == ProcurementConnector.Status.INACTIVE:
+                validated_data["status"] = ProcurementConnector.Status.ACTIVE
+            elif not enabled:
                 validated_data["status"] = ProcurementConnector.Status.INACTIVE
         return super().update(instance, validated_data)
 
@@ -86,48 +57,25 @@ class ProcurementSourceSerializer(serializers.ModelSerializer):
     class Meta:
         model = ProcurementSource
         fields = [
-            "id",
-            "key",
-            "name",
-            "base_url",
-            "enabled",
-            "status",
-            "status_label",
-            "configuration",
-            "last_success_at",
-            "last_failure_at",
-            "connectors",
-            "created_at",
-            "updated_at",
+            "id", "key", "name", "base_url", "enabled", "status", "status_label",
+            "configuration", "last_success_at", "last_failure_at", "connectors",
+            "created_at", "updated_at",
         ]
         read_only_fields = [
-            "id",
-            "key",
-            "name",
-            "base_url",
-            "configuration",
-            "last_success_at",
-            "last_failure_at",
-            "created_at",
-            "updated_at",
+            "id", "key", "name", "base_url", "configuration", "last_success_at",
+            "last_failure_at", "created_at", "updated_at",
         ]
 
     @transaction.atomic
     def update(self, instance, validated_data):
         enabled = validated_data.get("enabled", instance.enabled)
         if "status" not in validated_data:
-            if enabled:
-                if instance.status == ProcurementSource.Status.INACTIVE:
-                    validated_data["status"] = ProcurementSource.Status.ACTIVE
-            else:
+            if enabled and instance.status == ProcurementSource.Status.INACTIVE:
+                validated_data["status"] = ProcurementSource.Status.ACTIVE
+            elif not enabled:
                 validated_data["status"] = ProcurementSource.Status.INACTIVE
-
         instance = super().update(instance, validated_data)
-        connector_status = (
-            ProcurementConnector.Status.ACTIVE
-            if enabled
-            else ProcurementConnector.Status.INACTIVE
-        )
+        connector_status = ProcurementConnector.Status.ACTIVE if enabled else ProcurementConnector.Status.INACTIVE
         instance.connectors.exclude(status=ProcurementConnector.Status.PENDING).update(
             enabled=enabled,
             status=connector_status,
@@ -143,25 +91,10 @@ class SourceNoticeSerializer(serializers.ModelSerializer):
     class Meta:
         model = SourceNotice
         fields = [
-            "id",
-            "connector",
-            "connector_key",
-            "source_name",
-            "source_record_id",
-            "source_url",
-            "detail_url",
-            "source_declared_type",
-            "title_raw",
-            "employer_raw",
-            "province_raw",
-            "published_at_raw",
-            "deadline_raw",
-            "content_hash",
-            "detail_status",
-            "detail_status_label",
-            "first_seen_at",
-            "last_seen_at",
-            "is_active",
+            "id", "connector", "connector_key", "source_name", "source_record_id",
+            "source_url", "detail_url", "source_declared_type", "title_raw", "employer_raw",
+            "province_raw", "published_at_raw", "deadline_raw", "content_hash", "detail_status",
+            "detail_status_label", "first_seen_at", "last_seen_at", "is_active",
         ]
         read_only_fields = fields
 
@@ -172,47 +105,30 @@ class NoticeSourceLinkSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = NoticeSourceLink
-        fields = [
-            "id",
-            "source_notice",
-            "match_type",
-            "match_type_label",
-            "confidence",
-            "rationale",
-            "created_at",
-        ]
+        fields = ["id", "source_notice", "match_type", "match_type_label", "confidence", "rationale", "created_at"]
         read_only_fields = fields
 
 
 class ProcurementCaseSerializer(serializers.ModelSerializer):
     stage_label = serializers.CharField(source="get_stage_display", read_only=True)
     responsible_username = serializers.CharField(source="responsible.username", read_only=True)
+    submission_document_count = serializers.SerializerMethodField()
 
     class Meta:
         model = ProcurementCase
         fields = [
-            "id",
-            "notice",
-            "stage",
-            "stage_label",
-            "responsible",
-            "responsible_username",
-            "next_action",
-            "next_action_due",
-            "progress",
-            "decision_reason",
-            "protected_from_retention",
-            "created_by",
-            "created_at",
-            "updated_at",
+            "id", "notice", "stage", "stage_label", "responsible", "responsible_username",
+            "next_action", "next_action_due", "progress", "decision_reason",
+            "protected_from_retention", "submission_document_count", "created_by",
+            "created_at", "updated_at",
         ]
         read_only_fields = [
-            "id",
-            "protected_from_retention",
-            "created_by",
-            "created_at",
-            "updated_at",
+            "id", "protected_from_retention", "submission_document_count", "created_by",
+            "created_at", "updated_at",
         ]
+
+    def get_submission_document_count(self, obj):
+        return obj.submission_documents.count()
 
     def validate(self, attrs):
         stage = attrs.get("stage", getattr(self.instance, "stage", ProcurementCase.Stage.SELECTED))
@@ -235,24 +151,10 @@ class ProcurementNoticeListSerializer(serializers.ModelSerializer):
     class Meta:
         model = ProcurementNotice
         fields = [
-            "id",
-            "resolved_notice_type",
-            "notice_type_label",
-            "type_resolution_status",
-            "type_resolution_status_label",
-            "title",
-            "employer_name",
-            "notice_number",
-            "province",
-            "published_date",
-            "submission_deadline",
-            "processing_status",
-            "processing_status_label",
-            "is_recommended",
-            "case_stage",
-            "case_stage_label",
-            "source_count",
-            "first_seen_at",
+            "id", "resolved_notice_type", "notice_type_label", "type_resolution_status",
+            "type_resolution_status_label", "title", "employer_name", "notice_number", "province",
+            "published_date", "submission_deadline", "processing_status", "processing_status_label",
+            "is_recommended", "case_stage", "case_stage_label", "source_count", "first_seen_at",
             "last_seen_at",
         ]
         read_only_fields = fields
@@ -264,19 +166,8 @@ class ProcurementNoticeDetailSerializer(ProcurementNoticeListSerializer):
 
     class Meta(ProcurementNoticeListSerializer.Meta):
         fields = ProcurementNoticeListSerializer.Meta.fields + [
-            "normalized_title",
-            "summary",
-            "description",
-            "conditions",
-            "city",
-            "execution_location",
-            "date_metadata",
-            "estimated_amount_rials",
-            "guarantee_amount_rials",
-            "qualification_text",
-            "contact_text",
-            "is_hidden",
-            "retention_protected",
-            "source_links",
-            "case",
+            "normalized_title", "summary", "description", "conditions", "city",
+            "execution_location", "date_metadata", "estimated_amount_rials",
+            "guarantee_amount_rials", "qualification_text", "contact_text", "is_hidden",
+            "retention_protected", "source_links", "case",
         ]
