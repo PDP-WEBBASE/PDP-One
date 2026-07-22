@@ -141,7 +141,7 @@ class ProcurementCaseSerializer(serializers.ModelSerializer):
 
 
 class ProcurementNoticeListSerializer(serializers.ModelSerializer):
-    reference_code = serializers.CharField(source="reference_record.code", read_only=True)
+    reference_code = serializers.SerializerMethodField()
     notice_type_label = serializers.CharField(source="get_resolved_notice_type_display", read_only=True)
     type_resolution_status_label = serializers.CharField(source="get_type_resolution_status_display", read_only=True)
     processing_status_label = serializers.CharField(source="get_processing_status_display", read_only=True)
@@ -159,6 +159,12 @@ class ProcurementNoticeListSerializer(serializers.ModelSerializer):
             "last_seen_at",
         ]
         read_only_fields = fields
+
+    def get_reference_code(self, obj):
+        try:
+            return obj.reference_record.code
+        except AttributeError:
+            return None
 
 
 class ProcurementNoticeDetailSerializer(ProcurementNoticeListSerializer):
