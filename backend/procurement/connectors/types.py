@@ -34,3 +34,7 @@ class ParsedPage:
     notices: list[ParsedNotice]
     next_page_urls: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
+    reported_current_page: int | None = None
+    reported_total_pages: int | None = None
+    end_of_results: bool | None = None
+    diagnostics: dict[str, Any] = field(default_factory=dict)
