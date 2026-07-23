@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 const developmentPreviewMeta =
@@ -44,20 +45,31 @@ test("renders development preview metadata", async () => {
   assert.match(await response.text(), developmentPreviewMeta);
 });
 
-test("renders independent tender and inquiry controls for extraction sources", async () => {
-  const worker = await loadWorker();
-  const response = await worker.fetch(
-    new Request("http://localhost/procurement", {
-      headers: { accept: "text/html" },
-    }),
-    environment(),
-    executionContext(),
-  );
+test("keeps source controls and extraction health inside management", async () => {
+  const pageSource = await readFile(new URL("../app/procurement/page.tsx", import.meta.url), "utf8");
+  const workspaceSource = await readFile(new URL("../app/procurement/ProcurementWorkspaceV10.tsx", import.meta.url), "utf8");
 
-  assert.equal(response.status, 200);
-  const html = await response.text();
-  assert.match(html, /منابع استخراج/);
-  assert.match(html, /مناقصات و استعلامات هر سایت مستقل هستند/);
-  assert.match(html, /پارس‌نماد داده/);
-  assert.match(html, /همان محتوای استعلامات/);
+  assert.doesNotMatch(pageSource, /ConnectorHealthBanner/);
+  assert.doesNotMatch(pageSource, /ExtractionSourceControls/);
+  assert.match(workspaceSource, /گزارش استخراج/);
+  assert.match(workspaceSource, /<ConnectorHealthBanner embedded/);
+  assert.match(workspaceSource, /<ExtractionSourceControls/);
+  assert.match(workspaceSource, /نقش و Prompt/);
+  assert.match(workspaceSource, /کلیدواژه‌ها/);
+  assert.match(workspaceSource, /پروفایل، صلاحیت و رزومه/);
+  assert.match(workspaceSource, /نسخه‌ها و فعال‌سازی/);
+});
+
+test("preserves approved dashboard and adds only requested list enhancements", async () => {
+  const source = await readFile(new URL("../app/procurement/ProcurementWorkspaceV10.tsx", import.meta.url), "utf8");
+
+  assert.match(source, /قیف مدیریتی/);
+  assert.match(source, /برد و باخت/);
+  assert.match(source, /جمع‌بندی مدیریتی ChatGPT/);
+  assert.match(source, /پرونده‌های فعال/);
+  assert.match(source, /کل مناقصات/);
+  assert.match(source, /کل استعلامات/);
+  assert.match(source, /کل ارجاعات مستقیم/);
+  assert.match(source, /اهمیت/);
+  assert.match(source, /sourceBadgeStyle/);
 });
