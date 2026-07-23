@@ -63,6 +63,7 @@ class DirectOpportunityListSerializer(serializers.ModelSerializer):
     opportunity_type_label = serializers.CharField(source="get_opportunity_type_display", read_only=True)
     stage_label = serializers.CharField(source="get_stage_display", read_only=True)
     probability_label = serializers.CharField(source="get_probability_display", read_only=True)
+    importance_label = serializers.CharField(source="get_importance_display", read_only=True)
     responsible_username = serializers.CharField(source="responsible.username", read_only=True)
     follow_up_count = serializers.IntegerField(read_only=True)
 
@@ -72,8 +73,8 @@ class DirectOpportunityListSerializer(serializers.ModelSerializer):
             "id", "reference_code", "title", "employer_name", "opportunity_type",
             "opportunity_type_label", "stage", "stage_label", "responsible",
             "responsible_username", "next_action", "next_action_due", "domain", "province",
-            "probability", "probability_label", "probability_percent", "last_activity_at",
-            "follow_up_count", "created_at", "updated_at",
+            "probability", "probability_label", "probability_percent", "importance",
+            "importance_label", "last_activity_at", "follow_up_count", "created_at", "updated_at",
         ]
         read_only_fields = [
             "id", "reference_code", "last_activity_at", "follow_up_count", "created_at", "updated_at",
