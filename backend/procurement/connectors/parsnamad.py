@@ -11,7 +11,7 @@ from .base import (
     page_number_from_url,
     pagination_page_numbers,
 )
-from .types import ParsedNotice, ParsedPage
+from .types import PageContentMismatchError, ParsedNotice, ParsedPage
 
 
 class ParsNamadParser:
@@ -107,10 +107,12 @@ class ParsNamadParser:
             mismatch_count = detected_counts[opposite_type]
             mismatch_limit = max(3, math.ceil(len(notices) * 0.8))
             if mismatch_count >= mismatch_limit:
-                raise ValueError(
-                    "Pars Namad page type mismatch: "
-                    f"connector={self.declared_type}, detected={opposite_type}, "
-                    f"mismatch_count={mismatch_count}, total={len(notices)}"
+                raise PageContentMismatchError(
+                    expected_type=self.declared_type,
+                    detected_type=opposite_type,
+                    mismatch_count=mismatch_count,
+                    total_count=len(notices),
+                    source_name="parsnamad",
                 )
 
         next_page_urls = []
