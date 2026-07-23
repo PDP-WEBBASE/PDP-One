@@ -1,5 +1,5 @@
-import ProcurementWorkspaceV11 from "./ProcurementWorkspaceV11";
+import ProcurementWorkspaceV12 from "./ProcurementWorkspaceV12";
 
 export default function ProcurementPage() {
-  return <ProcurementWorkspaceV11 />;
+  return <ProcurementWorkspaceV12 />;
 }
