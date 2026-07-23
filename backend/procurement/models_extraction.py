@@ -28,6 +28,10 @@ class ExtractionRun(TimestampedModel):
         SCHEDULED = "scheduled", "زمان‌بندی‌شده"
         RETRY = "retry", "تلاش مجدد"
 
+    class Mode(models.TextChoices):
+        INCREMENTAL = "incremental", "افزایشی"
+        MANUAL_RANGE = "manual_range", "دستی بازه‌دار"
+
     class Status(models.TextChoices):
         QUEUED = "queued", "در صف"
         RUNNING = "running", "در حال اجرا"
@@ -38,6 +42,8 @@ class ExtractionRun(TimestampedModel):
         CANCELLED = "cancelled", "متوقف‌شده"
 
     trigger = models.CharField(max_length=16, choices=Trigger.choices, default=Trigger.MANUAL)
+    mode = models.CharField(max_length=20, choices=Mode.choices, default=Mode.INCREMENTAL)
+    lookback_days = models.PositiveSmallIntegerField(null=True, blank=True)
     status = models.CharField(max_length=32, choices=Status.choices, default=Status.QUEUED)
     connectors = models.ManyToManyField(ProcurementConnector, related_name="extraction_runs")
     requested_by = models.ForeignKey(
