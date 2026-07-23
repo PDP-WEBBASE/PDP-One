@@ -45,6 +45,17 @@ def _content_retry_settings(source: ProcurementSource) -> tuple[int, int]:
     return max(0, min(retry_count, 3)), max(0, min(retry_delay_ms, 5000))
 
 
+def _list_page_url(connector: ProcurementConnector, page_number: int) -> str:
+    """Resolve list URLs generically, including sources with a special first page."""
+    configuration = connector.source.configuration or {}
+    connector_urls = configuration.get("connector_page_urls") or {}
+    route = connector_urls.get(connector.key) or {}
+    if page_number == 1 and route.get("first_page"):
+        return str(route["first_page"])
+    template = route.get("template") or connector.list_url_template
+    return str(template).format(page=page_number)
+
+
 def _fetch_and_parse_with_content_retries(
     *,
     connector: ProcurementConnector,
@@ -79,7 +90,7 @@ def _fetch_and_parse_with_content_retries(
             try:
                 parsed_page = parser.parse_list(fetched.text, fetched.url)
                 last_parse_error = None
-            except Exception as exc:  # Parser errors are retried with a fresh session.
+            except Exception as exc:
                 last_parse_error = exc
                 attempts.append(
                     {
@@ -110,15 +121,13 @@ def _fetch_and_parse_with_content_retries(
                     }
                 )
                 if parsed_page.notices or parsed_page.end_of_results is True:
-                    return fetched, parsed_page, attempts
+                    return fetched, parsed_page, attempts, fetcher
                 if attempt > retry_count:
-                    return fetched, parsed_page, attempts
+                    return fetched, parsed_page, attempts, fetcher
 
         if attempt <= retry_count:
             if retry_delay_ms:
                 time.sleep(retry_delay_ms / 1000)
-            # A new fetcher creates a fresh cookie/session context where the
-            # connector implementation supports sessions.
             fetcher = fetcher_for(connector, allowed_host=allowed_host)
 
     if last_fetch_error is not None:
@@ -182,9 +191,9 @@ def _execute_connector(run: ExtractionRun, connector: ProcurementConnector) -> d
     previous_record_ids: tuple[str, ...] | None = None
 
     for page_number in range(1, page_cap + 1):
-        page_url = connector.list_url_template.format(page=page_number)
+        page_url = _list_page_url(connector, page_number)
         try:
-            fetched, parsed_page, attempts = _fetch_and_parse_with_content_retries(
+            fetched, parsed_page, attempts, fetcher = _fetch_and_parse_with_content_retries(
                 connector=connector,
                 allowed_host=allowed_host,
                 parser=parser,
