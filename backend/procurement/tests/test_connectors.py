@@ -4,6 +4,7 @@ from django.test import SimpleTestCase
 
 from procurement.connectors.hezareh import HezarehParser
 from procurement.connectors.parsnamad import ParsNamadParser
+from procurement.connectors.types import PageContentMismatchError
 
 
 class HezarehParserTests(SimpleTestCase):
@@ -99,8 +100,16 @@ class ParsNamadParserTests(SimpleTestCase):
             )
         html = f'<table><tbody id="search_result_list">{"".join(rows)}</tbody></table>'
         parser = ParsNamadParser("https://www.parsnamaddata.com", "tender")
-        with self.assertRaisesRegex(ValueError, "type mismatch"):
+        with self.assertRaises(PageContentMismatchError) as captured:
             parser.parse_list(html, "https://www.parsnamaddata.com/tenders/page/1")
+
+        error = captured.exception
+        self.assertEqual(error.category, "validation")
+        self.assertFalse(error.retryable)
+        self.assertEqual(error.expected_type, "tender")
+        self.assertEqual(error.detected_type, "inquiry")
+        self.assertEqual(error.mismatch_count, 4)
+        self.assertEqual(error.total_count, 4)
 
     def test_json_ld_detail_is_preferred(self):
         payload = {
