@@ -134,16 +134,12 @@ try {
     if ($LASTEXITCODE -ne 0) { throw "The controlled migration failed." }
 
     Write-Host "Testing Hezareh and Pars Namad, five pages for each connector ..." -ForegroundColor Cyan
-    $previousErrorAction = $ErrorActionPreference
-    try {
-        $ErrorActionPreference = "Continue"
-        & docker compose run --rm backend python manage.py test_hezareh_parsnamad_connectors --pages $Pages 1> $ReportJson 2> $CommandErrors
-        $testExitCode = $LASTEXITCODE
-    } finally {
-        $ErrorActionPreference = $previousErrorAction
-    }
+    $testCommand = "docker compose run --rm backend python manage.py test_hezareh_parsnamad_connectors --pages $Pages > `"$ReportJson`" 2> `"$CommandErrors`""
+    cmd /d /s /c $testCommand
+    $testExitCode = $LASTEXITCODE
 
-    & docker compose logs --tail 150 db redis 1> $RuntimeLogs 2>&1
+    $logsCommand = "docker compose logs --tail 150 db redis > `"$RuntimeLogs`" 2>&1"
+    cmd /d /s /c $logsCommand
 
     $summary = @"
 PDP ONE - HEZAREH AND PARS NAMAD CONTROLLED LIVE TEST
@@ -157,6 +153,7 @@ ChatGPT analysis requested: false
 SETAD included: false
 Active backend replaced: false
 Test execution: ephemeral backend container
+Report encoding: raw UTF-8
 
 Pre-test database backup:
 $backupPath
