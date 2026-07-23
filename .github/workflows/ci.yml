@@ -82,9 +82,21 @@ jobs:
       - name: Verify Python syntax and migrations
         env:
           DJANGO_SETTINGS_MODULE: config.settings_test
+        shell: bash
         run: |
-          python -m compileall -q backend services/pdp_mcp
-          python backend/manage.py makemigrations --check --dry-run
+          set -o pipefail
+          python -m compileall -q backend services/pdp_mcp 2>&1 | tee python-compile.log
+          python backend/manage.py makemigrations --check --dry-run 2>&1 | tee migration-check.log
+      - name: Upload Python and migration verification logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pdp-one-python-migration-log-${{ github.event.pull_request.head.sha || github.sha }}
+          path: |
+            python-compile.log
+            migration-check.log
+          if-no-files-found: warn
+          retention-days: 7
       - name: Test signed deployment queue
         env:
           PYTHONPATH: services/pdp_mcp
