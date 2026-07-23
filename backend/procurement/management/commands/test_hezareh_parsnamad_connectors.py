@@ -20,8 +20,8 @@ SOURCE_KEYS = ["hezareh", "parsnamad"]
 
 class Command(BaseCommand):
     help = (
-        "Run a controlled public-list test for Hezareh and Pars Namad "
-        "tender and inquiry connectors."
+        "Run a controlled public-list test for currently enabled Hezareh and "
+        "Pars Namad tender/inquiry connectors."
     )
 
     def add_arguments(self, parser):
@@ -29,7 +29,7 @@ class Command(BaseCommand):
             "--pages",
             type=int,
             default=5,
-            help="Maximum pages per connector. The controlled-test limit is 10.",
+            help="Maximum pages per enabled connector. The controlled-test limit is 10.",
         )
         parser.add_argument(
             "--report",
@@ -48,6 +48,29 @@ class Command(BaseCommand):
         if len(sources) != len(SOURCE_KEYS):
             raise CommandError("Hezareh or Pars Namad source is missing from the database.")
 
+        configured_connectors = list(
+            ProcurementConnector.objects.filter(key__in=CONNECTOR_KEYS)
+            .select_related("source")
+            .order_by("key")
+        )
+        if len(configured_connectors) != len(CONNECTOR_KEYS):
+            raise CommandError(
+                "One or more Hezareh/Pars Namad connectors are missing from the database."
+            )
+
+        connectors = [
+            connector
+            for connector in configured_connectors
+            if connector.enabled and connector.source.enabled
+        ]
+        skipped_keys = [
+            connector.key for connector in configured_connectors if connector not in connectors
+        ]
+        if not connectors:
+            raise CommandError(
+                "No enabled Hezareh or Pars Namad connector is available for the test."
+            )
+
         started_at = timezone.now().isoformat()
         for source in sources:
             configuration = dict(source.configuration or {})
@@ -55,31 +78,14 @@ class Command(BaseCommand):
                 {
                     "last_controlled_test_started_at": started_at,
                     "last_controlled_test_page_cap": pages,
-                    "controlled_test_scope": "public-list-only",
+                    "controlled_test_scope": "enabled-public-list-connectors-only",
+                    "last_controlled_test_skipped_connectors": skipped_keys,
                 }
             )
-            source.enabled = True
-            source.status = ProcurementSource.Status.ACTIVE
             source.configuration = configuration
-            source.save(
-                update_fields=["enabled", "status", "configuration", "updated_at"]
-            )
+            source.save(update_fields=["configuration", "updated_at"])
 
-        connectors = list(
-            ProcurementConnector.objects.filter(key__in=CONNECTOR_KEYS)
-            .select_related("source")
-            .order_by("key")
-        )
-        if len(connectors) != len(CONNECTOR_KEYS):
-            raise CommandError(
-                "One or more Hezareh/Pars Namad connectors are missing from the database."
-            )
-
-        for connector in connectors:
-            connector.enabled = True
-            connector.status = ProcurementConnector.Status.ACTIVE
-            connector.save(update_fields=["enabled", "status", "updated_at"])
-
+        requested_keys = [connector.key for connector in connectors]
         run = ExtractionRun.objects.create(
             trigger=ExtractionRun.Trigger.MANUAL,
             status=ExtractionRun.Status.QUEUED,
@@ -89,7 +95,9 @@ class Command(BaseCommand):
             summary={
                 "controlled_live_test": True,
                 "public_list_only": True,
-                "requested_connector_keys": CONNECTOR_KEYS,
+                "requested_connector_keys": requested_keys,
+                "configured_connector_keys": CONNECTOR_KEYS,
+                "skipped_disabled_connector_keys": skipped_keys,
                 "requested_pages_per_connector": pages,
                 "setad_included": False,
             },
@@ -100,40 +108,45 @@ class Command(BaseCommand):
         run.refresh_from_db()
 
         connector_reports = []
-        for connector in connectors:
-            samples = list(
-                SourceNotice.objects.filter(connector=connector)
-                .order_by("-last_seen_at")
-                .values(
-                    "source_record_id",
-                    "title_raw",
-                    "employer_raw",
-                    "province_raw",
-                    "published_at_raw",
-                    "deadline_raw",
-                    "detail_status",
-                )[:10]
-            )
-            errors = list(
-                run.errors.filter(connector=connector)
-                .order_by("created_at")
-                .values(
-                    "category",
-                    "safe_message",
-                    "retryable",
-                    "page_number",
-                    "url",
+        for connector in configured_connectors:
+            tested = connector in connectors
+            samples = []
+            errors = []
+            if tested:
+                samples = list(
+                    SourceNotice.objects.filter(connector=connector)
+                    .order_by("-last_seen_at")
+                    .values(
+                        "source_record_id",
+                        "title_raw",
+                        "employer_raw",
+                        "province_raw",
+                        "published_at_raw",
+                        "deadline_raw",
+                        "detail_status",
+                    )[:10]
                 )
-            )
+                errors = list(
+                    run.errors.filter(connector=connector)
+                    .order_by("created_at")
+                    .values(
+                        "category",
+                        "safe_message",
+                        "retryable",
+                        "page_number",
+                        "url",
+                    )
+                )
             connector_reports.append(
                 {
                     "key": connector.key,
                     "source": connector.source.key,
                     "notice_type": connector.notice_type,
+                    "tested": tested,
                     "enabled": connector.enabled,
                     "status": connector.status,
                     "parser_version": connector.parser_version,
-                    "requested_pages": pages,
+                    "requested_pages": pages if tested else 0,
                     "summary": (run.summary.get("connectors") or {}).get(
                         connector.key, {}
                     ),
@@ -143,13 +156,15 @@ class Command(BaseCommand):
             )
 
         report = {
-            "schema": "pdp-one.hezareh-parsnamad-live-test.v1",
+            "schema": "pdp-one.hezareh-parsnamad-live-test.v2",
             "generated_at": timezone.now().isoformat(),
             "run_id": str(run.id),
             "run_status": run.status,
             "page_cap_per_connector": pages,
-            "expected_connector_count": 4,
-            "expected_page_attempts": pages * 4,
+            "configured_connector_count": len(configured_connectors),
+            "tested_connector_count": len(connectors),
+            "skipped_disabled_connector_keys": skipped_keys,
+            "maximum_page_attempts": pages * len(connectors),
             "include_details": False,
             "analyze_after_success": False,
             "setad_included": False,
@@ -194,6 +209,6 @@ class Command(BaseCommand):
 
         self.stderr.write(
             self.style.SUCCESS(
-                "Hezareh and Pars Namad controlled five-page test completed."
+                "Enabled Hezareh and Pars Namad connectors completed the controlled test."
             )
         )
