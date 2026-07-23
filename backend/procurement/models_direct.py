@@ -56,6 +56,12 @@ class DirectOpportunity(TimestampedModel):
         HIGH = "high", "بالا"
         VERY_HIGH = "very_high", "بسیار بالا"
 
+    class Importance(models.TextChoices):
+        LOW = "low", "کم"
+        MEDIUM = "medium", "متوسط"
+        HIGH = "high", "زیاد"
+        VERY_HIGH = "very_high", "بسیار زیاد"
+
     class Confidentiality(models.TextChoices):
         NORMAL = "normal", "عادی"
         INTERNAL = "internal", "داخلی"
@@ -89,6 +95,7 @@ class DirectOpportunity(TimestampedModel):
         blank=True,
         validators=[MinValueValidator(0), MaxValueValidator(100)],
     )
+    importance = models.CharField(max_length=16, choices=Importance.choices, default=Importance.MEDIUM)
     confidentiality = models.CharField(
         max_length=16,
         choices=Confidentiality.choices,
@@ -145,7 +152,7 @@ class OpportunityFollowUp(TimestampedModel):
         settings.AUTH_USER_MODEL,
         null=True,
         blank=True,
-        on_delete=models.PROTECT,
+        on_delete=models.SET_NULL,
         related_name="opportunity_follow_ups_created",
     )
 
