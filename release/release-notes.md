@@ -1,29 +1,38 @@
-# PDP One v1.0.3-trial
+# PDP One v1.0.4-trial
 
-## Windows DPAPI compatibility repair
+## Windows connectivity self-healing
 
-- explicitly loads the Windows `System.Security` assembly before using DPAPI
-- uses the fully qualified `ProtectedData` and `DataProtectionScope` types required by Windows PowerShell 5.1
-- adds a native `windows-latest` CI gate that performs a real DPAPI encrypt/decrypt round-trip with Windows PowerShell 5.1
+- verifies the real public HTTPS health endpoint instead of trusting only `Funnel on`
+- retries Tailscale Funnel with bounded restart and preserves the existing node identity
+- resolves public IPv4 addresses per request without changing Windows DNS
+- keeps the application usable through `http://localhost:8080` on the same laptop
+- adds automatic logon startup and a ten-minute connectivity watchdog
 
-## Windows PowerShell 5.1 / Docker stderr repair
+## Safe diagnostics and emergency operation
 
-- prevents Docker's normal `Unable to find image ... locally` progress message from being promoted to a terminating `RemoteException`
-- invokes the base-backup and isolated-restore scripts directly so genuine exceptions still reach the safe Desktop report
-- retains the dual SHA-256-verified archive destinations introduced in v1.0.1
+- adds `PDP-ONE-EMERGENCY-START.bat`
+- adds `PDP-ONE-CREATE-DIAGNOSTICS.bat`
+- writes stable safe-to-share TXT and JSON diagnostics to the installation root and Desktop
+- redacts MCP path tokens, API tokens, passwords, authorization values and secret URLs
 
-## Portable backup repair
+## Real Windows updater failure-path repair
 
-- preserves and displays the redacted root cause when base backup or isolated restore verification fails
-- writes `PDP-ONE-PORTABLE-BACKUP-REPORT.json` on both success and safe failure
-- automatically writes a second SHA-256-verified `.pdpone` copy to `D:\BackUp PDP-0NE-14050429-01`
-- finalizes destination files atomically so incomplete `.partial` files are never treated as valid backups
+- parses the exact `contracts,receivables` line when Django shell emits extra informational output
+- forwards the rollback database switch as a standalone argument for Windows PowerShell 5.1
+- supplies non-empty identifiers when manual-update diagnostics are generated
+- adds native Windows PowerShell 5.1 regression coverage for these failure paths
 
-This fixed trial release includes BACKLOG-001 stable automated deployment, the Health Gate and Approval Gate compatibility fixes, portable encrypted disaster-recovery backups, and one-file Windows restore orchestration.
+## Preservation guarantees
 
-Important:
+- does not rotate the MCP path token
+- does not change Windows DNS
+- does not remove or recreate PostgreSQL, private-file, Redis or Tailscale volumes
+- does not change the Tailscale node identity
+- does not introduce a database migration
 
-- Operational data and secrets are never stored in GitHub.
-- Create the portable backup with `CREATE-PDP-ONE-PORTABLE-BACKUP.bat` and store it off the Windows system drive.
-- Restore a clean Windows installation with `RESTORE-PDP-ONE.bat` and the `.pdpone` backup file.
-- A Windows restart may be required when WSL/Rancher prerequisites are installed; rerun the same restore BAT afterward.
+## Portable recovery inherited from v1.0.3-trial
+
+- uses Windows PowerShell 5.1-compatible DPAPI support
+- writes `PDP-ONE-PORTABLE-BACKUP-REPORT.json` on success or safe failure
+- creates SHA-256-verified portable copies in both requested backup destinations
+- supports one-file Windows recovery with `RESTORE-PDP-ONE.bat`

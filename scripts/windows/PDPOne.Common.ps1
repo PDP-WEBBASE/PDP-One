@@ -182,3 +182,107 @@ function ConvertTo-PDPOneRedactedText([string]$Text) {
     $result = [regex]::Replace($result, '(?i)("(?:token|password|secret|signing_key|authorization)"\s*:\s*")[^"]+(")', '$1[REDACTED]$2')
     return $result
 }
+
+function Get-PDPOnePublicIPv4Addresses([string]$HostName) {
+    $addresses = @()
+    try {
+        if (Get-Command Resolve-DnsName -ErrorAction SilentlyContinue) {
+            $records = @(Resolve-DnsName -Name $HostName -Type A -Server 1.1.1.1 -DnsOnly -ErrorAction Stop)
+            $addresses += @($records | Where-Object { $_.IPAddress } | ForEach-Object { [string]$_.IPAddress })
+        }
+    } catch { }
+
+    if ($addresses.Count -eq 0) {
+        try {
+            $lookup = (& nslookup.exe $HostName 1.1.1.1 2>$null | Out-String)
+            $matches = [regex]::Matches($lookup, '(?m)(?<![:\d])(?:\d{1,3}\.){3}\d{1,3}(?![\d:])')
+            foreach ($match in $matches) {
+                if ($match.Value -ne '1.1.1.1') { $addresses += $match.Value }
+            }
+        } catch { }
+    }
+
+    return @($addresses | Where-Object { $_ -match '^(?:\d{1,3}\.){3}\d{1,3}$' } | Select-Object -Unique)
+}
+
+function Test-PDPOnePublicHealth {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string]$Url,
+        [string]$ExpectedPattern = 'PDP One ready',
+        [int]$TimeoutSeconds = 35
+    )
+
+    $result = [ordered]@{
+        Success = $false
+        Method = 'none'
+        LocalDnsDegraded = $false
+        HostName = $null
+        ResolvedIPv4 = @()
+        Detail = 'Public health check did not succeed.'
+    }
+
+    try { $uri = [Uri]$Url } catch {
+        $result.Detail = 'Public health URL is invalid.'
+        return [pscustomobject]$result
+    }
+    $result.HostName = $uri.Host
+
+    try {
+        $response = Invoke-WebRequest -UseBasicParsing -Uri $Url -TimeoutSec ([Math]::Min(20, $TimeoutSeconds))
+        $body = ConvertTo-PDPOneResponseText $response.Content
+        if ($response.StatusCode -eq 200 -and $body -match [regex]::Escape($ExpectedPattern)) {
+            $result.Success = $true
+            $result.Method = 'system-dns-https'
+            $result.Detail = 'Public health succeeded with the active Windows resolver.'
+            return [pscustomobject]$result
+        }
+    } catch { }
+
+    $curl = Get-Command curl.exe -ErrorAction SilentlyContinue
+    if ($curl) {
+        try {
+            $curlOutput = (& $curl.Source -4 --silent --show-error --fail --connect-timeout 12 --max-time $TimeoutSeconds $Url 2>&1 | Out-String)
+            $curlExit = $LASTEXITCODE
+            if ($curlExit -eq 0 -and $curlOutput -match [regex]::Escape($ExpectedPattern)) {
+                $result.Success = $true
+                $result.Method = 'system-dns-curl-ipv4'
+                $result.Detail = 'Public health succeeded with curl over IPv4.'
+                return [pscustomobject]$result
+            }
+        } catch { }
+    }
+
+    $addresses = @(Get-PDPOnePublicIPv4Addresses -HostName $uri.Host)
+    $result.ResolvedIPv4 = $addresses
+    if ($curl -and $addresses.Count -gt 0) {
+        foreach ($address in $addresses) {
+            try {
+                $resolveValue = "$($uri.Host):$($uri.Port):$address"
+                $directOutput = (& $curl.Source -4 --silent --show-error --fail --connect-timeout 12 --max-time $TimeoutSeconds --resolve $resolveValue $Url 2>&1 | Out-String)
+                $directExit = $LASTEXITCODE
+                if ($directExit -eq 0 -and $directOutput -match [regex]::Escape($ExpectedPattern)) {
+                    $result.Success = $true
+                    $result.Method = 'public-dns-direct-ipv4'
+                    $result.LocalDnsDegraded = $true
+                    $result.Detail = 'Public health succeeded through a public IPv4 resolver; the active Windows resolver did not provide a usable route.'
+                    return [pscustomobject]$result
+                }
+            } catch { }
+        }
+    }
+
+    if ($addresses.Count -eq 0) {
+        $result.Detail = 'No public IPv4 address could be resolved without changing Windows DNS settings.'
+    } else {
+        $result.Detail = 'Public IPv4 addresses were resolved, but the HTTPS health endpoint was not reachable.'
+    }
+    return [pscustomobject]$result
+}
+
+function Write-PDPOneJsonFile([string]$Path, $Value) {
+    $directory = Split-Path -Parent $Path
+    if ($directory) { New-Item -ItemType Directory -Force -Path $directory | Out-Null }
+    $json = $Value | ConvertTo-Json -Depth 10
+    [IO.File]::WriteAllText($Path, $json, [Text.UTF8Encoding]::new($false))
+}

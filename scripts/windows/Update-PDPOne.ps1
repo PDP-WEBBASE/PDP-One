@@ -73,16 +73,54 @@ try {
     if (-not (Wait-PDPOneUrl "http://127.0.0.1:8080/healthz" 180)) { throw "Updated local health timed out." }
     $tokenAfter = Get-PDPOneTokenFingerprint (Get-PDPOneEnvValue $envPath "PDP_MCP_PATH_TOKEN")
     if ($tokenBefore -ne $tokenAfter) { throw "Update changed the MCP path token without authorization." }
-    & powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "Test-PDPOne.ps1") -SkipChatGPTToolCheck
+
+    $connectivity = & (Join-Path $InstalledRoot "scripts\windows\Repair-PDPOneConnectivity.ps1") -ProjectRoot $InstalledRoot -RepairAttempts 3
+    if ($null -eq $connectivity -or [string]$connectivity.status -ne "succeeded") {
+        throw "Updated services are locally healthy, but the stable public route could not be verified."
+    }
+
+    & powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File (Join-Path $InstalledRoot "scripts\windows\Test-PDPOne.ps1") -SkipChatGPTToolCheck
     if ($LASTEXITCODE -ne 0) { throw "Layered post-update health failed." }
-    Write-Host "PDP One updated to the locked release and passed health checks. Tokens and volumes were preserved." -ForegroundColor Green
+
+    & powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File (Join-Path $InstalledRoot "scripts\windows\Register-PDPOneStartupTask.ps1") -ProjectRoot $InstalledRoot
+    if ($LASTEXITCODE -ne 0) { throw "Stable Windows startup tasks could not be registered." }
+
+    Write-Host "PDP One updated to the locked release and passed health checks. Tokens, data and volumes were preserved." -ForegroundColor Green
 } catch {
     $failure = $_.Exception.Message
     if ($productionTouched) {
         Write-Host "Update failed. Starting automatic rollback ..." -ForegroundColor Red
-        & powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "Rollback-PDPOne.ps1") -BackupPath $BackupPath -CodeArchive $CodeArchive -Automatic -RestoreDatabase:$migrationAttempted
+
+        # Do not pass a Boolean value through -RestoreDatabase:$value to a new
+        # powershell.exe process. Windows PowerShell 5.1 serializes that token as
+        # text and switch binding fails. Add the switch only when it is needed.
+        $rollbackArgs = @(
+            "-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
+            (Join-Path $PSScriptRoot "Rollback-PDPOne.ps1"),
+            "-BackupPath", $BackupPath,
+            "-CodeArchive", $CodeArchive,
+            "-Automatic"
+        )
+        if ($migrationAttempted) { $rollbackArgs += "-RestoreDatabase" }
+        & powershell.exe @rollbackArgs
         $rollbackCode = $LASTEXITCODE
-        & powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "New-PDPOneDiagnostics.ps1") -FailureMessage $failure -DeploymentId $DeploymentId -BackupId $backupReport.backup_id -RollbackResult $(if ($rollbackCode -eq 0) { "healthy" } else { "failed" })
+
+        # Empty PowerShell arguments disappear at the native-process boundary.
+        # Always provide safe non-empty diagnostic identifiers for manual runs.
+        $diagnosticDeploymentId = $(if ([string]::IsNullOrWhiteSpace($DeploymentId)) { "manual-update" } else { $DeploymentId })
+        $diagnosticBackupId = $(if ($null -ne $backupReport -and -not [string]::IsNullOrWhiteSpace([string]$backupReport.backup_id)) { [string]$backupReport.backup_id } else { "unknown-backup" })
+        $diagnosticRollback = $(if ($rollbackCode -eq 0) { "healthy" } else { "failed" })
+        $diagnosticArgs = @(
+            "-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
+            (Join-Path $PSScriptRoot "New-PDPOneDiagnostics.ps1"),
+            "-FailureMessage", $failure,
+            "-DeploymentId", $diagnosticDeploymentId,
+            "-BackupId", $diagnosticBackupId,
+            "-RollbackResult", $diagnosticRollback,
+            "-Stage", "update"
+        )
+        & powershell.exe @diagnosticArgs
+
         if ($rollbackCode -ne 0) { throw "Update failed and automatic rollback also failed: $failure" }
         throw "Update failed; automatic rollback returned the previous version to health: $failure"
     }
