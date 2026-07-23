@@ -151,6 +151,12 @@ class ProcurementNotice(TimestampedModel):
         EXPIRED = "expired", "مهلت گذشته"
         RETENTION_CLEANED = "retention_cleaned", "پاک‌سازی‌شده"
 
+    class Importance(models.TextChoices):
+        LOW = "low", "کم"
+        MEDIUM = "medium", "متوسط"
+        HIGH = "high", "زیاد"
+        VERY_HIGH = "very_high", "بسیار زیاد"
+
     resolved_notice_type = models.CharField(max_length=12, choices=NoticeType.choices)
     type_resolution_status = models.CharField(
         max_length=20,
@@ -179,6 +185,7 @@ class ProcurementNotice(TimestampedModel):
         choices=ProcessingStatus.choices,
         default=ProcessingStatus.CAPTURED,
     )
+    importance = models.CharField(max_length=16, choices=Importance.choices, default=Importance.MEDIUM)
     is_recommended = models.BooleanField(default=False)
     is_hidden = models.BooleanField(default=False)
     retention_protected = models.BooleanField(default=False)
