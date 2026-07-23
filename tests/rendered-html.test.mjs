@@ -47,7 +47,7 @@ test("renders development preview metadata", async () => {
 
 test("keeps source controls and extraction health inside management", async () => {
   const pageSource = await readFile(new URL("../app/procurement/page.tsx", import.meta.url), "utf8");
-  const workspaceSource = await readFile(new URL("../app/procurement/ProcurementWorkspaceV11.tsx", import.meta.url), "utf8");
+  const workspaceSource = await readFile(new URL("../app/procurement/ProcurementWorkspaceV12.tsx", import.meta.url), "utf8");
 
   assert.doesNotMatch(pageSource, /ConnectorHealthBanner/);
   assert.doesNotMatch(pageSource, /ExtractionSourceControls/);
@@ -59,11 +59,10 @@ test("keeps source controls and extraction health inside management", async () =
   assert.match(workspaceSource, /پروفایل، صلاحیت و رزومه/);
   assert.match(workspaceSource, /نسخه‌ها و فعال‌سازی/);
   assert.doesNotMatch(workspaceSource, /تنظیمات کنترل‌شده/);
-  assert.doesNotMatch(workspaceSource, /ساختار زیرتب‌های تأییدشده قبلی حفظ شده است/);
 });
 
-test("preserves approved dashboard and adds only requested list enhancements", async () => {
-  const source = await readFile(new URL("../app/procurement/ProcurementWorkspaceV11.tsx", import.meta.url), "utf8");
+test("preserves approved dashboard and final compact list enhancements", async () => {
+  const source = await readFile(new URL("../app/procurement/ProcurementWorkspaceV12.tsx", import.meta.url), "utf8");
 
   assert.match(source, /قیف مدیریتی/);
   assert.match(source, /برد و باخت/);
@@ -73,7 +72,12 @@ test("preserves approved dashboard and adds only requested list enhancements", a
   assert.match(source, /کل استعلامات/);
   assert.match(source, /کل ارجاعات مستقیم/);
   assert.match(source, /ثبت ارجاع مستقیم جدید/);
+  assert.match(source, /compactRecordStyle/);
   assert.match(source, /compactViewStyle/);
   assert.match(source, /sourceBadgeStyle/);
-  assert.match(source, /اهمیت/);
+  assert.match(source, /importanceStyles/);
+  assert.match(source, /همه فوریت‌ها/);
+  assert.match(source, /urgencyFilter/);
+  assert.doesNotMatch(source, /<dt>اقدام بعدی<\/dt>/);
+  assert.match(source, /fontSize:21/);
 });
