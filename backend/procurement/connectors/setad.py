@@ -2,11 +2,16 @@ import html as html_module
 import json
 import re
 from typing import Any
-from urllib.parse import parse_qs, urlencode, urljoin, urlparse
+from urllib.parse import urlencode, urljoin
 
 from bs4 import BeautifulSoup
 
-from .base import detect_notice_type, normalize_text
+from .base import (
+    detect_notice_type,
+    normalize_text,
+    page_number_from_url,
+    pagination_page_numbers,
+)
 from .types import ParsedNotice, ParsedPage
 
 MOJIBAKE_MARKERS = ("ط§", "ط±", "ظ…", "غŒ", "ع©", "ظ‡", "ط´")
@@ -117,13 +122,25 @@ class SetadEtendParser:
             )
 
         current_page = int(payload.get("page") or 1) if isinstance(payload, dict) else 1
-        total_pages = int(payload.get("total") or current_page) if isinstance(payload, dict) else current_page
+        total_pages = int(payload.get("total") or 0) if isinstance(payload, dict) else 0
         next_page_urls = []
         if current_page < total_pages:
             next_page_urls.append(f"{page_url.split('?')[0]}?page={current_page + 1}")
         if not notices:
             warnings.append("no_notice_rows_found")
-        return ParsedPage(notices=notices, next_page_urls=next_page_urls, warnings=warnings)
+        end_of_results = total_pages == 0 or current_page >= total_pages
+        return ParsedPage(
+            notices=notices,
+            next_page_urls=next_page_urls,
+            warnings=warnings,
+            reported_current_page=current_page,
+            reported_total_pages=total_pages,
+            end_of_results=end_of_results,
+            diagnostics={
+                "payload_records": payload.get("records") if isinstance(payload, dict) else None,
+                "grid_rows": len(rows),
+            },
+        )
 
     @staticmethod
     def parse_detail(html: str) -> dict:
@@ -143,10 +160,23 @@ class SetadEprocParser:
     def parse_list(self, html: str, page_url: str) -> ParsedPage:
         soup = BeautifulSoup(html, "html.parser")
         table = soup.select_one(self.TABLE_SELECTOR)
+        current_page = page_number_from_url(page_url, default=1)
         if table is None:
             body = normalize_text(soup.get_text(" ", strip=True))
-            warnings = ["security_challenge" if "کد امنیتی" in body else "needs_table_not_found"]
-            return ParsedPage(notices=[], warnings=warnings)
+            security_challenge = "کد امنیتی" in body
+            warnings = ["security_challenge" if security_challenge else "needs_table_not_found"]
+            page_title = normalize_text(soup.title.get_text(" ", strip=True) if soup.title else "")
+            return ParsedPage(
+                notices=[],
+                warnings=warnings,
+                reported_current_page=current_page,
+                end_of_results=False,
+                diagnostics={
+                    "page_title": page_title[:200],
+                    "security_challenge": security_challenge,
+                    "table_found": False,
+                },
+            )
 
         notices: list[ParsedNotice] = []
         warnings: list[str] = []
@@ -250,7 +280,32 @@ class SetadEprocParser:
                 next_page_urls.append(url)
         if not notices:
             warnings.append("no_notice_rows_found")
-        return ParsedPage(notices=notices, next_page_urls=next_page_urls, warnings=warnings)
+
+        page_numbers = pagination_page_numbers([page_url, *next_page_urls])
+        total_pages = max(page_numbers) if page_numbers else None
+        end_of_results: bool | None = None
+        if total_pages is not None and current_page is not None:
+            if notices:
+                end_of_results = current_page >= total_pages
+            elif current_page > total_pages:
+                end_of_results = True
+            else:
+                end_of_results = False
+
+        page_title = normalize_text(soup.title.get_text(" ", strip=True) if soup.title else "")
+        return ParsedPage(
+            notices=notices,
+            next_page_urls=next_page_urls,
+            warnings=warnings,
+            reported_current_page=current_page,
+            reported_total_pages=total_pages,
+            end_of_results=end_of_results,
+            diagnostics={
+                "page_title": page_title[:200],
+                "table_found": True,
+                "matched_rows": len(rows),
+            },
+        )
 
     @staticmethod
     def parse_detail(html: str) -> dict:
