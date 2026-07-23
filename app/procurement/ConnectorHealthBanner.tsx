@@ -38,7 +38,7 @@ function typeLabel(value: ConnectorHealth["notice_type"]) {
   return value === "tender" ? "مناقصات" : "استعلامات";
 }
 
-export default function ConnectorHealthBanner() {
+export default function ConnectorHealthBanner({ embedded = false }: { embedded?: boolean }) {
   const [health, setHealth] = useState<ConnectorHealth[]>([]);
   const [loading, setLoading] = useState(true);
   const [unavailable, setUnavailable] = useState(false);
@@ -80,9 +80,9 @@ export default function ConnectorHealthBanner() {
       dir="rtl"
       aria-label="سلامت منابع استخراج"
       style={{
-        margin: "16px auto 0",
-        maxWidth: 1440,
-        padding: "0 24px",
+        margin: embedded ? 0 : "16px auto 0",
+        maxWidth: embedded ? "none" : 1440,
+        padding: embedded ? 0 : "0 24px",
         fontFamily: "inherit",
       }}
     >
@@ -91,15 +91,15 @@ export default function ConnectorHealthBanner() {
           border: "1px solid rgba(15, 23, 42, 0.16)",
           borderRadius: 16,
           background: "#ffffff",
-          padding: 16,
-          boxShadow: "0 8px 24px rgba(15, 23, 42, 0.06)",
+          padding: embedded ? 14 : 16,
+          boxShadow: embedded ? "none" : "0 8px 24px rgba(15, 23, 42, 0.06)",
         }}
       >
         <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
           <div>
-            <strong style={{ display: "block", fontSize: 16 }}>سلامت منابع استخراج</strong>
+            <strong style={{ display: "block", fontSize: 16 }}>سلامت آخرین استخراج هر منبع</strong>
             <span style={{ fontSize: 13, color: "#475569" }}>
-              کامل‌بودن آخرین اجرای هر Connector، مستقل از تعداد رکوردهای ثبت‌شده کنترل می‌شود.
+              این اطلاعات فقط در زیرتب «گزارش استخراج» نمایش داده می‌شوند.
             </span>
           </div>
           <strong style={{ color: attention.length ? "#b45309" : "#047857" }}>
@@ -115,9 +115,9 @@ export default function ConnectorHealthBanner() {
           <div
             style={{
               display: "grid",
-              gridTemplateColumns: "repeat(auto-fit, minmax(250px, 1fr))",
-              gap: 10,
-              marginTop: 14,
+              gridTemplateColumns: "repeat(auto-fit, minmax(230px, 1fr))",
+              gap: 8,
+              marginTop: 12,
             }}
           >
             {health.map((item) => {
@@ -129,7 +129,7 @@ export default function ConnectorHealthBanner() {
                   style={{
                     border: `1px solid ${attentionItem ? "rgba(180, 83, 9, 0.35)" : "rgba(4, 120, 87, 0.28)"}`,
                     borderRadius: 12,
-                    padding: 12,
+                    padding: 10,
                     background: attentionItem ? "#fffbeb" : "#ecfdf5",
                   }}
                 >
@@ -137,14 +137,14 @@ export default function ConnectorHealthBanner() {
                     <strong>{item.source} ـ {typeLabel(item.notice_type)}</strong>
                     <span style={{ fontWeight: 700 }}>{item.health_label}</span>
                   </div>
-                  <p style={{ margin: "8px 0", fontSize: 13 }}>{item.message}</p>
+                  <p style={{ margin: "7px 0", fontSize: 12 }}>{item.message}</p>
                   {run && (
                     <small style={{ display: "block", color: "#475569", lineHeight: 1.8 }}>
                       صفحات: {fa.format(run.pages_processed)}
                       {run.requested_page_cap ? ` از سقف ${fa.format(run.requested_page_cap)}` : ""}
                       {run.reported_total_pages !== null ? ` · کل اعلامی ${fa.format(run.reported_total_pages)}` : ""}
-                      {run.last_successful_page !== null ? ` · آخرین صفحه سالم ${fa.format(run.last_successful_page)}` : ""}
-                      {run.suspicious_pages.length ? ` · صفحه مشکوک ${run.suspicious_pages.map((page) => fa.format(page)).join("، ")}` : ""}
+                      {run.last_successful_page !== null ? ` · آخرین سالم ${fa.format(run.last_successful_page)}` : ""}
+                      {run.suspicious_pages.length ? ` · مشکوک ${run.suspicious_pages.map((page) => fa.format(page)).join("، ")}` : ""}
                       {` · رکورد ${fa.format(run.records_seen)}`}
                     </small>
                   )}
