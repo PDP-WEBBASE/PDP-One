@@ -13,7 +13,8 @@ from procurement.tasks import run_extraction
 class Command(BaseCommand):
     help = (
         "Remove new records imported by the incorrect Pars Namad tender route "
-        "from one controlled test run, then retest the corrected connector."
+        "from one controlled test run, retest it temporarily, and leave the "
+        "connector disabled afterward."
     )
 
     def add_arguments(self, parser):
@@ -145,6 +146,12 @@ class Command(BaseCommand):
         run.save(update_fields=["summary", "updated_at"])
         return summary["parsnamad_tender_cleanup"]
 
+    @staticmethod
+    def _disable_connector(connector: ProcurementConnector):
+        connector.enabled = False
+        connector.status = ProcurementConnector.Status.INACTIVE
+        connector.save(update_fields=["enabled", "status", "updated_at"])
+
     def handle(self, *args, **options):
         pages = options["pages"]
         if pages < 1 or pages > 10:
@@ -168,6 +175,7 @@ class Command(BaseCommand):
                 "updated_at",
             ]
         )
+
         source_configuration = dict(connector.source.configuration or {})
         connector_page_urls = dict(source_configuration.get("connector_page_urls") or {})
         connector_page_urls[connector.key] = {
@@ -175,28 +183,43 @@ class Command(BaseCommand):
             "template": "https://www.parsnamaddata.com/tenders/page/{page}",
         }
         source_configuration["connector_page_urls"] = connector_page_urls
+        controls = dict(source_configuration.get("connector_controls") or {})
+        controls[connector.key] = {
+            "reason": (
+                "مسیر عمومی مناقصات پارس‌نماد در حال حاضر همان محتوای استعلامات را "
+                "برمی‌گرداند؛ برای جلوگیری از ثبت داده نادرست غیرفعال شده است."
+            ),
+            "reviewed_at": "2026-07-23",
+            "can_enable_manually": True,
+        }
+        source_configuration["connector_controls"] = controls
         connector.source.configuration = source_configuration
         connector.source.save(update_fields=["configuration", "updated_at"])
 
-        cleanup = self._cleanup(previous_run, connector)
+        try:
+            cleanup = self._cleanup(previous_run, connector)
 
-        retest = ExtractionRun.objects.create(
-            trigger=ExtractionRun.Trigger.MANUAL,
-            status=ExtractionRun.Status.QUEUED,
-            include_details=False,
-            analyze_after_success=False,
-            page_cap=pages,
-            summary={
-                "controlled_live_test": True,
-                "repair_retest": True,
-                "previous_run_id": str(previous_run.id),
-                "requested_connector_keys": ["parsnamad_tenders"],
-                "requested_pages_per_connector": pages,
-            },
-        )
-        retest.connectors.add(connector)
-        result = run_extraction(str(retest.id))
-        retest.refresh_from_db()
+            retest = ExtractionRun.objects.create(
+                trigger=ExtractionRun.Trigger.MANUAL,
+                status=ExtractionRun.Status.QUEUED,
+                include_details=False,
+                analyze_after_success=False,
+                page_cap=pages,
+                summary={
+                    "controlled_live_test": True,
+                    "repair_retest": True,
+                    "previous_run_id": str(previous_run.id),
+                    "requested_connector_keys": ["parsnamad_tenders"],
+                    "requested_pages_per_connector": pages,
+                    "temporary_enable": True,
+                    "disable_after_test": True,
+                },
+            )
+            retest.connectors.add(connector)
+            result = run_extraction(str(retest.id))
+            retest.refresh_from_db()
+        finally:
+            self._disable_connector(connector)
 
         samples = list(
             SourceNotice.objects.filter(connector=connector)
@@ -221,7 +244,7 @@ class Command(BaseCommand):
             )
         )
         report = {
-            "schema": "pdp-one.parsnamad-tender-repair-retest.v3",
+            "schema": "pdp-one.parsnamad-tender-repair-retest.v4",
             "generated_at": timezone.now().isoformat(),
             "previous_run_id": str(previous_run.id),
             "cleanup": cleanup,
@@ -230,6 +253,8 @@ class Command(BaseCommand):
             "page_cap": pages,
             "connector": {
                 "key": connector.key,
+                "enabled_after_test": False,
+                "status_after_test": ProcurementConnector.Status.INACTIVE,
                 "first_page_url": connector_page_urls[connector.key]["first_page"],
                 "url_template": connector.list_url_template,
                 "parser_version": connector.parser_version,
@@ -257,9 +282,12 @@ class Command(BaseCommand):
             ExtractionRun.Status.CANCELLED,
         }:
             raise CommandError(
-                f"Pars Namad tender retest finished with status: {retest.status}"
+                f"Pars Namad tender retest finished with status: {retest.status}; "
+                "the connector was returned to inactive state."
             )
 
         self.stderr.write(
-            self.style.SUCCESS("Pars Namad tender cleanup and retest completed.")
+            self.style.SUCCESS(
+                "Pars Namad tender cleanup and retest completed; connector is inactive."
+            )
         )
