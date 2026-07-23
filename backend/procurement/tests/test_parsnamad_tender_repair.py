@@ -19,18 +19,34 @@ class ParsNamadTenderRepairTests(TestCase):
     def setUp(self):
         self.connector = ProcurementConnector.objects.get(key="parsnamad_tenders")
         self.previous_run = ExtractionRun.objects.create(
-            status=ExtractionRun.Status.SUCCEEDED,
+            status=ExtractionRun.Status.SUCCEEDED_WITH_WARNINGS,
+            page_cap=5,
             summary={
-                "controlled_live_test": True,
-                "requested_connector_keys": [
+                "connectors": {
+                    "parsnamad_tenders": {
+                        "status": "succeeded",
+                        "pages": 5,
+                        "seen": 250,
+                        "new": 250,
+                        "updated": 0,
+                        "duplicate": 0,
+                        "failed": 0,
+                        "warnings": 0,
+                    }
+                },
+                "skipped_disabled_connectors": [],
+            },
+        )
+        self.previous_run.connectors.add(
+            *ProcurementConnector.objects.filter(
+                key__in=[
                     "hezareh_tenders",
                     "hezareh_inquiries",
                     "parsnamad_tenders",
                     "parsnamad_inquiries",
-                ],
-            },
+                ]
+            )
         )
-        self.previous_run.connectors.add(self.connector)
         now = timezone.now()
         self.source_notice = SourceNotice.objects.create(
             connector=self.connector,
@@ -101,7 +117,9 @@ class ParsNamadTenderRepairTests(TestCase):
         "procurement.management.commands.repair_and_retest_parsnamad_tenders.run_extraction",
         autospec=True,
     )
-    def test_cleanup_removes_only_new_unprotected_wrong_records(self, run_extraction):
+    def test_cleanup_finds_overwritten_run_and_removes_only_safe_records(
+        self, run_extraction
+    ):
         run_extraction.side_effect = self.fake_successful_run
         stdout = StringIO()
 
