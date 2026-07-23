@@ -1,5 +1,6 @@
 import hashlib
 import time
+from datetime import timedelta
 from urllib.parse import urlparse
 
 from celery import shared_task
@@ -7,9 +8,10 @@ from django.utils import timezone
 
 from procurement.connectors import parser_for
 from procurement.connectors.fetchers import fetcher_for
+from procurement.dates import parse_date_value
 from procurement.http import SourceFetchError
 from procurement.ingestion import ingest_parsed_notice
-from procurement.models import ProcurementConnector, ProcurementSource
+from procurement.models import ProcurementConnector, ProcurementSource, SourceNotice
 from procurement.models_extraction import (
     ExtractionError,
     ExtractionPage,
@@ -18,7 +20,17 @@ from procurement.models_extraction import (
 )
 
 
-def _record_error(run, connector, *, category, message, retryable, url="", page_number=None, details=None):
+def _record_error(
+    run,
+    connector,
+    *,
+    category,
+    message,
+    retryable,
+    url="",
+    page_number=None,
+    details=None,
+):
     return ExtractionError.objects.create(
         run=run,
         connector=connector,
@@ -46,7 +58,6 @@ def _content_retry_settings(source: ProcurementSource) -> tuple[int, int]:
 
 
 def _list_page_url(connector: ProcurementConnector, page_number: int) -> str:
-    """Resolve list URLs generically, including sources with a special first page."""
     configuration = connector.source.configuration or {}
     connector_urls = configuration.get("connector_page_urls") or {}
     route = connector_urls.get(connector.key) or {}
@@ -90,6 +101,8 @@ def _fetch_and_parse_with_content_retries(
             try:
                 parsed_page = parser.parse_list(fetched.text, fetched.url)
                 last_parse_error = None
+            except SourceFetchError:
+                raise
             except Exception as exc:
                 last_parse_error = exc
                 attempts.append(
@@ -144,7 +157,6 @@ def _create_page_record(
     page_number,
     fetched,
     parsed_page,
-    attempts,
     parse_status,
     error_code="",
     error_message="",
@@ -164,20 +176,43 @@ def _create_page_record(
     )
 
 
+def _published_date(parsed):
+    value, _ = parse_date_value(parsed.published_raw)
+    return value
+
+
+def _date_policy(run: ExtractionRun, connector: ProcurementConnector):
+    first_run = not SourceNotice.objects.filter(connector=connector).exists()
+    if run.mode == ExtractionRun.Mode.MANUAL_RANGE:
+        cutoff = timezone.localdate() - timedelta(days=run.lookback_days or 1)
+        return first_run, cutoff, "manual_range"
+    if first_run:
+        cutoff = timezone.localdate() - timedelta(days=1)
+        return True, cutoff, "first_run_one_day"
+    return False, None, "incremental_known_boundary"
+
+
 def _execute_connector(run: ExtractionRun, connector: ProcurementConnector) -> dict:
     source = connector.source
     allowed_host = urlparse(source.base_url).hostname or ""
     parser = parser_for(connector.key, source.base_url, connector.notice_type)
     fetcher = fetcher_for(connector, allowed_host=allowed_host)
     page_cap = min(run.page_cap or connector.max_pages, connector.max_pages)
+    first_run, cutoff_date, policy = _date_policy(run, connector)
     summary = {
         "status": "succeeded",
+        "mode": run.mode,
+        "policy": policy,
+        "first_run": first_run,
+        "cutoff_date": cutoff_date.isoformat() if cutoff_date else None,
         "pages": 0,
         "seen": 0,
         "new": 0,
         "updated": 0,
         "duplicate": 0,
         "failed": 0,
+        "skipped_outside_range": 0,
+        "unknown_date_records": 0,
         "warnings": 0,
         "requested_page_cap": page_cap,
         "reported_total_pages": None,
@@ -187,8 +222,10 @@ def _execute_connector(run: ExtractionRun, connector: ProcurementConnector) -> d
         "content_retry_attempts": 0,
         "recovered_pages": [],
         "suspicious_pages": [],
+        "known_boundary_pages": 0,
     }
     previous_record_ids: tuple[str, ...] | None = None
+    consecutive_known_pages = 0
 
     for page_number in range(1, page_cap + 1):
         page_url = _list_page_url(connector, page_number)
@@ -213,6 +250,9 @@ def _execute_connector(run: ExtractionRun, connector: ProcurementConnector) -> d
                 error_code=exc.category,
                 error_message=str(exc),
             )
+            details = {"status_code": exc.status_code}
+            if hasattr(exc, "as_details"):
+                details.update(exc.as_details())
             _record_error(
                 run,
                 connector,
@@ -221,12 +261,12 @@ def _execute_connector(run: ExtractionRun, connector: ProcurementConnector) -> d
                 retryable=exc.retryable,
                 url=page_url,
                 page_number=page_number,
-                details={"status_code": exc.status_code},
+                details=details,
             )
             summary["failed"] += 1
             summary["status"] = "failed"
             summary["completeness"] = "failed"
-            summary["stop_reason"] = "fetch_failed"
+            summary["stop_reason"] = "fetch_or_validation_failed"
             break
         except Exception as exc:
             ExtractionPage.objects.create(
@@ -262,13 +302,13 @@ def _execute_connector(run: ExtractionRun, connector: ProcurementConnector) -> d
             summary["warnings"] += 1
 
         if parsed_page.reported_total_pages is not None:
-            current_total = summary["reported_total_pages"] or 0
             summary["reported_total_pages"] = max(
-                current_total,
+                summary["reported_total_pages"] or 0,
                 parsed_page.reported_total_pages,
             )
 
-        record_ids = tuple(notice.source_record_id for notice in parsed_page.notices)
+        original_notices = list(parsed_page.notices)
+        record_ids = tuple(notice.source_record_id for notice in original_notices)
         if record_ids and previous_record_ids == record_ids:
             summary["warnings"] += 1
             summary["status"] = "partial"
@@ -281,7 +321,6 @@ def _execute_connector(run: ExtractionRun, connector: ProcurementConnector) -> d
                 page_number=page_number,
                 fetched=fetched,
                 parsed_page=parsed_page,
-                attempts=attempts,
                 parse_status=ExtractionPage.ParseStatus.WARNING,
                 error_code="duplicate_page_content",
                 error_message="محتوای این صفحه با صفحه قبلی یکسان بود؛ استخراج ناقص متوقف شد.",
@@ -290,7 +329,7 @@ def _execute_connector(run: ExtractionRun, connector: ProcurementConnector) -> d
                 run,
                 connector,
                 category=ExtractionError.Category.VALIDATION,
-                message="صفحه تکراری دریافت شد؛ برای جلوگیری از ثبت ناقص یا تکراری استخراج متوقف شد.",
+                message="صفحه تکراری دریافت شد؛ استخراج برای جلوگیری از ثبت ناقص متوقف شد.",
                 retryable=True,
                 url=fetched.url,
                 page_number=page_number,
@@ -298,15 +337,10 @@ def _execute_connector(run: ExtractionRun, connector: ProcurementConnector) -> d
             )
             break
 
-        if not parsed_page.notices:
+        if not original_notices:
             natural_end = parsed_page.end_of_results is True
-            effective_warnings = list(parsed_page.warnings)
             summary["pages"] += 1
             if natural_end:
-                effective_warnings = [
-                    warning for warning in effective_warnings if warning != "no_notice_rows_found"
-                ]
-                summary["warnings"] += len(effective_warnings)
                 summary["completeness"] = "complete"
                 summary["stop_reason"] = "source_reported_end"
                 _create_page_record(
@@ -315,17 +349,10 @@ def _execute_connector(run: ExtractionRun, connector: ProcurementConnector) -> d
                     page_number=page_number,
                     fetched=fetched,
                     parsed_page=parsed_page,
-                    attempts=attempts,
-                    parse_status=(
-                        ExtractionPage.ParseStatus.WARNING
-                        if effective_warnings
-                        else ExtractionPage.ParseStatus.SUCCEEDED
-                    ),
-                    error_message=" | ".join(effective_warnings),
+                    parse_status=ExtractionPage.ParseStatus.SUCCEEDED,
                 )
                 break
-
-            summary["warnings"] += max(1, len(effective_warnings))
+            summary["warnings"] += 1
             summary["status"] = "partial"
             summary["completeness"] = "incomplete"
             summary["stop_reason"] = "unexpected_empty_page"
@@ -336,13 +363,9 @@ def _execute_connector(run: ExtractionRun, connector: ProcurementConnector) -> d
                 page_number=page_number,
                 fetched=fetched,
                 parsed_page=parsed_page,
-                attempts=attempts,
                 parse_status=ExtractionPage.ParseStatus.WARNING,
                 error_code="unexpected_empty_page",
-                error_message=(
-                    "صفحه بدون رکورد بود اما پایان واقعی فهرست تأیید نشد؛ "
-                    "استخراج ناقص متوقف شد."
-                ),
+                error_message="صفحه بدون رکورد بود اما پایان واقعی فهرست تأیید نشد.",
             )
             _record_error(
                 run,
@@ -352,37 +375,64 @@ def _execute_connector(run: ExtractionRun, connector: ProcurementConnector) -> d
                 retryable=True,
                 url=fetched.url,
                 page_number=page_number,
-                details={
-                    "attempts": attempts,
-                    "reported_total_pages": summary["reported_total_pages"],
-                    "parser_diagnostics": parsed_page.diagnostics,
-                },
+                details={"attempts": attempts, "parser_diagnostics": parsed_page.diagnostics},
             )
             break
+
+        dates = [_published_date(item) for item in original_notices]
+        known_dates = [value for value in dates if value is not None]
+        if cutoff_date and known_dates and max(known_dates) < cutoff_date:
+            summary["pages"] += 1
+            summary["completeness"] = "complete"
+            summary["stop_reason"] = "date_boundary_reached"
+            summary["skipped_outside_range"] += len(original_notices)
+            _create_page_record(
+                run=run,
+                connector=connector,
+                page_number=page_number,
+                fetched=fetched,
+                parsed_page=parsed_page,
+                parse_status=ExtractionPage.ParseStatus.SUCCEEDED,
+                error_code="date_boundary_reached",
+                error_message="تمام رکوردهای تاریخ‌دار صفحه قدیمی‌تر از مرز استخراج بودند.",
+            )
+            break
+
+        selected_notices = []
+        for parsed, published_date in zip(original_notices, dates):
+            if cutoff_date and published_date is not None and published_date < cutoff_date:
+                summary["skipped_outside_range"] += 1
+                continue
+            if cutoff_date and published_date is None:
+                summary["unknown_date_records"] += 1
+            selected_notices.append(parsed)
 
         page_warnings = list(parsed_page.warnings)
         if retry_attempts:
             page_warnings.append(f"recovered_after_{retry_attempts}_content_retries")
-        page_status = (
-            ExtractionPage.ParseStatus.WARNING
-            if page_warnings
-            else ExtractionPage.ParseStatus.SUCCEEDED
-        )
+        if cutoff_date and any(value is None for value in dates):
+            page_warnings.append("some_records_have_unverified_dates")
+            summary["warnings"] += 1
+
         _create_page_record(
             run=run,
             connector=connector,
             page_number=page_number,
             fetched=fetched,
             parsed_page=parsed_page,
-            attempts=attempts,
-            parse_status=page_status,
+            parse_status=(
+                ExtractionPage.ParseStatus.WARNING
+                if page_warnings
+                else ExtractionPage.ParseStatus.SUCCEEDED
+            ),
             error_message=" | ".join(page_warnings),
         )
         summary["pages"] += 1
-        summary["seen"] += len(parsed_page.notices)
+        summary["seen"] += len(selected_notices)
         summary["warnings"] += len(parsed_page.warnings)
 
-        for parsed in parsed_page.notices:
+        page_counts = {"new": 0, "updated": 0, "duplicate": 0, "failed": 0}
+        for parsed in selected_notices:
             detail = None
             if run.include_details and connector.supports_detail and parsed.detail_url:
                 try:
@@ -429,8 +479,10 @@ def _execute_connector(run: ExtractionRun, connector: ProcurementConnector) -> d
                     page_number=page_number,
                 )
                 summary[item_status] += 1
+                page_counts[item_status] += 1
             except Exception as exc:
                 summary["failed"] += 1
+                page_counts["failed"] += 1
                 ExtractionRunItem.objects.create(
                     run=run,
                     connector=connector,
@@ -455,6 +507,17 @@ def _execute_connector(run: ExtractionRun, connector: ProcurementConnector) -> d
         summary["last_successful_page"] = page_number
         connector.last_successful_page = page_number
         connector.save(update_fields=["last_successful_page", "updated_at"])
+
+        if run.mode == ExtractionRun.Mode.INCREMENTAL and not first_run:
+            if page_counts["new"] == 0 and page_counts["updated"] == 0 and page_counts["duplicate"] > 0:
+                consecutive_known_pages += 1
+                summary["known_boundary_pages"] = consecutive_known_pages
+            else:
+                consecutive_known_pages = 0
+            if consecutive_known_pages >= 2:
+                summary["completeness"] = "complete"
+                summary["stop_reason"] = "known_data_boundary_reached"
+                break
 
         if parsed_page.end_of_results is True:
             summary["completeness"] = "complete"
@@ -533,6 +596,8 @@ def run_extraction(run_id: str) -> dict:
     merged_summary = dict(run.summary or {})
     merged_summary.update(
         {
+            "mode": run.mode,
+            "lookback_days": run.lookback_days,
             "connectors": summaries,
             "skipped_disabled_connectors": skipped,
             "failed_connectors": failed_connectors,
