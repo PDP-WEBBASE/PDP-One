@@ -134,16 +134,12 @@ try {
     if ($LASTEXITCODE -ne 0) { throw "The controlled migration failed." }
 
     Write-Host "Running SETAD tenders and inquiries tests in an ephemeral container ..." -ForegroundColor Cyan
-    $previousErrorAction = $ErrorActionPreference
-    try {
-        $ErrorActionPreference = "Continue"
-        & docker compose run --rm backend python manage.py test_setad_connectors --pages $Pages --connector all 1> $ReportJson 2> $CommandErrors
-        $testExitCode = $LASTEXITCODE
-    } finally {
-        $ErrorActionPreference = $previousErrorAction
-    }
+    $testCommand = "docker compose run --rm backend python manage.py test_setad_connectors --pages $Pages --connector all > `"$ReportJson`" 2> `"$CommandErrors`""
+    cmd /d /s /c $testCommand
+    $testExitCode = $LASTEXITCODE
 
-    & docker compose logs --tail 150 db redis 1> $RuntimeLogs 2>&1
+    $logsCommand = "docker compose logs --tail 150 db redis > `"$RuntimeLogs`" 2>&1"
+    cmd /d /s /c $logsCommand
 
     $summary = @"
 PDP ONE - SETAD CONTROLLED LIVE TEST
@@ -156,6 +152,7 @@ SETAD source activated: true
 Connectors activated: setad_tenders, setad_inquiries
 Active backend replaced: false
 Test execution: ephemeral backend container
+Report encoding: raw UTF-8
 
 Pre-test database backup:
 $backupPath
