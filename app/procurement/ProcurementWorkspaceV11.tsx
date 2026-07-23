@@ -31,7 +31,6 @@ type Notice = {
   score: number | null;
   responsible: string;
   nextAction: string;
-  progress: number;
   documents: number;
 };
 
@@ -79,18 +78,18 @@ const importanceLabels: Record<Importance, string> = {
   very_high: "بسیار زیاد",
 };
 
-const noticesSeed: Notice[] = [
-  { id:"T1", referenceCode:"TND-10000", kind:"tender", title:"خدمات مشاوره طراحی و نظارت مجموعه اداری", employer:"شرکت توسعه عمران", province:"تهران", source:"هزاره", sourceUrl:"https://www.hezarehinfo.net", publishedDate:"۱۴۰۵/۰۵/۰۱", deadline:"2026-07-25T16:00:00+03:30", importance:"very_high", recommended:true, stage:"selected", result:"", score:91, responsible:"محمد ملکی", nextAction:"تقسیم کار تهیه پیشنهاد", progress:35, documents:1 },
-  { id:"T2", referenceCode:"TND-10001", kind:"tender", title:"مطالعات طرح جامع و برنامه‌ریزی فضایی", employer:"اداره کل راه و شهرسازی", province:"فارس", source:"هزاره", sourceUrl:"https://www.hezarehinfo.net", publishedDate:"۱۴۰۵/۰۵/۰۲", deadline:"2026-07-30T14:00:00+03:30", importance:"high", recommended:true, stage:"preparing", result:"", score:95, responsible:"کارشناس مناقصات", nextAction:"تهیه ساختار شکست خدمات", progress:62, documents:2 },
-  { id:"T3", referenceCode:null, kind:"tender", title:"طراحی تأسیسات بیمارستان", employer:"دانشگاه علوم پزشکی", province:"البرز", source:"هزاره", sourceUrl:"https://www.hezarehinfo.net", publishedDate:"۱۴۰۵/۰۵/۰۲", deadline:"2026-07-27T12:00:00+03:30", importance:"medium", recommended:false, stage:"", result:"", score:null, responsible:"", nextAction:"بررسی اولیه", progress:0, documents:0 },
-  { id:"T4", referenceCode:null, kind:"tender", title:"مطالعات بازآفرینی بافت شهری", employer:"شهرداری نمونه", province:"کرمان", source:"هزاره", sourceUrl:"https://www.hezarehinfo.net", publishedDate:"۱۴۰۵/۰۵/۰۳", deadline:"2026-08-02T15:00:00+03:30", importance:"high", recommended:true, stage:"", result:"", score:87, responsible:"", nextAction:"تصمیم مدیر", progress:0, documents:0 },
-  { id:"I1", referenceCode:"INQ-10000", kind:"inquiry", title:"استعلام خدمات نقشه‌برداری", employer:"شهرداری منطقه", province:"تهران", source:"پارس‌نماد داده", sourceUrl:"https://www.parsnamaddata.com", publishedDate:"۱۴۰۵/۰۵/۰۲", deadline:"2026-07-23T13:00:00+03:30", importance:"high", recommended:true, stage:"selected", result:"", score:88, responsible:"کارشناس مناقصات", nextAction:"دریافت قیمت و تأیید مدیر", progress:70, documents:0 },
-  { id:"I2", referenceCode:"INQ-10001", kind:"inquiry", title:"استعلام گزارش توجیهی و امکان‌سنجی", employer:"منطقه ویژه اقتصادی", province:"بوشهر", source:"هزاره", sourceUrl:"https://www.hezarehinfo.net", publishedDate:"۱۴۰۵/۰۵/۰۱", deadline:"2026-07-26T15:00:00+03:30", importance:"very_high", recommended:true, stage:"preparing", result:"", score:86, responsible:"واحد مطالعات", nextAction:"جلسه با کارشناس مالی", progress:48, documents:1 },
-  { id:"I3", referenceCode:null, kind:"inquiry", title:"استعلام طراحی روشنایی محوطه صنعتی", employer:"شرکت تولیدی نمونه", province:"قزوین", source:"پارس‌نماد داده", sourceUrl:"https://www.parsnamaddata.com", publishedDate:"۱۴۰۵/۰۵/۰۳", deadline:"2026-07-24T10:00:00+03:30", importance:"medium", recommended:false, stage:"", result:"", score:null, responsible:"", nextAction:"دریافت پیوست فنی", progress:0, documents:0 },
-  { id:"I4", referenceCode:null, kind:"inquiry", title:"استعلام مطالعات ترافیکی", employer:"سازمان حمل‌ونقل", province:"تهران", source:"ستاد ایران", sourceUrl:"https://etend.setadiran.ir", publishedDate:"۱۴۰۵/۰۵/۰۳", deadline:"2026-07-29T12:00:00+03:30", importance:"high", recommended:true, stage:"", result:"", score:84, responsible:"", nextAction:"تصمیم مدیر", progress:0, documents:0 },
+const notices: Notice[] = [
+  { id:"T1", referenceCode:"TND-10000", kind:"tender", title:"خدمات مشاوره طراحی و نظارت مجموعه اداری", employer:"شرکت توسعه عمران", province:"تهران", source:"هزاره", sourceUrl:"https://www.hezarehinfo.net", publishedDate:"۱۴۰۵/۰۵/۰۱", deadline:"2026-07-25T16:00:00+03:30", importance:"very_high", recommended:true, stage:"selected", result:"", score:91, responsible:"محمد ملکی", nextAction:"تقسیم کار تهیه پیشنهاد", documents:1 },
+  { id:"T2", referenceCode:"TND-10001", kind:"tender", title:"مطالعات طرح جامع و برنامه‌ریزی فضایی", employer:"اداره کل راه و شهرسازی", province:"فارس", source:"هزاره", sourceUrl:"https://www.hezarehinfo.net", publishedDate:"۱۴۰۵/۰۵/۰۲", deadline:"2026-07-30T14:00:00+03:30", importance:"high", recommended:true, stage:"preparing", result:"", score:95, responsible:"کارشناس مناقصات", nextAction:"تهیه ساختار شکست خدمات", documents:2 },
+  { id:"T3", referenceCode:null, kind:"tender", title:"طراحی تأسیسات بیمارستان", employer:"دانشگاه علوم پزشکی", province:"البرز", source:"هزاره", sourceUrl:"https://www.hezarehinfo.net", publishedDate:"۱۴۰۵/۰۵/۰۲", deadline:"2026-07-27T12:00:00+03:30", importance:"medium", recommended:false, stage:"", result:"", score:null, responsible:"", nextAction:"بررسی اولیه", documents:0 },
+  { id:"T4", referenceCode:null, kind:"tender", title:"مطالعات بازآفرینی بافت شهری", employer:"شهرداری نمونه", province:"کرمان", source:"هزاره", sourceUrl:"https://www.hezarehinfo.net", publishedDate:"۱۴۰۵/۰۵/۰۳", deadline:"2026-08-02T15:00:00+03:30", importance:"high", recommended:true, stage:"", result:"", score:87, responsible:"", nextAction:"تصمیم مدیر", documents:0 },
+  { id:"I1", referenceCode:"INQ-10000", kind:"inquiry", title:"استعلام خدمات نقشه‌برداری", employer:"شهرداری منطقه", province:"تهران", source:"پارس‌نماد داده", sourceUrl:"https://www.parsnamaddata.com", publishedDate:"۱۴۰۵/۰۵/۰۲", deadline:"2026-07-23T13:00:00+03:30", importance:"high", recommended:true, stage:"selected", result:"", score:88, responsible:"کارشناس مناقصات", nextAction:"دریافت قیمت و تأیید مدیر", documents:0 },
+  { id:"I2", referenceCode:"INQ-10001", kind:"inquiry", title:"استعلام گزارش توجیهی و امکان‌سنجی", employer:"منطقه ویژه اقتصادی", province:"بوشهر", source:"هزاره", sourceUrl:"https://www.hezarehinfo.net", publishedDate:"۱۴۰۵/۰۵/۰۱", deadline:"2026-07-26T15:00:00+03:30", importance:"very_high", recommended:true, stage:"preparing", result:"", score:86, responsible:"واحد مطالعات", nextAction:"جلسه با کارشناس مالی", documents:1 },
+  { id:"I3", referenceCode:null, kind:"inquiry", title:"استعلام طراحی روشنایی محوطه صنعتی", employer:"شرکت تولیدی نمونه", province:"قزوین", source:"پارس‌نماد داده", sourceUrl:"https://www.parsnamaddata.com", publishedDate:"۱۴۰۵/۰۵/۰۳", deadline:"2026-07-24T10:00:00+03:30", importance:"medium", recommended:false, stage:"", result:"", score:null, responsible:"", nextAction:"دریافت پیوست فنی", documents:0 },
+  { id:"I4", referenceCode:null, kind:"inquiry", title:"استعلام مطالعات ترافیکی", employer:"سازمان حمل‌ونقل", province:"تهران", source:"ستاد ایران", sourceUrl:"https://etend.setadiran.ir", publishedDate:"۱۴۰۵/۰۵/۰۳", deadline:"2026-07-29T12:00:00+03:30", importance:"high", recommended:true, stage:"", result:"", score:84, responsible:"", nextAction:"تصمیم مدیر", documents:0 },
 ];
 
-const directSeed: DirectReferral[] = [
+const directReferrals: DirectReferral[] = [
   { id:"D1", referenceCode:null, title:"رایزنی طرح توسعه پردیس اداری", employer:"گروه سرمایه‌گذاری پارس", opportunityType:"رایزنی با کارفرما", domain:"معماری اداری", province:"تهران", probability:40, importance:"high", responsible:"محمد ملکی", targetDeadline:null, stage:"new" },
   { id:"D2", referenceCode:null, title:"مطالعات امکان‌سنجی نیروگاه خورشیدی", employer:"شرکت انرژی نو", opportunityType:"معرفی مستقیم", domain:"امکان‌سنجی", province:"یزد", probability:55, importance:"medium", responsible:"توسعه کسب‌وکار", targetDeadline:"2026-08-10T12:00:00+03:30", stage:"reviewing" },
   { id:"D3", referenceCode:"DIR-10000", title:"دعوت محدود طراحی مجموعه درمانی", employer:"بنیاد توسعه سلامت", opportunityType:"دعوت محدود", domain:"معماری درمانی", province:"تهران", probability:80, importance:"very_high", responsible:"مدیر فنی", targetDeadline:"2026-07-22T12:00:00+03:30", stage:"submitted" },
@@ -113,8 +112,7 @@ function urgency(value: string | null) {
   return { tone:"normal", label:"عادی", remaining:`${fa.format(Math.ceil(hours / 24))} روز باقی‌مانده` };
 }
 
-function viewLabel(tab: Tab, view: WorkflowView) {
-  if (view !== "all") return standardViews.find(([id]) => id === view)?.[1] || view;
+function allLabel(tab: Tab) {
   if (tab === "tenders") return "کل مناقصات";
   if (tab === "inquiries") return "کل استعلامات";
   return "کل ارجاعات مستقیم";
@@ -136,7 +134,7 @@ function directMatches(item: DirectReferral, view: WorkflowView) {
   return item.stage === "won" || item.stage === "lost";
 }
 
-const compactFilters = { display:"grid", gridTemplateColumns:"minmax(230px,2fr) repeat(auto-fit,minmax(125px,1fr))", gap:8, padding:10, border:"1px solid rgba(15,23,42,.12)", borderRadius:12, background:"#f8fafc", marginBottom:12 } as const;
+const filterStyle = { display:"grid", gridTemplateColumns:"minmax(230px,2fr) repeat(auto-fit,minmax(125px,1fr))", gap:8, padding:10, border:"1px solid rgba(15,23,42,.12)", borderRadius:12, background:"#f8fafc", marginBottom:12 } as const;
 const inputStyle = { width:"100%", minHeight:36, border:"1px solid rgba(15,23,42,.16)", borderRadius:9, padding:"7px 9px", background:"white" } as const;
 const sourceBadgeStyle = { display:"inline-flex", alignItems:"center", minHeight:20, padding:"1px 6px", borderRadius:999, border:"1px solid rgba(15,118,110,.22)", background:"#ecfdf5", color:"#0f766e", fontSize:10, fontWeight:700, textDecoration:"none", whiteSpace:"nowrap" } as const;
 const compactViewStyle = { minHeight:26, padding:"4px 9px", borderRadius:8, fontSize:12 } as const;
@@ -156,10 +154,10 @@ export default function ProcurementWorkspaceV11() {
   const [schedule, setSchedule] = useState({ enabled:true, cadence:"daily", dailyTime:"07:30", intervalHours:1, lookbackDays:7 });
   const [message, setMessage] = useState("");
 
-  const noticeViews: [WorkflowView, string][] = [["all", viewLabel(tab, "all")], ...standardViews];
-  const directViews: [WorkflowView, string][] = [["all", viewLabel("direct", "all")], ...standardViews];
+  const noticeViews: [WorkflowView, string][] = [["all", allLabel(tab)], ...standardViews];
+  const directViews: [WorkflowView, string][] = [["all", allLabel("direct")], ...standardViews];
 
-  const filteredNotices = useMemo(() => noticesSeed.filter((item) =>
+  const filteredNotices = useMemo(() => notices.filter((item) =>
     (tab === "tenders" ? item.kind === "tender" : item.kind === "inquiry") &&
     noticeMatches(item, noticeView) &&
     (!search || `${item.referenceCode || ""} ${item.title} ${item.employer} ${item.province}`.includes(search)) &&
@@ -168,7 +166,7 @@ export default function ProcurementWorkspaceV11() {
     (!importanceFilter || item.importance === importanceFilter)
   ), [tab, noticeView, search, sourceFilter, provinceFilter, importanceFilter]);
 
-  const filteredDirect = useMemo(() => directSeed.filter((item) =>
+  const filteredDirect = useMemo(() => directReferrals.filter((item) =>
     directMatches(item, directView) &&
     (!search || `${item.referenceCode || ""} ${item.title} ${item.employer} ${item.domain}`.includes(search)) &&
     (!provinceFilter || item.province === provinceFilter) &&
@@ -176,13 +174,13 @@ export default function ProcurementWorkspaceV11() {
     (!directTypeFilter || item.opportunityType === directTypeFilter)
   ), [directView, search, provinceFilter, importanceFilter, directTypeFilter]);
 
-  const recommendedCount = noticesSeed.filter((item) => item.recommended && !item.stage).length + directSeed.filter((item) => item.stage === "reviewing").length;
-  const selectedCount = noticesSeed.filter((item) => ["selected", "preparing"].includes(item.stage)).length + directSeed.filter((item) => ["selected", "preparing"].includes(item.stage)).length;
-  const submittedCount = noticesSeed.filter((item) => item.stage === "submitted").length + directSeed.filter((item) => item.stage === "submitted").length;
-  const urgentCount = noticesSeed.filter((item) => ["critical", "high"].includes(urgency(item.deadline).tone) && item.stage !== "results").length;
+  const recommendedCount = notices.filter((item) => item.recommended && !item.stage).length + directReferrals.filter((item) => item.stage === "reviewing").length;
+  const selectedCount = notices.filter((item) => ["selected", "preparing"].includes(item.stage)).length + directReferrals.filter((item) => ["selected", "preparing"].includes(item.stage)).length;
+  const submittedCount = notices.filter((item) => item.stage === "submitted").length + directReferrals.filter((item) => item.stage === "submitted").length;
+  const urgentCount = notices.filter((item) => ["critical", "high"].includes(urgency(item.deadline).tone) && item.stage !== "results").length;
   const activeCases = [
-    ...noticesSeed.filter((item) => ["selected", "preparing", "submitted"].includes(item.stage)).map((item) => ({ title:item.title, subtitle:`${item.kind === "tender" ? "مناقصه" : "استعلام"} · ${item.employer}`, stage:item.stage === "submitted" ? "ارسال‌شده" : "منتخب", next:item.nextAction, deadline:item.deadline })),
-    ...directSeed.filter((item) => ["selected", "preparing", "submitted"].includes(item.stage)).map((item) => ({ title:item.title, subtitle:`ارجاع مستقیم · ${item.employer}`, stage:item.stage === "submitted" ? "ارسال‌شده" : "منتخب", next:"پیگیری پرونده", deadline:item.targetDeadline })),
+    ...notices.filter((item) => ["selected", "preparing", "submitted"].includes(item.stage)).map((item) => ({ title:item.title, subtitle:`${item.kind === "tender" ? "مناقصه" : "استعلام"} · ${item.employer}`, stage:item.stage === "submitted" ? "ارسال‌شده" : "منتخب", next:item.nextAction, deadline:item.deadline })),
+    ...directReferrals.filter((item) => ["selected", "preparing", "submitted"].includes(item.stage)).map((item) => ({ title:item.title, subtitle:`ارجاع مستقیم · ${item.employer}`, stage:item.stage === "submitted" ? "ارسال‌شده" : "منتخب", next:"پیگیری پرونده", deadline:item.targetDeadline })),
   ];
 
   function resetFilters() {
@@ -210,7 +208,7 @@ export default function ProcurementWorkspaceV11() {
     {tab === "dashboard" && <section>
       <div className={styles.kpis}>
         <article className={styles.kpi}><span>فراخوان جدید</span><b>{fa.format(24)}</b><small>از آخرین استخراج</small></article>
-        <article className={styles.kpi}><span>تحلیل‌نشده</span><b>{fa.format(noticesSeed.filter((item) => item.score == null).length)}</b><small>در انتظار تحلیل</small></article>
+        <article className={styles.kpi}><span>تحلیل‌نشده</span><b>{fa.format(notices.filter((item) => item.score == null).length)}</b><small>در انتظار تحلیل</small></article>
         <article className={styles.kpi}><span>پیشنهادی</span><b>{fa.format(recommendedCount)}</b><small>نیازمند تصمیم انسانی</small></article>
         <article className={styles.kpi}><span>منتخب</span><b>{fa.format(selectedCount)}</b><small>پرونده در جریان</small></article>
         <article className={styles.kpi}><span>ارسال‌شده</span><b>{fa.format(submittedCount)}</b><small>در انتظار نتیجه</small></article>
@@ -221,7 +219,7 @@ export default function ProcurementWorkspaceV11() {
       <div className={styles.dashboardGrid}>
         <article className={styles.panel}><h2>هشدارهای مدیریتی</h2><div className={styles.alertList}><span>۳ اقدام پیگیری عقب‌افتاده</span><span>۲ پرونده بدون مسئول</span><span>{fa.format(urgentCount)} پرونده نزدیک به مهلت</span><span>۱ پرونده ارسال‌شده بدون پیگیری نتیجه</span></div></article>
         <article className={styles.panel}><h2>قیف مدیریتی</h2><div className={styles.funnel}><span>استخراج و ثبت‌شده</span><span>پیشنهادی {fa.format(recommendedCount)}</span><span>منتخب {fa.format(selectedCount)}</span><span>ارسال‌شده {fa.format(submittedCount)}</span><span>نتیجه موفق ۱</span></div></article>
-        <article className={styles.panel}><h2>برد و باخت</h2><div className={styles.outcomeGrid}><div><b>۱</b><span>موفق</span></div><div><b>۱</b><span>ناموفق</span></div><div><b>۶۷٪</b><span>نرخ موفقیت نمونه</span></div><div><b>۱</b><span>پیش‌نویس قرارداد آینده</span></div></article>
+        <article className={styles.panel}><h2>برد و باخت</h2><div className={styles.outcomeGrid}><div><b>۱</b><span>موفق</span></div><div><b>۱</b><span>ناموفق</span></div><div><b>۶۷٪</b><span>نرخ موفقیت نمونه</span></div><div><b>۱</b><span>پیش‌نویس قرارداد آینده</span></div></div></article>
         <article className={styles.panel}><h2>جمع‌بندی مدیریتی ChatGPT</h2><p>طرح جامع فارس بالاترین تناسب را دارد. استعلام نقشه‌برداری تهران فوریت زیادی دارد. ارجاع مستقیم پردیس اداری هنوز برای تصمیم مدیر در مرحله اولیه است.</p><div className={styles.summaryTags}><span>اقدام امروز: استعلام تهران</span><span>فرصت راهبردی: طرح جامع فارس</span><span>نیازمند تصمیم: پردیس اداری</span></div></article>
       </div>
       <article className={`${styles.panel} ${styles.activeCases}`}><div className={styles.sectionHeading}><div><span>انتهای داشبورد</span><h2>پرونده‌های فعال</h2></div><small>مناقصات، استعلامات و ارجاعات مستقیم منتخب یا ارسال‌شده</small></div><div className={styles.caseTable}>{activeCases.map((item) => { const u=urgency(item.deadline); return <button key={`${item.title}-${item.subtitle}`}><span><b>{item.title}</b><small>{item.subtitle}</small></span><span><b>{item.stage}</b><small>{item.next}</small></span><span className={`${styles.urgency} ${styles[u.tone]}`}><b>{u.label}</b><small>{u.remaining}</small></span></button>; })}</div></article>
@@ -229,10 +227,10 @@ export default function ProcurementWorkspaceV11() {
 
     {(tab === "tenders" || tab === "inquiries") && <section>
       <div className={styles.views}>{noticeViews.map(([id, label]) => <button key={id} className={noticeView === id ? styles.active : ""} onClick={() => setNoticeView(id)}>{label}</button>)}</div>
-      <div style={compactFilters}>
+      <div style={filterStyle}>
         <label>جست‌وجو<input style={inputStyle} value={search} onChange={(event) => setSearch(event.target.value)} placeholder="عنوان، کارفرما، استان یا کد" /></label>
-        <label>منبع<select style={inputStyle} value={sourceFilter} onChange={(event) => setSourceFilter(event.target.value)}><option value="">همه منابع</option>{[...new Set(noticesSeed.map((item) => item.source))].map((source) => <option key={source}>{source}</option>)}</select></label>
-        <label>استان<select style={inputStyle} value={provinceFilter} onChange={(event) => setProvinceFilter(event.target.value)}><option value="">همه استان‌ها</option>{[...new Set(noticesSeed.map((item) => item.province))].map((province) => <option key={province}>{province}</option>)}</select></label>
+        <label>منبع<select style={inputStyle} value={sourceFilter} onChange={(event) => setSourceFilter(event.target.value)}><option value="">همه منابع</option>{[...new Set(notices.map((item) => item.source))].map((source) => <option key={source}>{source}</option>)}</select></label>
+        <label>استان<select style={inputStyle} value={provinceFilter} onChange={(event) => setProvinceFilter(event.target.value)}><option value="">همه استان‌ها</option>{[...new Set(notices.map((item) => item.province))].map((province) => <option key={province}>{province}</option>)}</select></label>
         <label>اهمیت<select style={inputStyle} value={importanceFilter} onChange={(event) => setImportanceFilter(event.target.value)}><option value="">همه سطوح</option>{Object.entries(importanceLabels).map(([value,label]) => <option key={value} value={value}>{label}</option>)}</select></label>
         <div style={{display:"flex",alignItems:"end",gap:8}}><button className={styles.secondaryButton} onClick={resetFilters}>پاک‌کردن</button><b>{fa.format(filteredNotices.length)}</b></div>
       </div>
@@ -249,7 +247,7 @@ export default function ProcurementWorkspaceV11() {
           <h3 style={{margin:"6px 0 4px"}}>{item.title}</h3><p>{item.employer}</p>
           <div className={styles.facts} style={{marginTop:8}}><span>{item.province}</span><span>اهمیت: {importanceLabels[item.importance]}</span><span>{u.remaining}</span><span>اولویت: {item.score ?? "تحلیل نشده"}</span>{item.documents > 0 && <span>{fa.format(item.documents)} سند</span>}</div>
         </div>
-        <div className={styles.decision} style={compactDecisionStyle}><span className={styles.stage}>{item.result || item.stage || (item.recommended ? "پیشنهادی" : viewLabel(tab,"all"))}</span><dl style={{margin:0}}><div style={{padding:"3px 0"}}><dt>مسئول</dt><dd>{item.responsible || "تعیین نشده"}</dd></div><div style={{padding:"3px 0"}}><dt>اقدام بعدی</dt><dd>{item.nextAction}</dd></div></dl>{!item.stage && <div className={styles.actions}><button className={styles.primaryButton}>افزودن به پیشنهادی</button></div>}</div>
+        <div className={styles.decision} style={compactDecisionStyle}><span className={styles.stage}>{item.result || item.stage || (item.recommended ? "پیشنهادی" : allLabel(tab))}</span><dl style={{margin:0}}><div style={{padding:"3px 0"}}><dt>مسئول</dt><dd>{item.responsible || "تعیین نشده"}</dd></div><div style={{padding:"3px 0"}}><dt>اقدام بعدی</dt><dd>{item.nextAction}</dd></div></dl>{!item.stage && <div className={styles.actions}><button className={styles.primaryButton}>افزودن به پیشنهادی</button></div>}</div>
       </article>; })}</div>
     </section>}
 
@@ -258,10 +256,10 @@ export default function ProcurementWorkspaceV11() {
         <div className={styles.views} style={{marginBottom:0}}>{directViews.map(([id,label]) => <button key={id} className={directView === id ? styles.active : ""} onClick={() => setDirectView(id)}>{label}</button>)}</div>
         <button className={styles.primaryButton} onClick={() => notify("فرم ثبت ارجاع در Preview باز می‌شود.")}>ثبت ارجاع مستقیم جدید</button>
       </div>
-      <div style={compactFilters}>
+      <div style={filterStyle}>
         <label>جست‌وجو<input style={inputStyle} value={search} onChange={(event)=>setSearch(event.target.value)} placeholder="عنوان، کارفرما، حوزه یا کد" /></label>
-        <label>نوع ارجاع<select style={inputStyle} value={directTypeFilter} onChange={(event)=>setDirectTypeFilter(event.target.value)}><option value="">همه انواع</option>{[...new Set(directSeed.map((item)=>item.opportunityType))].map((type)=><option key={type}>{type}</option>)}</select></label>
-        <label>استان<select style={inputStyle} value={provinceFilter} onChange={(event)=>setProvinceFilter(event.target.value)}><option value="">همه استان‌ها</option>{[...new Set(directSeed.map((item)=>item.province))].map((province)=><option key={province}>{province}</option>)}</select></label>
+        <label>نوع ارجاع<select style={inputStyle} value={directTypeFilter} onChange={(event)=>setDirectTypeFilter(event.target.value)}><option value="">همه انواع</option>{[...new Set(directReferrals.map((item)=>item.opportunityType))].map((type)=><option key={type}>{type}</option>)}</select></label>
+        <label>استان<select style={inputStyle} value={provinceFilter} onChange={(event)=>setProvinceFilter(event.target.value)}><option value="">همه استان‌ها</option>{[...new Set(directReferrals.map((item)=>item.province))].map((province)=><option key={province}>{province}</option>)}</select></label>
         <label>اهمیت<select style={inputStyle} value={importanceFilter} onChange={(event)=>setImportanceFilter(event.target.value)}><option value="">همه سطوح</option>{Object.entries(importanceLabels).map(([value,label])=><option key={value} value={value}>{label}</option>)}</select></label>
         <b style={{alignSelf:"end"}}>{fa.format(filteredDirect.length)} رکورد</b>
       </div>
