@@ -14,12 +14,13 @@ from .models import (
 class ProcurementConnectorSerializer(serializers.ModelSerializer):
     notice_type_label = serializers.CharField(source="get_notice_type_display", read_only=True)
     status_label = serializers.CharField(source="get_status_display", read_only=True)
+    operational_note = serializers.SerializerMethodField()
 
     class Meta:
         model = ProcurementConnector
         fields = [
             "id", "source", "key", "notice_type", "notice_type_label", "enabled", "status",
-            "status_label", "list_url_template", "parser_version", "supports_detail",
+            "status_label", "operational_note", "list_url_template", "parser_version", "supports_detail",
             "requires_browser", "page_size_hint", "max_pages", "timeout_seconds", "retry_count",
             "overlap_days", "last_success_at", "last_failure_at", "last_successful_page",
             "created_at", "updated_at",
@@ -29,6 +30,12 @@ class ProcurementConnectorSerializer(serializers.ModelSerializer):
             "supports_detail", "requires_browser", "page_size_hint", "last_success_at",
             "last_failure_at", "last_successful_page", "created_at", "updated_at",
         ]
+
+    def get_operational_note(self, obj):
+        configuration = obj.source.configuration or {}
+        controls = configuration.get("connector_controls") or {}
+        note = controls.get(obj.key)
+        return note if isinstance(note, dict) else None
 
     def validate_status(self, value):
         if value == ProcurementConnector.Status.PENDING:
@@ -40,6 +47,7 @@ class ProcurementConnectorSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError("Connector غیرفعال نمی‌تواند وضعیت فعال داشته باشد.")
         return value
 
+    @transaction.atomic
     def update(self, instance, validated_data):
         enabled = validated_data.get("enabled", instance.enabled)
         if "status" not in validated_data:
@@ -47,7 +55,15 @@ class ProcurementConnectorSerializer(serializers.ModelSerializer):
                 validated_data["status"] = ProcurementConnector.Status.ACTIVE
             elif not enabled:
                 validated_data["status"] = ProcurementConnector.Status.INACTIVE
-        return super().update(instance, validated_data)
+        connector = super().update(instance, validated_data)
+        if connector.enabled and not connector.source.enabled:
+            ProcurementSource.objects.filter(pk=connector.source_id).update(
+                enabled=True,
+                status=ProcurementSource.Status.ACTIVE,
+            )
+            connector.source.enabled = True
+            connector.source.status = ProcurementSource.Status.ACTIVE
+        return connector
 
 
 class ProcurementSourceSerializer(serializers.ModelSerializer):
