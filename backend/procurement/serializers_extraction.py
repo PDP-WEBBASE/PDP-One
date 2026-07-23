@@ -62,6 +62,7 @@ class ExtractionRunSerializer(serializers.ModelSerializer):
     connectors = ProcurementConnectorSerializer(many=True, read_only=True)
     status_label = serializers.CharField(source="get_status_display", read_only=True)
     trigger_label = serializers.CharField(source="get_trigger_display", read_only=True)
+    mode_label = serializers.CharField(source="get_mode_display", read_only=True)
     requested_by_username = serializers.CharField(source="requested_by.username", read_only=True)
     pages = ExtractionPageSerializer(many=True, read_only=True)
     errors = ExtractionErrorSerializer(many=True, read_only=True)
@@ -72,6 +73,9 @@ class ExtractionRunSerializer(serializers.ModelSerializer):
             "id",
             "trigger",
             "trigger_label",
+            "mode",
+            "mode_label",
+            "lookback_days",
             "status",
             "status_label",
             "connector_ids",
@@ -149,6 +153,25 @@ class ExtractionRunSerializer(serializers.ModelSerializer):
         if value is not None and value > 500:
             raise serializers.ValidationError("حداکثر تعداد صفحات در اجرای دستی ۵۰۰ صفحه است.")
         return value
+
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+        mode = attrs.get("mode", ExtractionRun.Mode.INCREMENTAL)
+        lookback_days = attrs.get("lookback_days")
+        if mode == ExtractionRun.Mode.MANUAL_RANGE:
+            if lookback_days is None:
+                raise serializers.ValidationError(
+                    {"lookback_days": "برای استخراج بازه‌دار، تعداد روز گذشته الزامی است."}
+                )
+            if not 1 <= lookback_days <= 365:
+                raise serializers.ValidationError(
+                    {"lookback_days": "تعداد روز گذشته باید بین ۱ تا ۳۶۵ روز باشد."}
+                )
+        elif lookback_days is not None:
+            raise serializers.ValidationError(
+                {"lookback_days": "تعداد روز فقط در حالت دستی بازه‌دار قابل استفاده است."}
+            )
+        return attrs
 
     def create(self, validated_data):
         connectors = validated_data.pop("connectors")
