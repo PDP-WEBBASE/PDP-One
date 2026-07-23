@@ -161,9 +161,13 @@ class ProcurementNoticeListSerializer(serializers.ModelSerializer):
     notice_type_label = serializers.CharField(source="get_resolved_notice_type_display", read_only=True)
     type_resolution_status_label = serializers.CharField(source="get_type_resolution_status_display", read_only=True)
     processing_status_label = serializers.CharField(source="get_processing_status_display", read_only=True)
+    importance_label = serializers.CharField(source="get_importance_display", read_only=True)
     case_stage = serializers.CharField(source="case.stage", read_only=True)
     case_stage_label = serializers.CharField(source="case.get_stage_display", read_only=True)
     source_count = serializers.IntegerField(read_only=True)
+    source_name = serializers.SerializerMethodField()
+    source_url = serializers.SerializerMethodField()
+    detail_url = serializers.SerializerMethodField()
 
     class Meta:
         model = ProcurementNotice
@@ -171,8 +175,8 @@ class ProcurementNoticeListSerializer(serializers.ModelSerializer):
             "id", "reference_code", "resolved_notice_type", "notice_type_label", "type_resolution_status",
             "type_resolution_status_label", "title", "employer_name", "notice_number", "province",
             "published_date", "submission_deadline", "processing_status", "processing_status_label",
-            "is_recommended", "case_stage", "case_stage_label", "source_count", "first_seen_at",
-            "last_seen_at",
+            "importance", "importance_label", "is_recommended", "case_stage", "case_stage_label",
+            "source_count", "source_name", "source_url", "detail_url", "first_seen_at", "last_seen_at",
         ]
         read_only_fields = fields
 
@@ -181,6 +185,23 @@ class ProcurementNoticeListSerializer(serializers.ModelSerializer):
             return obj.reference_record.code
         except AttributeError:
             return None
+
+    @staticmethod
+    def _primary_source(obj):
+        links = list(obj.source_links.all())
+        return links[0].source_notice if links else None
+
+    def get_source_name(self, obj):
+        source = self._primary_source(obj)
+        return source.connector.source.name if source else ""
+
+    def get_source_url(self, obj):
+        source = self._primary_source(obj)
+        return source.source_url if source else ""
+
+    def get_detail_url(self, obj):
+        source = self._primary_source(obj)
+        return (source.detail_url or source.source_url) if source else ""
 
 
 class ProcurementNoticeDetailSerializer(ProcurementNoticeListSerializer):
