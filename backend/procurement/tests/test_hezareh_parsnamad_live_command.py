@@ -6,15 +6,14 @@ from django.core.management import call_command
 from django.core.management.base import CommandError
 from django.test import TestCase
 
-from procurement.models import ProcurementConnector, ProcurementSource
+from procurement.models import ProcurementConnector
 from procurement.models_extraction import ExtractionRun
 
 
 class HezarehParsnamadLiveTestCommandTests(TestCase):
-    connector_keys = [
+    enabled_connector_keys = [
         "hezareh_tenders",
         "hezareh_inquiries",
-        "parsnamad_tenders",
         "parsnamad_inquiries",
     ]
 
@@ -33,11 +32,13 @@ class HezarehParsnamadLiveTestCommandTests(TestCase):
             }
             for key in run.connectors.values_list("key", flat=True)
         }
+        connector_count = run.connectors.count()
         run.status = ExtractionRun.Status.SUCCEEDED
-        run.pages_processed = 20
-        run.records_seen = 48
-        run.records_new = 48
+        run.pages_processed = 5 * connector_count
+        run.records_seen = 12 * connector_count
+        run.records_new = 12 * connector_count
         run.summary = {
+            **(run.summary or {}),
             "connectors": connector_summaries,
             "skipped_disabled_connectors": [],
         }
@@ -57,7 +58,7 @@ class HezarehParsnamadLiveTestCommandTests(TestCase):
         "procurement.management.commands.test_hezareh_parsnamad_connectors.run_extraction",
         autospec=True,
     )
-    def test_command_uses_four_connectors_and_five_pages_each(self, run_extraction):
+    def test_command_tests_only_enabled_connectors(self, run_extraction):
         run_extraction.side_effect = self.fake_successful_run
         stdout = StringIO()
         stderr = StringIO()
@@ -75,32 +76,29 @@ class HezarehParsnamadLiveTestCommandTests(TestCase):
         self.assertFalse(run.analyze_after_success)
         self.assertEqual(
             set(run.connectors.values_list("key", flat=True)),
-            set(self.connector_keys),
+            set(self.enabled_connector_keys),
         )
-
-        self.assertEqual(
-            ProcurementConnector.objects.filter(
-                key__in=self.connector_keys,
-                enabled=True,
-                status=ProcurementConnector.Status.ACTIVE,
-            ).count(),
-            4,
-        )
-        self.assertEqual(
-            ProcurementSource.objects.filter(
-                key__in=["hezareh", "parsnamad"],
-                enabled=True,
-                status=ProcurementSource.Status.ACTIVE,
-            ).count(),
-            2,
+        self.assertFalse(
+            ProcurementConnector.objects.get(key="parsnamad_tenders").enabled
         )
 
         payload = json.loads(stdout.getvalue())
         self.assertEqual(payload["run_status"], ExtractionRun.Status.SUCCEEDED)
         self.assertEqual(payload["page_cap_per_connector"], 5)
-        self.assertEqual(payload["expected_page_attempts"], 20)
+        self.assertEqual(payload["configured_connector_count"], 4)
+        self.assertEqual(payload["tested_connector_count"], 3)
+        self.assertEqual(payload["maximum_page_attempts"], 15)
+        self.assertEqual(
+            payload["skipped_disabled_connector_keys"],
+            ["parsnamad_tenders"],
+        )
         self.assertFalse(payload["setad_included"])
         self.assertEqual(len(payload["connectors"]), 4)
+        disabled_report = next(
+            item for item in payload["connectors"] if item["key"] == "parsnamad_tenders"
+        )
+        self.assertFalse(disabled_report["tested"])
+        self.assertEqual(disabled_report["requested_pages"], 0)
 
     def test_command_rejects_more_than_ten_pages(self):
         with self.assertRaises(CommandError):
