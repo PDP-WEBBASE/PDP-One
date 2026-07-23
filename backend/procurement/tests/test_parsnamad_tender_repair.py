@@ -140,10 +140,24 @@ class ParsNamadTenderRepairTests(TestCase):
         self.connector.refresh_from_db()
         self.assertEqual(
             self.connector.list_url_template,
-            "https://www.parsnamaddata.com/tender/page-{page}",
+            "https://www.parsnamaddata.com/tenders/page/{page}",
         )
-        self.assertEqual(self.connector.parser_version, "parsnamad-tenders-v2")
+        self.assertEqual(
+            self.connector.parser_version,
+            "parsnamad-tenders-v3-completeness-guard",
+        )
+        route = self.connector.source.configuration["connector_page_urls"][
+            "parsnamad_tenders"
+        ]
+        self.assertEqual(
+            route["first_page"],
+            "https://www.parsnamaddata.com/tender.html",
+        )
 
         payload = json.loads(stdout.getvalue())
         self.assertEqual(payload["retest_status"], ExtractionRun.Status.SUCCEEDED)
         self.assertEqual(payload["connector"]["summary"]["pages"], 5)
+        self.assertEqual(
+            payload["connector"]["first_page_url"],
+            "https://www.parsnamaddata.com/tender.html",
+        )
