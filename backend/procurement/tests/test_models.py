@@ -37,6 +37,7 @@ class ProcurementSeedTests(TestCase):
             "https://www.parsnamaddata.com/tenders/page/{page}",
         )
         parsnamad_tenders = ProcurementConnector.objects.get(key="parsnamad_tenders")
+        parsnamad_inquiries = ProcurementConnector.objects.get(key="parsnamad_inquiries")
         self.assertEqual(
             parsnamad_tenders.list_url_template,
             "https://www.parsnamaddata.com/tenders/page/{page}",
@@ -44,6 +45,14 @@ class ProcurementSeedTests(TestCase):
         self.assertEqual(
             parsnamad_tenders.parser_version,
             "parsnamad-tenders-v3-completeness-guard",
+        )
+        self.assertFalse(parsnamad_tenders.enabled)
+        self.assertEqual(parsnamad_tenders.status, ProcurementConnector.Status.INACTIVE)
+        self.assertTrue(parsnamad_inquiries.enabled)
+        self.assertEqual(parsnamad_inquiries.status, ProcurementConnector.Status.ACTIVE)
+        self.assertIn(
+            "همان محتوای استعلامات",
+            parsnamad.configuration["connector_controls"]["parsnamad_tenders"]["reason"],
         )
 
         setad = ProcurementSource.objects.get(key="setad")
