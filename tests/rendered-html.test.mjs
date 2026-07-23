@@ -60,11 +60,12 @@ test("routes procurement to the live V13 workspace", async () => {
 test("loads live procurement collections and performs real writes", async () => {
   const source = await readFile(new URL("../app/procurement/ProcurementWorkspaceV13.tsx", import.meta.url), "utf8");
 
-  assert.match(source, /\/procurement\/notices\//);
-  assert.match(source, /\/procurement\/direct-opportunities\//);
-  assert.match(source, /\/procurement\/dashboard\//);
-  assert.match(source, /\/procurement\/extraction-runs\//);
-  assert.match(source, /\/procurement\/automation-settings\//);
+  assert.match(source, /const PROCUREMENT_API = `\$\{API_BASE\}\/procurement`/);
+  assert.match(source, /\$\{PROCUREMENT_API\}\/notices\//);
+  assert.match(source, /\$\{PROCUREMENT_API\}\/direct-opportunities\//);
+  assert.match(source, /\$\{PROCUREMENT_API\}\/dashboard\//);
+  assert.match(source, /\$\{PROCUREMENT_API\}\/extraction-runs\//);
+  assert.match(source, /\$\{PROCUREMENT_API\}\/automation-settings\//);
   assert.match(source, /method:\s*"POST"/);
   assert.match(source, /mode:\s*modeValue/);
   assert.match(source, /connector_ids/);
