@@ -4,6 +4,7 @@ from django.utils import timezone
 from rest_framework.test import APIClient
 
 from procurement.models import ProcurementCase, ProcurementConnector, ProcurementNotice, ProcurementSource
+from procurement.models_extraction import ExtractionRun
 
 
 class ProcurementSourceApiTests(TestCase):
@@ -132,3 +133,45 @@ class ProcurementNoticeApiTests(TestCase):
         self.assertEqual(response.data["notices"]["total"], 2)
         self.assertEqual(response.data["cases"]["active"], 1)
         self.assertEqual(response.data["sources"]["enabled_connectors"], 6)
+        self.assertEqual(response.data["sources"]["attention_connectors"], 6)
+        self.assertFalse(response.data["sources"]["all_healthy"])
+
+    def test_dashboard_marks_partial_connector_as_incomplete(self):
+        connector = ProcurementConnector.objects.get(key="hezareh_tenders")
+        run = ExtractionRun.objects.create(
+            status=ExtractionRun.Status.PARTIAL,
+            page_cap=5,
+            started_at=timezone.now(),
+            finished_at=timezone.now(),
+            summary={
+                "connectors": {
+                    connector.key: {
+                        "status": "partial",
+                        "pages": 3,
+                        "seen": 40,
+                        "warnings": 1,
+                        "requested_page_cap": 5,
+                        "last_successful_page": 2,
+                        "reported_total_pages": 95,
+                        "completeness": "incomplete",
+                        "stop_reason": "unexpected_empty_page",
+                        "suspicious_pages": [3],
+                        "recovered_pages": [],
+                    }
+                }
+            },
+        )
+        run.connectors.add(connector)
+
+        response = self.client.get("/api/v1/procurement/dashboard/")
+
+        self.assertEqual(response.status_code, 200)
+        health = next(
+            item
+            for item in response.data["sources"]["connector_health"]
+            if item["key"] == connector.key
+        )
+        self.assertEqual(health["health"], "incomplete")
+        self.assertTrue(health["requires_attention"])
+        self.assertEqual(health["latest_run"]["last_successful_page"], 2)
+        self.assertEqual(health["latest_run"]["suspicious_pages"], [3])
