@@ -28,26 +28,53 @@ class Command(BaseCommand):
             except ExtractionRun.DoesNotExist as exc:
                 raise CommandError("The previous controlled test run was not found.") from exc
 
+        expected_keys = {
+            "hezareh_tenders",
+            "hezareh_inquiries",
+            "parsnamad_tenders",
+            "parsnamad_inquiries",
+        }
         candidates = (
             ExtractionRun.objects.filter(connectors=connector)
             .prefetch_related("connectors")
-            .order_by("-created_at")[:25]
+            .order_by("-created_at")[:50]
         )
         for candidate in candidates:
             summary = candidate.summary or {}
-            requested = summary.get("requested_connector_keys") or []
+            if summary.get("parsnamad_tender_cleanup"):
+                continue
+
+            requested = set(summary.get("requested_connector_keys") or [])
             if summary.get("controlled_live_test") and "parsnamad_tenders" in requested:
-                if not summary.get("parsnamad_tender_cleanup"):
-                    return candidate
+                return candidate
+
+            # Older extraction code replaced the initial summary metadata at the
+            # end of a run. Identify that known four-connector, five-page test by
+            # its persisted connector set and NEW run items instead.
+            connector_keys = set(candidate.connectors.values_list("key", flat=True))
+            new_item_count = candidate.items.filter(
+                connector=connector,
+                status=ExtractionRunItem.Status.NEW,
+                source_notice__isnull=False,
+            ).count()
+            if (
+                candidate.page_cap == 5
+                and connector_keys == expected_keys
+                and new_item_count > 0
+                and candidate.status
+                in {
+                    ExtractionRun.Status.SUCCEEDED,
+                    ExtractionRun.Status.SUCCEEDED_WITH_WARNINGS,
+                }
+            ):
+                return candidate
+
         raise CommandError(
-            "No unrepaired controlled Pars Namad tender test run was found."
+            "No unrepaired five-page Pars Namad tender test run was found."
         )
 
     @transaction.atomic
     def _cleanup(self, run: ExtractionRun, connector: ProcurementConnector) -> dict:
-        if not run.summary.get("controlled_live_test"):
-            raise CommandError("The selected run is not marked as a controlled live test.")
-
         items = list(
             run.items.filter(
                 connector=connector,
@@ -61,6 +88,11 @@ class Command(BaseCommand):
             if item.source_notice_id not in seen_ids:
                 source_notices.append(item.source_notice)
                 seen_ids.add(item.source_notice_id)
+
+        if not source_notices:
+            raise CommandError(
+                "The selected test run has no new Pars Namad tender records to repair."
+            )
 
         removed_sources = 0
         removed_notices = 0
@@ -183,7 +215,7 @@ class Command(BaseCommand):
             )
         )
         report = {
-            "schema": "pdp-one.parsnamad-tender-repair-retest.v1",
+            "schema": "pdp-one.parsnamad-tender-repair-retest.v2",
             "generated_at": timezone.now().isoformat(),
             "previous_run_id": str(previous_run.id),
             "cleanup": cleanup,
