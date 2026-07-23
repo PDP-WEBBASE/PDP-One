@@ -45,24 +45,36 @@ test("renders development preview metadata", async () => {
   assert.match(await response.text(), developmentPreviewMeta);
 });
 
-test("keeps source controls and extraction health inside management", async () => {
+test("routes procurement to the live V13 workspace", async () => {
   const pageSource = await readFile(new URL("../app/procurement/page.tsx", import.meta.url), "utf8");
-  const workspaceSource = await readFile(new URL("../app/procurement/ProcurementWorkspaceV12.tsx", import.meta.url), "utf8");
+  const workspaceSource = await readFile(new URL("../app/procurement/ProcurementWorkspaceV13.tsx", import.meta.url), "utf8");
 
-  assert.doesNotMatch(pageSource, /ConnectorHealthBanner/);
-  assert.doesNotMatch(pageSource, /ExtractionSourceControls/);
-  assert.match(workspaceSource, /گزارش استخراج/);
-  assert.match(workspaceSource, /<ConnectorHealthBanner embedded/);
-  assert.match(workspaceSource, /<ExtractionSourceControls/);
-  assert.match(workspaceSource, /نقش و Prompt/);
-  assert.match(workspaceSource, /کلیدواژه‌ها/);
-  assert.match(workspaceSource, /پروفایل، صلاحیت و رزومه/);
-  assert.match(workspaceSource, /نسخه‌ها و فعال‌سازی/);
-  assert.doesNotMatch(workspaceSource, /تنظیمات کنترل‌شده/);
+  assert.match(pageSource, /ProcurementWorkspaceV13/);
+  assert.match(workspaceSource, /متصل به API و پایگاه‌داده واقعی سامانه/);
+  assert.doesNotMatch(workspaceSource, /Preview تعاملی/);
+  assert.doesNotMatch(workspaceSource, /const notices\s*:/);
+  assert.doesNotMatch(workspaceSource, /const directReferrals\s*:/);
+  assert.doesNotMatch(workspaceSource, /const extractionHistory\s*=/);
 });
 
-test("preserves approved dashboard and final compact list enhancements", async () => {
-  const source = await readFile(new URL("../app/procurement/ProcurementWorkspaceV12.tsx", import.meta.url), "utf8");
+test("loads live procurement collections and performs real writes", async () => {
+  const source = await readFile(new URL("../app/procurement/ProcurementWorkspaceV13.tsx", import.meta.url), "utf8");
+
+  assert.match(source, /\/procurement\/notices\//);
+  assert.match(source, /\/procurement\/direct-opportunities\//);
+  assert.match(source, /\/procurement\/dashboard\//);
+  assert.match(source, /\/procurement\/extraction-runs\//);
+  assert.match(source, /\/procurement\/automation-settings\//);
+  assert.match(source, /method:\s*"POST"/);
+  assert.match(source, /mode:\s*modeValue/);
+  assert.match(source, /connector_ids/);
+  assert.match(source, /lookback_days/);
+  assert.match(source, /X-CSRFToken/);
+  assert.match(source, /داده نمونه نمایش داده نمی‌شود/);
+});
+
+test("keeps approved V12 structure and compact list enhancements", async () => {
+  const source = await readFile(new URL("../app/procurement/ProcurementWorkspaceV13.tsx", import.meta.url), "utf8");
 
   assert.match(source, /قیف مدیریتی/);
   assert.match(source, /برد و باخت/);
@@ -80,4 +92,13 @@ test("preserves approved dashboard and final compact list enhancements", async (
   assert.match(source, /urgencyFilter/);
   assert.doesNotMatch(source, /<dt>اقدام بعدی<\/dt>/);
   assert.match(source, /fontSize:21/);
+});
+
+test("does not silently replace API failures with sample procurement data", async () => {
+  const source = await readFile(new URL("../app/procurement/ProcurementWorkspaceV13.tsx", import.meta.url), "utf8");
+
+  assert.match(source, /داده نمونه نمایش داده نمی‌شود/);
+  assert.match(source, /هیچ داده نمونه‌ای جایگزین نشده است/);
+  assert.match(source, /رکورد واقعی مطابق این فیلتر وجود ندارد/);
+  assert.match(source, /هنوز استخراج واقعی ثبت نشده است/);
 });
