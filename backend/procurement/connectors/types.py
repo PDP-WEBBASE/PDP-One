@@ -1,9 +1,11 @@
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
+from procurement.http import SourceFetchError
 
-class PageContentMismatchError(ValueError):
-    """The page is reachable and parseable, but its dominant content is for another connector type."""
+
+class PageContentMismatchError(SourceFetchError):
+    """The page is reachable, but its dominant content belongs to another connector type."""
 
     def __init__(
         self,
@@ -19,10 +21,14 @@ class PageContentMismatchError(ValueError):
         self.mismatch_count = mismatch_count
         self.total_count = total_count
         self.source_name = source_name
+        message = (
+            "نوع غالب محتوای صفحه با Connector انتخاب‌شده سازگار نیست؛ "
+            f"نوع مورد انتظار {expected_type} و نوع تشخیص‌داده‌شده {detected_type} است."
+        )
         super().__init__(
-            f"Page content type mismatch: expected={expected_type}, "
-            f"detected={detected_type}, mismatch_count={mismatch_count}, "
-            f"total={total_count}"
+            message,
+            category="validation",
+            retryable=False,
         )
 
     def as_details(self) -> dict[str, Any]:
