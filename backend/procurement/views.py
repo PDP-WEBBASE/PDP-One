@@ -11,6 +11,7 @@ from core.models import AuditEvent
 
 from .models import ProcurementCase, ProcurementConnector, ProcurementNotice, ProcurementSource
 from .models_direct import DirectOpportunity
+from .models_extraction import ExtractionRun
 from .permissions import IsSystemAdministratorOrReadOnly
 from .serializers import (
     ProcurementCaseSerializer,
@@ -180,6 +181,96 @@ def _daily_notice_stats(notices, start_at, end_at):
     }
 
 
+def _connector_health_snapshot(connector: ProcurementConnector) -> dict:
+    if not connector.enabled or not connector.source.enabled:
+        return {
+            "key": connector.key,
+            "source": connector.source.name,
+            "notice_type": connector.notice_type,
+            "health": "disabled",
+            "health_label": "غیرفعال",
+            "requires_attention": False,
+            "message": "این Connector توسط مدیر غیرفعال شده است.",
+            "latest_run": None,
+        }
+
+    latest_run = (
+        connector.extraction_runs.exclude(
+            status__in=[ExtractionRun.Status.QUEUED, ExtractionRun.Status.RUNNING]
+        )
+        .order_by("-created_at")
+        .first()
+    )
+    if latest_run is None:
+        return {
+            "key": connector.key,
+            "source": connector.source.name,
+            "notice_type": connector.notice_type,
+            "health": "not_tested",
+            "health_label": "آزمایش نشده",
+            "requires_attention": True,
+            "message": "هنوز اجرای تکمیل‌شده‌ای برای این Connector ثبت نشده است.",
+            "latest_run": None,
+        }
+
+    connector_summary = (latest_run.summary.get("connectors") or {}).get(connector.key, {})
+    completeness = connector_summary.get("completeness", "unknown")
+    connector_status = connector_summary.get("status", latest_run.status)
+    stop_reason = connector_summary.get("stop_reason", "")
+
+    if connector_status == "failed" or latest_run.status == ExtractionRun.Status.FAILED:
+        health = "failed"
+        label = "ناموفق"
+        message = "استخراج این منبع با خطا متوقف شده است."
+        attention = True
+    elif connector_status == "partial" or completeness == "incomplete":
+        health = "incomplete"
+        label = "استخراج ناقص"
+        message = "پایان فهرست تأیید نشد؛ ممکن است بخشی از اطلاعات دریافت نشده باشد."
+        attention = True
+    elif completeness in {"limited_by_page_cap", "page_cap_reached_unverified"}:
+        health = "limited"
+        label = "محدود به سقف صفحات"
+        message = "استخراج به سقف تعیین‌شده رسیده و کامل‌بودن کل فهرست تأیید نشده است."
+        attention = True
+    elif connector_status == "succeeded_with_warnings" or latest_run.status == ExtractionRun.Status.SUCCEEDED_WITH_WARNINGS:
+        health = "warning"
+        label = "دارای هشدار"
+        message = "استخراج انجام شده اما حداقل یک هشدار نیازمند بررسی وجود دارد."
+        attention = True
+    else:
+        health = "healthy"
+        label = "سالم"
+        message = "آخرین استخراج بدون خطای کامل‌بودن انجام شده است."
+        attention = False
+
+    return {
+        "key": connector.key,
+        "source": connector.source.name,
+        "notice_type": connector.notice_type,
+        "health": health,
+        "health_label": label,
+        "requires_attention": attention,
+        "message": message,
+        "latest_run": {
+            "id": str(latest_run.id),
+            "status": latest_run.status,
+            "created_at": latest_run.created_at,
+            "finished_at": latest_run.finished_at,
+            "requested_page_cap": connector_summary.get("requested_page_cap", latest_run.page_cap),
+            "pages_processed": connector_summary.get("pages", 0),
+            "last_successful_page": connector_summary.get("last_successful_page"),
+            "reported_total_pages": connector_summary.get("reported_total_pages"),
+            "records_seen": connector_summary.get("seen", 0),
+            "warnings": connector_summary.get("warnings", 0),
+            "completeness": completeness,
+            "stop_reason": stop_reason,
+            "suspicious_pages": connector_summary.get("suspicious_pages", []),
+            "recovered_pages": connector_summary.get("recovered_pages", []),
+        },
+    }
+
+
 @api_view(["GET"])
 def procurement_dashboard(request):
     now = timezone.now()
@@ -210,6 +301,16 @@ def procurement_dashboard(request):
             DirectOpportunity.Stage.CONVERTED_TO_CONTRACT,
         ]
     )
+    connectors = list(
+        ProcurementConnector.objects.select_related("source").order_by(
+            "source__name", "notice_type"
+        )
+    )
+    connector_health = [_connector_health_snapshot(connector) for connector in connectors]
+    attention_connectors = sum(
+        1 for item in connector_health if item["requires_attention"]
+    )
+
     return Response(
         {
             "daily_notices": {
@@ -249,6 +350,9 @@ def procurement_dashboard(request):
                     Q(status=ProcurementConnector.Status.PENDING)
                     | Q(source__status=ProcurementSource.Status.PENDING)
                 ).count(),
+                "attention_connectors": attention_connectors,
+                "all_healthy": attention_connectors == 0,
+                "connector_health": connector_health,
             },
         }
     )
