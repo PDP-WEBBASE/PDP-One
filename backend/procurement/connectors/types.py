@@ -2,6 +2,39 @@ from dataclasses import asdict, dataclass, field
 from typing import Any
 
 
+class PageContentMismatchError(ValueError):
+    """The page is reachable and parseable, but its dominant content is for another connector type."""
+
+    def __init__(
+        self,
+        *,
+        expected_type: str,
+        detected_type: str,
+        mismatch_count: int,
+        total_count: int,
+        source_name: str = "",
+    ):
+        self.expected_type = expected_type
+        self.detected_type = detected_type
+        self.mismatch_count = mismatch_count
+        self.total_count = total_count
+        self.source_name = source_name
+        super().__init__(
+            f"Page content type mismatch: expected={expected_type}, "
+            f"detected={detected_type}, mismatch_count={mismatch_count}, "
+            f"total={total_count}"
+        )
+
+    def as_details(self) -> dict[str, Any]:
+        return {
+            "expected_type": self.expected_type,
+            "detected_type": self.detected_type,
+            "mismatch_count": self.mismatch_count,
+            "total_count": self.total_count,
+            "source_name": self.source_name,
+        }
+
+
 @dataclass(slots=True)
 class ParsedNotice:
     source_record_id: str
