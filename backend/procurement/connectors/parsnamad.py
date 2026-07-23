@@ -4,7 +4,13 @@ from typing import Any
 
 from bs4 import BeautifulSoup
 
-from .base import absolute_url, detect_notice_type, normalize_text
+from .base import (
+    absolute_url,
+    detect_notice_type,
+    normalize_text,
+    page_number_from_url,
+    pagination_page_numbers,
+)
 from .types import ParsedNotice, ParsedPage
 
 
@@ -114,9 +120,36 @@ class ParsNamadParser:
             if url not in seen:
                 next_page_urls.append(url)
                 seen.add(url)
+
         if not notices:
             warnings.append("no_notice_rows_found")
-        return ParsedPage(notices=notices, next_page_urls=next_page_urls, warnings=warnings)
+
+        current_page = page_number_from_url(page_url, default=1)
+        page_numbers = pagination_page_numbers([page_url, *next_page_urls])
+        total_pages = max(page_numbers) if page_numbers else None
+        end_of_results: bool | None = None
+        if total_pages is not None and current_page is not None:
+            if notices:
+                end_of_results = current_page >= total_pages
+            elif current_page > total_pages:
+                end_of_results = True
+            else:
+                end_of_results = False
+
+        page_title = normalize_text(soup.title.get_text(" ", strip=True) if soup.title else "")
+        return ParsedPage(
+            notices=notices,
+            next_page_urls=next_page_urls,
+            warnings=warnings,
+            reported_current_page=current_page,
+            reported_total_pages=total_pages,
+            end_of_results=end_of_results,
+            diagnostics={
+                "page_title": page_title[:200],
+                "matched_rows": len(soup.select(self.row_selector)),
+                "detected_type_counts": detected_counts,
+            },
+        )
 
     def parse_detail(self, html: str) -> dict:
         soup = BeautifulSoup(html, "html.parser")
