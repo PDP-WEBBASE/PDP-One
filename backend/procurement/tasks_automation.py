@@ -49,6 +49,7 @@ def dispatch_due_extraction() -> dict:
     with transaction.atomic():
         run = ExtractionRun.objects.create(
             trigger=ExtractionRun.Trigger.SCHEDULED,
+            mode=ExtractionRun.Mode.INCREMENTAL,
             status=ExtractionRun.Status.QUEUED,
             include_details=True,
             analyze_after_success=False,
@@ -70,6 +71,7 @@ def dispatch_due_extraction() -> dict:
     return {
         "dispatched": True,
         "run_id": str(run.id),
+        "mode": run.mode,
         "connector_keys": [connector.key for connector in connectors],
         "next_extraction_at": settings.next_extraction_at,
     }
