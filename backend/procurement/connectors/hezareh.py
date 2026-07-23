@@ -7,6 +7,8 @@ from .base import (
     first_date,
     first_numeric,
     normalize_text,
+    page_number_from_url,
+    pagination_page_numbers,
 )
 from .types import ParsedNotice, ParsedPage
 
@@ -84,11 +86,40 @@ class HezarehParser:
                 next_page_urls.append(url)
                 seen.add(url)
 
-        if not notices and self._is_security_challenge(soup):
+        security_challenge = self._is_security_challenge(soup)
+        if not notices and security_challenge:
             warnings.append("security_challenge")
         elif not notices:
             warnings.append("no_notice_rows_found")
-        return ParsedPage(notices=notices, next_page_urls=next_page_urls, warnings=warnings)
+
+        current_page = page_number_from_url(page_url, default=1)
+        page_numbers = pagination_page_numbers([page_url, *next_page_urls])
+        total_pages = max(page_numbers) if page_numbers else None
+        end_of_results: bool | None = None
+        if security_challenge:
+            end_of_results = False
+        elif total_pages is not None and current_page is not None:
+            if notices:
+                end_of_results = current_page >= total_pages
+            elif current_page > total_pages:
+                end_of_results = True
+            else:
+                end_of_results = False
+
+        page_title = normalize_text(soup.title.get_text(" ", strip=True) if soup.title else "")
+        return ParsedPage(
+            notices=notices,
+            next_page_urls=next_page_urls,
+            warnings=warnings,
+            reported_current_page=current_page,
+            reported_total_pages=total_pages,
+            end_of_results=end_of_results,
+            diagnostics={
+                "page_title": page_title[:200],
+                "matched_rows": len(soup.select(self.row_selector)),
+                "security_challenge": security_challenge,
+            },
+        )
 
     def parse_detail(self, html: str) -> dict:
         soup = BeautifulSoup(html, "html.parser")
