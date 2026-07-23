@@ -48,9 +48,6 @@ class Command(BaseCommand):
             if summary.get("controlled_live_test") and "parsnamad_tenders" in requested:
                 return candidate
 
-            # Older extraction code replaced the initial summary metadata at the
-            # end of a run. Identify that known four-connector, five-page test by
-            # its persisted connector set and NEW run items instead.
             connector_keys = set(candidate.connectors.values_list("key", flat=True))
             new_item_count = candidate.items.filter(
                 connector=connector,
@@ -160,8 +157,8 @@ class Command(BaseCommand):
 
         connector.enabled = True
         connector.status = ProcurementConnector.Status.ACTIVE
-        connector.list_url_template = "https://www.parsnamaddata.com/tender/page-{page}"
-        connector.parser_version = "parsnamad-tenders-v2"
+        connector.list_url_template = "https://www.parsnamaddata.com/tenders/page/{page}"
+        connector.parser_version = "parsnamad-tenders-v3-completeness-guard"
         connector.save(
             update_fields=[
                 "enabled",
@@ -171,6 +168,15 @@ class Command(BaseCommand):
                 "updated_at",
             ]
         )
+        source_configuration = dict(connector.source.configuration or {})
+        connector_page_urls = dict(source_configuration.get("connector_page_urls") or {})
+        connector_page_urls[connector.key] = {
+            "first_page": "https://www.parsnamaddata.com/tender.html",
+            "template": "https://www.parsnamaddata.com/tenders/page/{page}",
+        }
+        source_configuration["connector_page_urls"] = connector_page_urls
+        connector.source.configuration = source_configuration
+        connector.source.save(update_fields=["configuration", "updated_at"])
 
         cleanup = self._cleanup(previous_run, connector)
 
@@ -215,7 +221,7 @@ class Command(BaseCommand):
             )
         )
         report = {
-            "schema": "pdp-one.parsnamad-tender-repair-retest.v2",
+            "schema": "pdp-one.parsnamad-tender-repair-retest.v3",
             "generated_at": timezone.now().isoformat(),
             "previous_run_id": str(previous_run.id),
             "cleanup": cleanup,
@@ -224,6 +230,7 @@ class Command(BaseCommand):
             "page_cap": pages,
             "connector": {
                 "key": connector.key,
+                "first_page_url": connector_page_urls[connector.key]["first_page"],
                 "url_template": connector.list_url_template,
                 "parser_version": connector.parser_version,
                 "summary": (retest.summary.get("connectors") or {}).get(
