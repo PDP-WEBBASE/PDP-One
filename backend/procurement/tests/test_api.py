@@ -28,6 +28,20 @@ class ProcurementSourceApiTests(TestCase):
         )
         self.assertEqual(response.status_code, 403)
 
+    def test_parsnamad_tender_and_inquiry_controls_are_independent(self):
+        self.client.force_authenticate(self.user)
+        response = self.client.get("/api/v1/procurement/sources/")
+        self.assertEqual(response.status_code, 200)
+
+        source = next(item for item in response.data["results"] if item["key"] == "parsnamad")
+        connectors = {item["notice_type"]: item for item in source["connectors"]}
+        self.assertFalse(connectors["tender"]["enabled"])
+        self.assertEqual(connectors["tender"]["status"], ProcurementConnector.Status.INACTIVE)
+        self.assertIn("همان محتوای استعلامات", connectors["tender"]["operational_note"]["reason"])
+        self.assertTrue(connectors["inquiry"]["enabled"])
+        self.assertEqual(connectors["inquiry"]["status"], ProcurementConnector.Status.ACTIVE)
+        self.assertTrue(source["enabled"])
+
     def test_system_admin_can_disable_site_and_its_connectors(self):
         self.client.force_authenticate(self.admin)
         hezareh = ProcurementSource.objects.get(key="hezareh")
@@ -59,6 +73,27 @@ class ProcurementSourceApiTests(TestCase):
         self.assertFalse(connector.enabled)
         self.assertEqual(connector.status, ProcurementConnector.Status.INACTIVE)
         self.assertTrue(connector.source.enabled)
+        tender = ProcurementConnector.objects.get(key="parsnamad_tenders")
+        self.assertFalse(tender.enabled)
+
+    def test_system_admin_can_reenable_one_connector_without_changing_the_other(self):
+        self.client.force_authenticate(self.admin)
+        tender = ProcurementConnector.objects.get(key="parsnamad_tenders")
+        inquiry = ProcurementConnector.objects.get(key="parsnamad_inquiries")
+
+        response = self.client.patch(
+            f"/api/v1/procurement/connectors/{tender.id}/",
+            {"enabled": True},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 200)
+
+        tender.refresh_from_db()
+        inquiry.refresh_from_db()
+        self.assertTrue(tender.enabled)
+        self.assertEqual(tender.status, ProcurementConnector.Status.ACTIVE)
+        self.assertTrue(inquiry.enabled)
+        self.assertEqual(inquiry.status, ProcurementConnector.Status.ACTIVE)
 
 
 class ProcurementNoticeApiTests(TestCase):
@@ -132,8 +167,8 @@ class ProcurementNoticeApiTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.data["notices"]["total"], 2)
         self.assertEqual(response.data["cases"]["active"], 1)
-        self.assertEqual(response.data["sources"]["enabled_connectors"], 6)
-        self.assertEqual(response.data["sources"]["attention_connectors"], 6)
+        self.assertEqual(response.data["sources"]["enabled_connectors"], 5)
+        self.assertEqual(response.data["sources"]["attention_connectors"], 5)
         self.assertFalse(response.data["sources"]["all_healthy"])
 
     def test_dashboard_marks_partial_connector_as_incomplete(self):
