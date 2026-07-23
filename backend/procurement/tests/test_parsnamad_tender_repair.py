@@ -88,6 +88,7 @@ class ParsNamadTenderRepairTests(TestCase):
         run.records_seen = 50
         run.records_new = 50
         run.summary = {
+            **(run.summary or {}),
             "connectors": {
                 "parsnamad_tenders": {
                     "status": "succeeded",
@@ -99,7 +100,7 @@ class ParsNamadTenderRepairTests(TestCase):
                     "failed": 0,
                     "warnings": 0,
                 }
-            }
+            },
         }
         run.save(
             update_fields=[
@@ -146,6 +147,8 @@ class ParsNamadTenderRepairTests(TestCase):
             self.connector.parser_version,
             "parsnamad-tenders-v3-completeness-guard",
         )
+        self.assertFalse(self.connector.enabled)
+        self.assertEqual(self.connector.status, ProcurementConnector.Status.INACTIVE)
         route = self.connector.source.configuration["connector_page_urls"][
             "parsnamad_tenders"
         ]
@@ -153,10 +156,21 @@ class ParsNamadTenderRepairTests(TestCase):
             route["first_page"],
             "https://www.parsnamaddata.com/tender.html",
         )
+        self.assertIn(
+            "همان محتوای استعلامات",
+            self.connector.source.configuration["connector_controls"][
+                "parsnamad_tenders"
+            ]["reason"],
+        )
 
         payload = json.loads(stdout.getvalue())
         self.assertEqual(payload["retest_status"], ExtractionRun.Status.SUCCEEDED)
         self.assertEqual(payload["connector"]["summary"]["pages"], 5)
+        self.assertFalse(payload["connector"]["enabled_after_test"])
+        self.assertEqual(
+            payload["connector"]["status_after_test"],
+            ProcurementConnector.Status.INACTIVE,
+        )
         self.assertEqual(
             payload["connector"]["first_page_url"],
             "https://www.parsnamaddata.com/tender.html",
