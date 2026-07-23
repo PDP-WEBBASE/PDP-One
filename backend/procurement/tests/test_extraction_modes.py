@@ -91,8 +91,10 @@ class ExtractionModeTests(TestCase):
 
     def test_incremental_run_stops_after_two_fully_known_pages(self):
         today = timezone.localdate()
-        known = parsed("known", today)
-        ingest_parsed_notice(self.connector, known)
+        known_page_one = parsed("known-1", today)
+        known_page_two = parsed("known-2", today)
+        ingest_parsed_notice(self.connector, known_page_one)
+        ingest_parsed_notice(self.connector, known_page_two)
         run = ExtractionRun.objects.create(
             mode=ExtractionRun.Mode.INCREMENTAL,
             status=ExtractionRun.Status.QUEUED,
@@ -101,8 +103,8 @@ class ExtractionModeTests(TestCase):
         )
         run.connectors.add(self.connector)
         pages = [
-            ParsedPage(notices=[known], reported_current_page=1, reported_total_pages=8, end_of_results=False),
-            ParsedPage(notices=[parsed("known", today)], reported_current_page=2, reported_total_pages=8, end_of_results=False),
+            ParsedPage(notices=[known_page_one], reported_current_page=1, reported_total_pages=8, end_of_results=False),
+            ParsedPage(notices=[known_page_two], reported_current_page=2, reported_total_pages=8, end_of_results=False),
         ]
 
         result = self.execute(run, pages)
@@ -115,8 +117,10 @@ class ExtractionModeTests(TestCase):
 
     def test_manual_range_ignores_known_boundary_until_date_cutoff(self):
         today = timezone.localdate()
-        known = parsed("known", today)
-        ingest_parsed_notice(self.connector, known)
+        known_page_one = parsed("known-1", today)
+        known_page_two = parsed("known-2", today)
+        ingest_parsed_notice(self.connector, known_page_one)
+        ingest_parsed_notice(self.connector, known_page_two)
         run = ExtractionRun.objects.create(
             mode=ExtractionRun.Mode.MANUAL_RANGE,
             lookback_days=7,
@@ -126,8 +130,8 @@ class ExtractionModeTests(TestCase):
         )
         run.connectors.add(self.connector)
         pages = [
-            ParsedPage(notices=[known], reported_current_page=1, reported_total_pages=8, end_of_results=False),
-            ParsedPage(notices=[parsed("known", today)], reported_current_page=2, reported_total_pages=8, end_of_results=False),
+            ParsedPage(notices=[known_page_one], reported_current_page=1, reported_total_pages=8, end_of_results=False),
+            ParsedPage(notices=[known_page_two], reported_current_page=2, reported_total_pages=8, end_of_results=False),
             ParsedPage(
                 notices=[parsed("outside", today - timedelta(days=8))],
                 reported_current_page=3,
@@ -143,4 +147,4 @@ class ExtractionModeTests(TestCase):
         self.assertEqual(connector_summary["stop_reason"], "date_boundary_reached")
         self.assertEqual(connector_summary["pages"], 3)
         self.assertFalse(SourceNotice.objects.filter(source_record_id="outside").exists())
-        self.assertEqual(ProcurementNotice.objects.count(), 1)
+        self.assertEqual(ProcurementNotice.objects.count(), 2)
