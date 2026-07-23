@@ -17,8 +17,34 @@ class ProcurementSeedTests(TestCase):
         self.assertEqual(ProcurementSource.objects.count(), 3)
         self.assertEqual(ProcurementConnector.objects.count(), 6)
 
-        self.assertTrue(ProcurementSource.objects.get(key="hezareh").enabled)
-        self.assertTrue(ProcurementSource.objects.get(key="parsnamad").enabled)
+        hezareh = ProcurementSource.objects.get(key="hezareh")
+        parsnamad = ProcurementSource.objects.get(key="parsnamad")
+        self.assertTrue(hezareh.enabled)
+        self.assertTrue(parsnamad.enabled)
+
+        for source in (hezareh, parsnamad, ProcurementSource.objects.get(key="setad")):
+            self.assertEqual(source.configuration["content_retry_count"], 2)
+            self.assertEqual(source.configuration["content_retry_delay_ms"], 1200)
+            self.assertTrue(source.configuration["incomplete_extraction_alerts"])
+
+        page_urls = parsnamad.configuration["connector_page_urls"]["parsnamad_tenders"]
+        self.assertEqual(
+            page_urls["first_page"],
+            "https://www.parsnamaddata.com/tender.html",
+        )
+        self.assertEqual(
+            page_urls["template"],
+            "https://www.parsnamaddata.com/tenders/page/{page}",
+        )
+        parsnamad_tenders = ProcurementConnector.objects.get(key="parsnamad_tenders")
+        self.assertEqual(
+            parsnamad_tenders.list_url_template,
+            "https://www.parsnamaddata.com/tenders/page/{page}",
+        )
+        self.assertEqual(
+            parsnamad_tenders.parser_version,
+            "parsnamad-tenders-v3-completeness-guard",
+        )
 
         setad = ProcurementSource.objects.get(key="setad")
         self.assertTrue(setad.enabled)
