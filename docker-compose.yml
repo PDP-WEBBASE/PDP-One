@@ -24,6 +24,7 @@ services:
       - redis_data:/data
 
   backend:
+    image: ${PDP_BACKEND_IMAGE:-pdp-one-backend:local}
     build:
       context: ./backend
       args:
@@ -42,10 +43,7 @@ services:
         condition: service_started
 
   worker:
-    build:
-      context: ./backend
-      args:
-        PDP_DOCKER_REGISTRY: ${PDP_DOCKER_REGISTRY:-docker.arvancloud.ir/library}
+    image: ${PDP_BACKEND_IMAGE:-pdp-one-backend:local}
     restart: unless-stopped
     env_file: .env
     command: celery -A config worker -l INFO
@@ -54,16 +52,14 @@ services:
     depends_on: [backend, redis]
 
   beat:
-    build:
-      context: ./backend
-      args:
-        PDP_DOCKER_REGISTRY: ${PDP_DOCKER_REGISTRY:-docker.arvancloud.ir/library}
+    image: ${PDP_BACKEND_IMAGE:-pdp-one-backend:local}
     restart: unless-stopped
     env_file: .env
     command: celery -A config beat -l INFO --scheduler django_celery_beat.schedulers:DatabaseScheduler
     depends_on: [backend, redis]
 
   mcp:
+    image: ${PDP_MCP_IMAGE:-pdp-one-mcp:local}
     build:
       context: ./services/pdp_mcp
       args:
@@ -79,14 +75,25 @@ services:
     depends_on: [backend]
 
   web:
+    image: ${PDP_WEB_IMAGE:-pdp-one-web:local}
     build:
       context: .
       dockerfile: infra/docker/web.Dockerfile
       args:
         PDP_DOCKER_REGISTRY: ${PDP_DOCKER_REGISTRY:-docker.arvancloud.ir/library}
+        PDP_BUILD_ID: ${PDP_BUILD_ID:-procurement-fast-initial-v25-20260725}
     restart: unless-stopped
     environment:
       NEXT_PUBLIC_API_URL: /api/v1
+      PDP_BUILD_ID: ${PDP_BUILD_ID:-procurement-fast-initial-v25-20260725}
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - node -e "const fs=require('fs'); const p='/app/public/pdp-build.json'; const x=JSON.parse(fs.readFileSync(p,'utf8')); process.exit(x.build_id===process.env.PDP_BUILD_ID?0:1)"
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 15s
 
   nginx:
     image: ${PDP_DOCKER_REGISTRY:-docker.arvancloud.ir/library}/nginx:1.27-alpine
@@ -98,7 +105,13 @@ services:
       - "8080:80"
     volumes:
       - ./infra/nginx/default.conf.template:/etc/nginx/templates/default.conf.template:ro
-    depends_on: [web, backend, mcp]
+    depends_on:
+      web:
+        condition: service_healthy
+      backend:
+        condition: service_started
+      mcp:
+        condition: service_started
 
   tailscale:
     profiles: ["tunnel"]
