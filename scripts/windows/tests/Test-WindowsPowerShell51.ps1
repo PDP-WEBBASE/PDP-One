@@ -37,6 +37,9 @@ try {
     $updateScript = [IO.File]::ReadAllText((Join-Path $root 'Update-PDPOne.ps1'))
     $rollbackScript = [IO.File]::ReadAllText((Join-Path $root 'Rollback-PDPOne.ps1'))
     $connectivityScript = [IO.File]::ReadAllText((Join-Path $root 'Repair-PDPOneConnectivity.ps1'))
+    $maintenanceScript = [IO.File]::ReadAllText((Join-Path $root 'Invoke-PDPOneDiskMaintenance.ps1'))
+    $agentScript = [IO.File]::ReadAllText((Join-Path $root 'Deployment-Agent.ps1'))
+    $deploymentScript = [IO.File]::ReadAllText((Join-Path $root 'Invoke-PDPOneDeployment.ps1'))
     Assert-True ($updateScript -notmatch '-RestoreDatabase:\$migrationAttempted') 'Unsafe Boolean switch forwarding returned.'
     Assert-True ($updateScript -match '\$rollbackArgs \+= "-RestoreDatabase"') 'Conditional rollback switch token is missing.'
     Assert-True ($updateScript -match 'manual-update') 'Manual diagnostic fallback identifier is missing.'
@@ -57,6 +60,25 @@ try {
     Assert-True ($updateScript -notmatch '(?m)^\s*& docker compose ') 'Raw Docker Compose calls returned to the updater.'
     Assert-True ($rollbackScript -notmatch '(?m)^\s*& docker compose ') 'Raw Docker Compose calls returned to rollback.'
     Assert-True ($connectivityScript -notmatch '(?m)^\s*& docker compose ') 'Raw Docker Compose calls returned to connectivity repair.'
+
+    # Disk maintenance must never touch named volumes or use broad system prune.
+    Assert-True ($maintenanceScript -match 'container", "prune", "--force"') 'Stopped-container cleanup is missing.'
+    Assert-True ($maintenanceScript -match 'image", "prune", "--all", "--force"') 'Unused-image cleanup is missing.'
+    Assert-True ($maintenanceScript -match 'builder", "prune", "--all", "--force"') 'Build-cache cleanup is missing.'
+    Assert-True ($maintenanceScript -notmatch '(?i)docker\s+(volume\s+(rm|prune)|system\s+prune[^\r\n]*--volumes)') 'Disk maintenance contains a forbidden Docker volume operation.'
+    Assert-True ($maintenanceScript -match '\[ValidateRange\(2, 10\)\]\[int\]\$KeepLocalFinalBackups = 2') 'Local verified-backup retention may fall below two.'
+    Assert-True ($maintenanceScript -match 'database_volume_touched = \$false') 'Database-volume protection marker is missing.'
+    Assert-True ($maintenanceScript -match 'private_files_volume_touched = \$false') 'Private-files volume protection marker is missing.'
+    Assert-True ($maintenanceScript -match 'tailscale_volume_touched = \$false') 'Tailscale-volume protection marker is missing.'
+    Assert-True ($updateScript -match 'Invoke-PDPOneDiskMaintenance\.ps1') 'Post-deployment disk maintenance is not wired into the updater.'
+    Assert-True ($updateScript -match '-ProtectedBackupPath \$BackupPath') 'Current rollback backup is not protected during cleanup.'
+
+    # The verified final backup created at the gate must be reused by deploy.
+    Assert-True ($agentScript -match 'state\\approved-backup\.json') 'Verified backup state is not recorded by the agent.'
+    Assert-True ($agentScript -match '-VerifiedBackupPath \(\[string\]\$backupState\.backup_path\)') 'Deploy does not reuse the verified backup.'
+    Assert-True ($deploymentScript -match '\[string\]\$VerifiedBackupPath = ""') 'Deployment does not accept a verified backup path.'
+    Assert-True ($deploymentScript -match 'Verified backup commit does not match') 'Verified backup commit binding is missing.'
+    Assert-True ($deploymentScript -match 'Remove-Item -LiteralPath \$downloadDirectory -Recurse -Force') 'Deployment staging cleanup is missing.'
 
     Write-Host 'Windows PowerShell 5.1 compatibility tests passed.' -ForegroundColor Green
 } finally {
