@@ -36,6 +36,7 @@ try {
     # standalone token. -RestoreDatabase:$bool is transformed into text by 5.1.
     $updateScript = [IO.File]::ReadAllText((Join-Path $root 'Update-PDPOne.ps1'))
     $rollbackScript = [IO.File]::ReadAllText((Join-Path $root 'Rollback-PDPOne.ps1'))
+    $connectivityScript = [IO.File]::ReadAllText((Join-Path $root 'Repair-PDPOneConnectivity.ps1'))
     Assert-True ($updateScript -notmatch '-RestoreDatabase:\$migrationAttempted') 'Unsafe Boolean switch forwarding returned.'
     Assert-True ($updateScript -match '\$rollbackArgs \+= "-RestoreDatabase"') 'Conditional rollback switch token is missing.'
     Assert-True ($updateScript -match 'manual-update') 'Manual diagnostic fallback identifier is missing.'
@@ -49,8 +50,13 @@ try {
         Assert-True ($scriptText -match '\$exitCode = \$LASTEXITCODE') 'Docker Compose native exit code is not captured.'
         Assert-True ($scriptText -match 'docker compose @Arguments 2>&1') 'Docker Compose streams are not captured safely.'
     }
+    Assert-True ($connectivityScript -match 'function Invoke-PDPOneConnectivityDockerCompose') 'Connectivity Docker Compose native wrapper is missing.'
+    Assert-True ($connectivityScript -match '\$ErrorActionPreference = "Continue"') 'Connectivity stderr is not kept non-terminating.'
+    Assert-True ($connectivityScript -match '\$exitCode = \$LASTEXITCODE') 'Connectivity native exit code is not captured.'
+    Assert-True ($connectivityScript -match 'docker compose @Arguments 2>&1') 'Connectivity Docker Compose streams are not captured safely.'
     Assert-True ($updateScript -notmatch '(?m)^\s*& docker compose ') 'Raw Docker Compose calls returned to the updater.'
     Assert-True ($rollbackScript -notmatch '(?m)^\s*& docker compose ') 'Raw Docker Compose calls returned to rollback.'
+    Assert-True ($connectivityScript -notmatch '(?m)^\s*& docker compose ') 'Raw Docker Compose calls returned to connectivity repair.'
 
     Write-Host 'Windows PowerShell 5.1 compatibility tests passed.' -ForegroundColor Green
 } finally {
