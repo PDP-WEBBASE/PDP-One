@@ -51,6 +51,32 @@ function Invoke-PDPOneDockerCompose {
     return $exitCode
 }
 
+function Invoke-PDPOneSequentialBuild {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string]$Service,
+        [Parameter(Mandatory = $true)][string]$BuildRoot
+    )
+
+    Start-PDPOneRancherDesktop -TimeoutSeconds 600
+    if (-not (Test-PDPOneDockerEngine)) {
+        throw "Docker Engine is not ready before building $Service. Production was not modified."
+    }
+
+    Write-Host "Building release image: $Service" -ForegroundColor Cyan
+    $exitCode = Invoke-PDPOneDockerCompose -Arguments @("build", $Service) -FailureMessage "Updated $Service image could not be built." -IgnoreFailure
+    if ($exitCode -ne 0) {
+        if (-not (Test-PDPOneDockerEngine)) {
+            throw "Docker Engine became unavailable while building $Service. Production was not modified."
+        }
+        throw "Updated $Service image could not be built (docker compose exit code $exitCode)."
+    }
+
+    if (-not (Test-PDPOneDockerEngine)) {
+        throw "Docker Engine became unavailable after building $Service. Production was not modified."
+    }
+}
+
 if (-not $SourceRoot) { $SourceRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path }
 if (-not $InstalledRoot) { $InstalledRoot = Get-PDPOneProjectRoot }
 $SourceRoot = (Resolve-Path -LiteralPath $SourceRoot).Path
@@ -84,7 +110,28 @@ if (-not $backupReport.restore_verified) { throw "Update is blocked: the linked 
 
 $migrationAttempted = $false
 $productionTouched = $false
+$sourceEnvPath = Join-Path $SourceRoot ".env"
+$previousParallelLimit = $env:COMPOSE_PARALLEL_LIMIT
 try {
+    # Build the complete release before stopping or replacing the running
+    # production containers. COMPOSE_PARALLEL_LIMIT=1 and a shared backend image
+    # prevent Rancher Desktop from building the same backend context three times
+    # in parallel for backend, worker and beat.
+    Copy-Item -LiteralPath $envPath -Destination $sourceEnvPath -Force
+    $env:COMPOSE_PARALLEL_LIMIT = "1"
+    Set-Location $SourceRoot
+    Invoke-PDPOneDockerCompose -Arguments @("config", "--quiet") -FailureMessage "Approved Docker Compose configuration is invalid." | Out-Null
+    foreach ($service in @("backend", "mcp", "web")) {
+        Invoke-PDPOneSequentialBuild -Service $service -BuildRoot $SourceRoot
+    }
+
+    Remove-Item -LiteralPath $sourceEnvPath -Force -ErrorAction SilentlyContinue
+    if ($null -eq $previousParallelLimit) {
+        Remove-Item Env:COMPOSE_PARALLEL_LIMIT -ErrorAction SilentlyContinue
+    } else {
+        $env:COMPOSE_PARALLEL_LIMIT = $previousParallelLimit
+    }
+
     Set-Location $InstalledRoot
     Invoke-PDPOneDockerCompose -Arguments @("--profile", "tunnel", "stop", "backend", "worker", "beat", "mcp", "web", "nginx", "tailscale") -FailureMessage "Application services could not be stopped cleanly." | Out-Null
     $productionTouched = $true
@@ -93,7 +140,6 @@ try {
     if ($LASTEXITCODE -gt 7) { throw "Approved application files could not be copied." }
     Invoke-PDPOneDockerCompose -Arguments @("config", "--quiet") -FailureMessage "Updated Docker Compose configuration is invalid." | Out-Null
 
-    Invoke-PDPOneDockerCompose -Arguments @("build", "backend", "worker", "beat", "mcp", "web") -FailureMessage "Updated images could not be built." | Out-Null
     Invoke-PDPOneDockerCompose -Arguments @("up", "--detach", "db", "redis") -FailureMessage "Database dependencies could not be started." | Out-Null
     $migrationAttempted = $true
     Invoke-PDPOneDockerCompose -Arguments @("run", "--rm", "backend", "python", "manage.py", "migrate", "--noinput") -FailureMessage "Controlled database migration failed." | Out-Null
@@ -131,6 +177,9 @@ try {
     Write-Host "PDP One updated to the locked release and passed health checks. Tokens, data and volumes were preserved." -ForegroundColor Green
 } catch {
     $failure = $_.Exception.Message
+    $rollbackCode = 0
+    $rollbackResult = "not-required"
+
     if ($productionTouched) {
         Write-Host "Update failed. Starting automatic rollback ..." -ForegroundColor Red
 
@@ -147,25 +196,35 @@ try {
         if ($migrationAttempted) { $rollbackArgs += "-RestoreDatabase" }
         & powershell.exe @rollbackArgs
         $rollbackCode = $LASTEXITCODE
+        $rollbackResult = $(if ($rollbackCode -eq 0) { "healthy" } else { "failed" })
+    }
 
-        # Empty PowerShell arguments disappear at the native-process boundary.
-        # Always provide safe non-empty diagnostic identifiers for manual runs.
-        $diagnosticDeploymentId = $(if ([string]::IsNullOrWhiteSpace($DeploymentId)) { "manual-update" } else { $DeploymentId })
-        $diagnosticBackupId = $(if ($null -ne $backupReport -and -not [string]::IsNullOrWhiteSpace([string]$backupReport.backup_id)) { [string]$backupReport.backup_id } else { "unknown-backup" })
-        $diagnosticRollback = $(if ($rollbackCode -eq 0) { "healthy" } else { "failed" })
-        $diagnosticArgs = @(
-            "-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
-            (Join-Path $PSScriptRoot "New-PDPOneDiagnostics.ps1"),
-            "-FailureMessage", $failure,
-            "-DeploymentId", $diagnosticDeploymentId,
-            "-BackupId", $diagnosticBackupId,
-            "-RollbackResult", $diagnosticRollback,
-            "-Stage", "update"
-        )
-        & powershell.exe @diagnosticArgs
+    # Empty PowerShell arguments disappear at the native-process boundary.
+    # Always provide safe non-empty diagnostic identifiers for manual runs.
+    $diagnosticDeploymentId = $(if ([string]::IsNullOrWhiteSpace($DeploymentId)) { "manual-update" } else { $DeploymentId })
+    $diagnosticBackupId = $(if ($null -ne $backupReport -and -not [string]::IsNullOrWhiteSpace([string]$backupReport.backup_id)) { [string]$backupReport.backup_id } else { "unknown-backup" })
+    $diagnosticArgs = @(
+        "-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
+        (Join-Path $PSScriptRoot "New-PDPOneDiagnostics.ps1"),
+        "-FailureMessage", $failure,
+        "-DeploymentId", $diagnosticDeploymentId,
+        "-BackupId", $diagnosticBackupId,
+        "-RollbackResult", $rollbackResult,
+        "-Stage", $(if ($productionTouched) { "update" } else { "prebuild" })
+    )
+    & powershell.exe @diagnosticArgs
 
+    if ($productionTouched) {
         if ($rollbackCode -ne 0) { throw "Update failed and automatic rollback also failed: $failure" }
         throw "Update failed; automatic rollback returned the previous version to health: $failure"
     }
-    throw
+    throw "Release image build failed before production was modified: $failure"
+} finally {
+    Remove-Item -LiteralPath $sourceEnvPath -Force -ErrorAction SilentlyContinue
+    if ($null -eq $previousParallelLimit) {
+        Remove-Item Env:COMPOSE_PARALLEL_LIMIT -ErrorAction SilentlyContinue
+    } else {
+        $env:COMPOSE_PARALLEL_LIMIT = $previousParallelLimit
+    }
+    Set-Location $InstalledRoot
 }
