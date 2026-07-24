@@ -114,6 +114,20 @@ try {
     & powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File (Join-Path $InstalledRoot "scripts\windows\Register-PDPOneStartupTask.ps1") -ProjectRoot $InstalledRoot
     if ($LASTEXITCODE -ne 0) { throw "Stable Windows startup tasks could not be registered." }
 
+    # Space maintenance is intentionally non-transactional and runs only after
+    # the release is healthy. It never prunes Docker volumes. A maintenance
+    # failure is recorded as a warning and must not roll back a healthy release.
+    try {
+        $maintenanceOutput = @(& powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File (Join-Path $InstalledRoot "scripts\windows\Invoke-PDPOneDiskMaintenance.ps1") -Mode post-deployment -KeepLocalFinalBackups 2 -ProtectedBackupPath $BackupPath)
+        if ($LASTEXITCODE -ne 0) {
+            Write-Warning "PDP One was updated successfully, but automatic disk maintenance returned a failure."
+        } elseif ($maintenanceOutput.Count -gt 0) {
+            Write-Host "Disk maintenance report: $([string]$maintenanceOutput[-1])" -ForegroundColor DarkGreen
+        }
+    } catch {
+        Write-Warning "PDP One was updated successfully, but automatic disk maintenance failed: $(ConvertTo-PDPOneRedactedText $_.Exception.Message)"
+    }
+
     Write-Host "PDP One updated to the locked release and passed health checks. Tokens, data and volumes were preserved." -ForegroundColor Green
 } catch {
     $failure = $_.Exception.Message
