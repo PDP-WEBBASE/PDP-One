@@ -5,7 +5,8 @@ param(
     [Parameter(Mandatory = $true)][ValidatePattern('^[0-9a-f]{40}$')][string]$CommitSha,
     [Parameter(Mandatory = $true)][ValidatePattern('^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$')][string]$DeploymentId,
     [Parameter(Mandatory = $true)][ValidatePattern('^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$')][string]$PreviewId,
-    [Parameter(Mandatory = $true)][string]$AgentRoot
+    [Parameter(Mandatory = $true)][string]$AgentRoot,
+    [string]$VerifiedBackupPath = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -20,6 +21,7 @@ $pointer = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secureToken)
 $plainToken = $null
 $downloadDirectory = Join-Path $AgentRoot "downloads\$DeploymentId"
 $extractDirectory = Join-Path $downloadDirectory "source"
+if (Test-Path -LiteralPath $downloadDirectory) { Remove-Item -LiteralPath $downloadDirectory -Recurse -Force }
 try {
     $plainToken = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($pointer)
     $headers = @{ Authorization = "Bearer $plainToken"; Accept = "application/vnd.github+json"; "X-GitHub-Api-Version" = "2022-11-28"; "User-Agent" = "PDP-One-Local-Deployment-Agent" }
@@ -37,13 +39,29 @@ Expand-Archive -LiteralPath (Join-Path $downloadDirectory "approved-source.zip")
 $sourceRoot = Get-ChildItem -LiteralPath $extractDirectory -Directory | Select-Object -First 1
 if ($null -eq $sourceRoot -or -not (Test-Path -LiteralPath (Join-Path $sourceRoot.FullName "docker-compose.yml"))) { throw "Approved source archive structure is invalid." }
 
-# Mandatory gate: a fresh backup is created after approval and immediately
-# restored into an isolated PostgreSQL container before any code is copied.
-$backupOutput = @(& powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "New-PDPOneBackup.ps1") -Kind final -DeploymentId $DeploymentId -ApprovedCommit $CommitSha)
-if ($LASTEXITCODE -ne 0) { throw "Final backup creation failed. Deployment was not started." }
-$backupPath = [string]$backupOutput[-1]
-& powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "Test-PDPOneBackupRestore.ps1") -BackupPath $backupPath
-if ($LASTEXITCODE -ne 0) { throw "Final backup restore verification failed. Deployment was not started." }
+$backupPath = ""
+if ($VerifiedBackupPath) {
+    $backupRoot = "C:\ProgramData\PDP-One\backups"
+    if (-not (Test-Path -LiteralPath $backupRoot)) { throw "The verified backup root does not exist." }
+    $resolvedRoot = (Resolve-Path -LiteralPath $backupRoot).Path.TrimEnd('\')
+    $resolvedBackup = (Resolve-Path -LiteralPath $VerifiedBackupPath).Path.TrimEnd('\')
+    if (-not $resolvedBackup.StartsWith($resolvedRoot + '\', [StringComparison]::OrdinalIgnoreCase)) { throw "Verified backup path is outside the protected backup root." }
+    $backupReportPath = Join-Path $resolvedBackup "backup-report.json"
+    if (-not (Test-Path -LiteralPath $backupReportPath)) { throw "Verified backup report is missing." }
+    $backupReport = Get-Content -LiteralPath $backupReportPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    if (-not [bool]$backupReport.restore_verified) { throw "The supplied backup has not passed restore verification." }
+    if ([string]$backupReport.approved_commit -ne $CommitSha) { throw "Verified backup commit does not match the approved deployment commit." }
+    if ([string]$backupReport.deployment_id -ne $DeploymentId) { throw "Verified backup deployment identifier does not match." }
+    $backupPath = $resolvedBackup
+} else {
+    # Fallback safety path for emergency/manual invocations. The normal signed
+    # deployment flow supplies the fresh verified backup created before deploy.
+    $backupOutput = @(& powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "New-PDPOneBackup.ps1") -Kind final -DeploymentId $DeploymentId -ApprovedCommit $CommitSha)
+    if ($LASTEXITCODE -ne 0) { throw "Final backup creation failed. Deployment was not started." }
+    $backupPath = [string]$backupOutput[-1]
+    & powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "Test-PDPOneBackupRestore.ps1") -BackupPath $backupPath
+    if ($LASTEXITCODE -ne 0) { throw "Final backup restore verification failed. Deployment was not started." }
+}
 
 $codeStage = Join-Path $downloadDirectory "previous-code"
 New-Item -ItemType Directory -Force -Path $codeStage | Out-Null
@@ -80,4 +98,9 @@ $state.completed_at = (Get-Date).ToUniversalTime().ToString("o")
 $state | ConvertTo-Json | Set-Content -LiteralPath $statePath -Encoding UTF8
 $reportPath = Join-Path $AgentRoot "reports\$DeploymentId.json"
 $state | ConvertTo-Json | Set-Content -LiteralPath $reportPath -Encoding UTF8
+
+# The rollback archive is stored inside the verified backup. The downloaded
+# source ZIP, extracted source and uncompressed previous-code staging are no
+# longer needed after a healthy deployment.
+if (Test-Path -LiteralPath $downloadDirectory) { Remove-Item -LiteralPath $downloadDirectory -Recurse -Force }
 Write-Output $reportPath
