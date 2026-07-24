@@ -24,7 +24,7 @@ services:
       - redis_data:/data
 
   backend:
-    image: pdp-one-backend:local
+    image: ${PDP_BACKEND_IMAGE:-pdp-one-backend:local}
     build:
       context: ./backend
       args:
@@ -43,7 +43,7 @@ services:
         condition: service_started
 
   worker:
-    image: pdp-one-backend:local
+    image: ${PDP_BACKEND_IMAGE:-pdp-one-backend:local}
     restart: unless-stopped
     env_file: .env
     command: celery -A config worker -l INFO
@@ -52,13 +52,14 @@ services:
     depends_on: [backend, redis]
 
   beat:
-    image: pdp-one-backend:local
+    image: ${PDP_BACKEND_IMAGE:-pdp-one-backend:local}
     restart: unless-stopped
     env_file: .env
     command: celery -A config beat -l INFO --scheduler django_celery_beat.schedulers:DatabaseScheduler
     depends_on: [backend, redis]
 
   mcp:
+    image: ${PDP_MCP_IMAGE:-pdp-one-mcp:local}
     build:
       context: ./services/pdp_mcp
       args:
@@ -74,6 +75,7 @@ services:
     depends_on: [backend]
 
   web:
+    image: ${PDP_WEB_IMAGE:-pdp-one-web:local}
     build:
       context: .
       dockerfile: infra/docker/web.Dockerfile
