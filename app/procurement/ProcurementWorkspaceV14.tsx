@@ -98,7 +98,7 @@ function ensureProcurementFetchGuard() {
       const timeout = window.setTimeout(() => {
         timedOut = true;
         controller.abort();
-      }, 18_000);
+      }, 10_000);
 
       try {
         const response = await nativeFetch(input, { ...init, signal: controller.signal });
