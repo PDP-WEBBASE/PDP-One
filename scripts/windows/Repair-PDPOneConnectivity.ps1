@@ -17,14 +17,49 @@ $ProjectRoot = (Resolve-Path -LiteralPath $ProjectRoot).Path
 Set-Location $ProjectRoot
 $envPath = Assert-PDPOneConfiguration -ProjectRoot $ProjectRoot
 
+function Invoke-PDPOneConnectivityDockerCompose {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string[]]$Arguments,
+        [Parameter(Mandatory = $true)][string]$FailureMessage,
+        [switch]$IgnoreFailure,
+        [switch]$Quiet
+    )
+
+    $previousPreference = $ErrorActionPreference
+    $nativeOutput = @()
+    $exitCode = -1
+    try {
+        # Docker Compose writes normal lifecycle progress to stderr. Under
+        # Windows PowerShell 5.1 that stream can otherwise become a terminating
+        # NativeCommandError while the native command still exits successfully.
+        $ErrorActionPreference = "Continue"
+        $nativeOutput = @(& docker compose @Arguments 2>&1)
+        $exitCode = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $previousPreference
+    }
+
+    $text = (($nativeOutput | ForEach-Object { [string]$_ }) -join [Environment]::NewLine)
+    if (-not $Quiet -and -not [string]::IsNullOrWhiteSpace($text)) {
+        $safeText = ConvertTo-PDPOneRedactedText $text
+        if (-not [string]::IsNullOrWhiteSpace($safeText)) { Write-Host $safeText }
+    }
+    if ($exitCode -ne 0 -and -not $IgnoreFailure) {
+        throw "$FailureMessage (docker compose exit code $exitCode)."
+    }
+    return [pscustomobject]@{ ExitCode = $exitCode; Text = $text }
+}
+
 function Get-TailscaleStatus {
-    $text = (& docker compose --profile tunnel exec -T tailscale tailscale --socket=/tmp/tailscaled.sock status --json 2>$null | Out-String)
-    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($text)) { return $null }
-    try { return ($text | ConvertFrom-Json) } catch { return $null }
+    $command = Invoke-PDPOneConnectivityDockerCompose -Arguments @("--profile", "tunnel", "exec", "-T", "tailscale", "tailscale", "--socket=/tmp/tailscaled.sock", "status", "--json") -FailureMessage "Tailscale status could not be read." -IgnoreFailure -Quiet
+    if ($command.ExitCode -ne 0 -or [string]::IsNullOrWhiteSpace([string]$command.Text)) { return $null }
+    try { return ([string]$command.Text | ConvertFrom-Json) } catch { return $null }
 }
 
 function Get-FunnelStatusText {
-    return (& docker compose --profile tunnel exec -T tailscale tailscale --socket=/tmp/tailscaled.sock funnel status 2>&1 | Out-String)
+    $command = Invoke-PDPOneConnectivityDockerCompose -Arguments @("--profile", "tunnel", "exec", "-T", "tailscale", "tailscale", "--socket=/tmp/tailscaled.sock", "funnel", "status") -FailureMessage "Tailscale Funnel status could not be read." -IgnoreFailure -Quiet
+    return [string]$command.Text
 }
 
 $result = [ordered]@{
@@ -41,8 +76,8 @@ for ($attempt = 1; $attempt -le [Math]::Max(1, $RepairAttempts); $attempt++) {
     $result.repair_attempts = $attempt
     Write-Host "Connectivity repair attempt $attempt/$RepairAttempts ..." -ForegroundColor Cyan
 
-    & docker compose --profile tunnel up --detach --no-build tailscale
-    if ($LASTEXITCODE -ne 0) {
+    $startCommand = Invoke-PDPOneConnectivityDockerCompose -Arguments @("--profile", "tunnel", "up", "--detach", "--no-build", "tailscale") -FailureMessage "The Tailscale container could not be started." -IgnoreFailure -Quiet
+    if ($startCommand.ExitCode -ne 0) {
         Write-Host "The Tailscale container could not be started." -ForegroundColor Yellow
         Start-Sleep -Seconds 3
         continue
@@ -60,8 +95,9 @@ for ($attempt = 1; $attempt -le [Math]::Max(1, $RepairAttempts); $attempt++) {
         continue
     }
 
-    $funnelOutput = (& docker compose --profile tunnel exec -T tailscale tailscale --socket=/tmp/tailscaled.sock funnel --bg --yes 80 2>&1 | Out-String)
-    $funnelExit = $LASTEXITCODE
+    $funnelCommand = Invoke-PDPOneConnectivityDockerCompose -Arguments @("--profile", "tunnel", "exec", "-T", "tailscale", "tailscale", "--socket=/tmp/tailscaled.sock", "funnel", "--bg", "--yes", "80") -FailureMessage "Tailscale Funnel activation failed." -IgnoreFailure -Quiet
+    $funnelExit = $funnelCommand.ExitCode
+    $funnelOutput = [string]$funnelCommand.Text
     $funnelStatus = Get-FunnelStatusText
     $combined = $funnelOutput + [Environment]::NewLine + $funnelStatus
     $urlMatch = [regex]::Match($combined, 'https://[A-Za-z0-9.-]+\.ts\.net')
@@ -70,7 +106,7 @@ for ($attempt = 1; $attempt -le [Math]::Max(1, $RepairAttempts); $attempt++) {
     if (-not $urlMatch.Success -or (-not $funnelConfirmed -and $funnelExit -ne 0)) {
         Write-Host "Tailscale did not confirm an active Funnel." -ForegroundColor Yellow
         if ($attempt -lt $RepairAttempts) {
-            & docker compose --profile tunnel restart tailscale *> $null
+            Invoke-PDPOneConnectivityDockerCompose -Arguments @("--profile", "tunnel", "restart", "tailscale") -FailureMessage "Tailscale restart failed." -IgnoreFailure -Quiet | Out-Null
             Start-Sleep -Seconds 12
         }
         continue
@@ -90,7 +126,7 @@ for ($attempt = 1; $attempt -le [Math]::Max(1, $RepairAttempts); $attempt++) {
 
     Write-Host "Funnel is configured but the public health endpoint is not reachable yet." -ForegroundColor Yellow
     if ($attempt -lt $RepairAttempts) {
-        & docker compose --profile tunnel restart tailscale *> $null
+        Invoke-PDPOneConnectivityDockerCompose -Arguments @("--profile", "tunnel", "restart", "tailscale") -FailureMessage "Tailscale restart failed." -IgnoreFailure -Quiet | Out-Null
         Start-Sleep -Seconds 15
     }
 }
