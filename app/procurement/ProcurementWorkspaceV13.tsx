@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { CSSProperties, FormEvent, useEffect, useMemo, useState } from "react";
+import { CSSProperties, FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import ConnectorHealthBanner from "./ConnectorHealthBanner";
 import styles from "./workspace-v4.module.css";
 
@@ -285,11 +285,13 @@ export default function ProcurementWorkspaceV13() {
   const [detail, setDetail] = useState<DetailItem>(null);
   const [directModal, setDirectModal] = useState(false);
   const [updatingConnector, setUpdatingConnector] = useState("");
+  const hasLoadedOnce = useRef(false);
+  const managementLoadVersion = useRef(-1);
 
   useEffect(() => {
     let active = true;
     async function load() {
-      setMode("loading");
+      if (!hasLoadedOnce.current) setMode("loading");
       try {
         const sessionResponse = await fetch(`${API_BASE}/auth/session/`, { credentials: "include", headers: { Accept: "application/json" } });
         if (!sessionResponse.ok) throw new Error("session-unavailable");
@@ -301,23 +303,69 @@ export default function ProcurementWorkspaceV13() {
           }
           return;
         }
-        const [noticeItems, directItems, dashboardResponse, sourceItems, runItems, automationItems] = await Promise.all([
-          fetchCollection<ApiNotice>(`${PROCUREMENT_API}/notices/?ordering=-last_seen_at`),
-          fetchCollection<ApiDirectOpportunity>(`${PROCUREMENT_API}/direct-opportunities/?ordering=-last_activity_at`),
+
+        // Critical path: authenticate, load dashboard totals and only the first
+        // page of operational records. This lets the workspace become usable
+        // without waiting for every historical page or management-only dataset.
+        const [noticeItems, directItems, dashboardResponse] = await Promise.all([
+          fetchCollection<ApiNotice>(`${PROCUREMENT_API}/notices/?ordering=-last_seen_at`, 1),
+          fetchCollection<ApiDirectOpportunity>(`${PROCUREMENT_API}/direct-opportunities/?ordering=-last_activity_at`, 1),
           fetch(`${PROCUREMENT_API}/dashboard/`, { credentials: "include", headers: { Accept: "application/json" } }),
-          fetchCollection<ApiSource>(`${PROCUREMENT_API}/sources/`),
-          fetchCollection<ApiExtractionRun>(`${PROCUREMENT_API}/extraction-runs/?ordering=-created_at`),
-          fetchCollection<ApiAutomationSettings>(`${PROCUREMENT_API}/automation-settings/`),
         ]);
         if (dashboardResponse.status === 401 || dashboardResponse.status === 403) throw new Error("unauthorized");
         if (!dashboardResponse.ok) throw new Error(`dashboard-${dashboardResponse.status}`);
         const dashboardPayload = await dashboardResponse.json() as DashboardPayload;
         if (!active) return;
-        const currentAutomation = automationItems[0] || null;
+
         setUsername(session.username || "");
         setNotices(noticeItems);
         setDirectReferrals(directItems);
         setDashboard(dashboardPayload);
+        hasLoadedOnce.current = true;
+        setMode("live");
+
+        // Complete the operational collections in the background. A slow later
+        // page must never cover or remove the already usable workspace.
+        void Promise.all([
+          fetchCollection<ApiNotice>(`${PROCUREMENT_API}/notices/?ordering=-last_seen_at`),
+          fetchCollection<ApiDirectOpportunity>(`${PROCUREMENT_API}/direct-opportunities/?ordering=-last_activity_at`),
+        ]).then(([allNotices, allDirectItems]) => {
+          if (!active) return;
+          setNotices(allNotices);
+          setDirectReferrals(allDirectItems);
+        }).catch(() => {
+          if (active) setMessage("ادامه اطلاعات در پس‌زمینه موقتاً کامل نشد؛ اطلاعات اولیه قابل استفاده است.");
+        });
+      } catch (error) {
+        if (!active) return;
+        if (!hasLoadedOnce.current) {
+          setMode(error instanceof Error && error.message === "unauthorized" ? "unauthorized" : "error");
+        } else {
+          setMessage("به‌روزرسانی پس‌زمینه موقتاً انجام نشد؛ داده‌های قبلی حفظ شدند.");
+        }
+      }
+    }
+    load();
+    return () => { active = false; };
+  }, [refresh]);
+
+  // Sources, extraction history and automation settings are management-only
+  // data. Fetch them lazily when that tab is opened instead of delaying every
+  // visit to the dashboard, tenders or inquiries.
+  useEffect(() => {
+    if (tab !== "management" || mode !== "live" || managementLoadVersion.current === refresh) return;
+    managementLoadVersion.current = refresh;
+    let active = true;
+
+    async function loadManagementData() {
+      try {
+        const [sourceItems, runItems, automationItems] = await Promise.all([
+          fetchCollection<ApiSource>(`${PROCUREMENT_API}/sources/`),
+          fetchCollection<ApiExtractionRun>(`${PROCUREMENT_API}/extraction-runs/?ordering=-created_at`),
+          fetchCollection<ApiAutomationSettings>(`${PROCUREMENT_API}/automation-settings/`),
+        ]);
+        if (!active) return;
+        const currentAutomation = automationItems[0] || null;
         setSources(sourceItems);
         setExtractionRuns(runItems);
         setAutomation(currentAutomation);
@@ -330,22 +378,42 @@ export default function ProcurementWorkspaceV13() {
             intervalHours: Math.max(1, Math.round(currentAutomation.interval_minutes / 60)),
           }));
         }
-        setMode("live");
-      } catch (error) {
+      } catch {
         if (!active) return;
-        setMode(error instanceof Error && error.message === "unauthorized" ? "unauthorized" : "error");
+        managementLoadVersion.current = -1;
+        setMessage("اطلاعات مدیریت زیرسامانه موقتاً بارگذاری نشد؛ سایر بخش‌ها فعال‌اند.");
       }
     }
-    load();
+
+    loadManagementData();
     return () => { active = false; };
-  }, [refresh]);
+  }, [tab, mode, refresh]);
 
   const activeRun = extractionRuns.find((run) => run.status === "queued" || run.status === "running");
   useEffect(() => {
     if (!activeRun) return;
-    const timer = window.setTimeout(() => setRefresh((value) => value + 1), 5000);
-    return () => window.clearTimeout(timer);
-  }, [activeRun, refresh]);
+    let cancelled = false;
+    const poll = async () => {
+      try {
+        const response = await fetch(`${PROCUREMENT_API}/extraction-runs/${activeRun.id}/`, { credentials: "include", headers: { Accept: "application/json" } });
+        if (!response.ok || !(response.headers.get("content-type") || "").includes("application/json")) return;
+        const updated = await response.json() as ApiExtractionRun;
+        if (cancelled) return;
+        setExtractionRuns((current) => current.map((run) => run.id === updated.id ? updated : run));
+        if (updated.status !== "queued" && updated.status !== "running") {
+          window.clearInterval(timer);
+          setRefresh((value) => value + 1);
+        }
+      } catch {
+        // Preserve the last successful screen while the next background poll retries.
+      }
+    };
+    const timer = window.setInterval(poll, 5000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [activeRun?.id]);
 
   const noticeViews: [WorkflowView, string][] = [["all", allLabel(tab)], ...standardViews];
   const directViews: [WorkflowView, string][] = [["all", allLabel("direct")], ...standardViews];

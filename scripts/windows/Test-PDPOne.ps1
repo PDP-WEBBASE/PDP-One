@@ -58,15 +58,13 @@ foreach ($service in @("worker", "beat", "mcp")) {
 }
 
 $null = Invoke-PDPOneHealthRequest -Url "http://127.0.0.1:8080/healthz" -ExpectedPattern '(?i)(PDP One ready|healthy|ready|ok)'
+$null = Invoke-PDPOneHealthRequest -Url "http://127.0.0.1:8080/api/v1/auth/session/" -ExpectedPattern '"authenticated"'
 $apiToken = Get-PDPOneEnvValue $envPath "PDP_MCP_TOKEN"
 $null = Invoke-PDPOneHealthRequest -Url "http://127.0.0.1:8080/api/v1/system-status/" -Headers @{ Authorization = "Bearer $apiToken" } -ExpectedPattern '(?i)database'
 
 & docker compose exec -T mcp python -c "import socket; s=socket.create_connection(('127.0.0.1',8010),5); s.close()" *> $null
 if ($LASTEXITCODE -ne 0) { throw "MCP service did not accept a local connection." }
 
-# Django's shell may print informational lines before the requested value.
-# Parse one exact count line instead of applying -notmatch to an output array,
-# because array comparison returns every non-matching line and can become truthy.
 $countLines = @(& docker compose exec -T backend python manage.py shell -c "from core.models import Contract,Receivable; print(str(Contract.objects.count())+','+str(Receivable.objects.count()))" 2>&1)
 $countExitCode = $LASTEXITCODE
 $countText = ($countLines | Out-String)
@@ -82,11 +80,15 @@ $funnelStatus = (& docker compose --profile tunnel exec -T tailscale tailscale -
 if ($funnelStatus -notmatch '(?i)Funnel on|Available on the internet|proxy http://127\.0\.0\.1:80') { throw "Tailscale Funnel health failed." }
 
 $publicHealth = $null
+$publicApiHealth = $null
 if (-not $SkipPublicCheck) {
     $publicBase = Get-PDPOneEnvValue $envPath "PDP_PUBLIC_BASE_URL"
     if (-not $publicBase) { throw "PDP_PUBLIC_BASE_URL is missing; run CONNECT-CHATGPT.bat once." }
-    $publicHealth = Test-PDPOnePublicHealth -Url "$($publicBase.TrimEnd('/'))/healthz" -ExpectedPattern 'PDP One ready' -TimeoutSeconds 35
-    if (-not $publicHealth.Success) { throw "Public health check failed: $($publicHealth.Detail)" }
+    $base = $publicBase.TrimEnd('/')
+    $publicHealth = Test-PDPOnePublicHealth -Url "$base/healthz" -ExpectedPattern 'PDP One ready' -TimeoutSeconds 35
+    if (-not $publicHealth.Success) { throw "Public nginx health check failed: $($publicHealth.Detail)" }
+    $publicApiHealth = Test-PDPOnePublicHealth -Url "$base/api/v1/auth/session/" -ExpectedPattern '"authenticated"' -TimeoutSeconds 35
+    if (-not $publicApiHealth.Success) { throw "Public session API health check failed: $($publicApiHealth.Detail)" }
 }
 
 $report = [ordered]@{
@@ -95,12 +97,14 @@ $report = [ordered]@{
     services = $required
     persisted_counts = $countSummary
     token_continuity = $true
+    local_session_api = "healthy"
     public_check = (-not $SkipPublicCheck)
     public_health_method = $(if ($null -ne $publicHealth) { $publicHealth.Method } else { "skipped" })
-    local_dns_degraded = $(if ($null -ne $publicHealth) { [bool]$publicHealth.LocalDnsDegraded } else { $false })
+    public_api_health_method = $(if ($null -ne $publicApiHealth) { $publicApiHealth.Method } else { "skipped" })
+    local_dns_degraded = $(if ($null -ne $publicHealth -and $null -ne $publicApiHealth) { [bool]($publicHealth.LocalDnsDegraded -or $publicApiHealth.LocalDnsDegraded) } else { $false })
     chatgpt_tool_check = $(if ($SkipChatGPTToolCheck) { "deferred-to-connected-app" } else { "requires-connected-app-observation" })
 }
 $reportDir = Join-Path $ProjectRoot "work\reports"
 New-Item -ItemType Directory -Force -Path $reportDir | Out-Null
 Write-PDPOneJsonFile -Path (Join-Path $reportDir "health-latest.json") -Value $report
-Write-Host "All locally verifiable PDP One health layers are healthy. ChatGPT tool health is reported separately through the connected app." -ForegroundColor Green
+Write-Host "PDP One web shell, local/public session API, data services and connectivity layers are healthy." -ForegroundColor Green
