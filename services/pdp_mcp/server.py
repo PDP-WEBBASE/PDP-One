@@ -1,9 +1,10 @@
 import os
 from typing import Any
+
 import httpx
+from deployment_queue import enqueue, get_queue_status, get_response, validate_commit, validate_identifier
 from mcp.server.fastmcp import FastMCP
 from mcp.types import ToolAnnotations
-from deployment_queue import enqueue, get_queue_status, get_response, validate_commit, validate_identifier
 
 API_URL = os.getenv("PDP_API_URL", "http://localhost:8000/api/v1").rstrip("/")
 TOKEN = os.getenv("PDP_MCP_TOKEN", "")
@@ -12,11 +13,14 @@ mcp = FastMCP(
     "PDP One",
     instructions=(
         "Use read tools before write tools. Create contracts, receivables, payment receipts, and analyses only as drafts. "
-        "Never claim a draft is approved or financially final. Use returned record IDs in follow-up calls."
+        "Never claim a draft is approved or financially final. Use returned record IDs in follow-up calls. "
+        "For procurement analysis, start one guarded PDP request, read its work package, save one structured AI draft per notice, "
+        "then finish the same request. Human review is always required."
     ),
     host="0.0.0.0",
     port=8010,
 )
+
 
 async def api(method: str, path: str, **kwargs: Any) -> Any:
     headers = {"Authorization": f"Bearer {TOKEN}", "Accept": "application/json"}
@@ -25,8 +29,16 @@ async def api(method: str, path: str, **kwargs: Any) -> Any:
         try:
             response.raise_for_status()
         except httpx.HTTPStatusError as exc:
-            raise RuntimeError(f"PDP One API request failed with HTTP {exc.response.status_code}.") from exc
+            detail = ""
+            try:
+                payload = exc.response.json()
+                detail = str(payload.get("detail", "")) if isinstance(payload, dict) else ""
+            except ValueError:
+                detail = ""
+            suffix = f": {detail}" if detail else "."
+            raise RuntimeError(f"PDP One API request failed with HTTP {exc.response.status_code}{suffix}") from exc
         return response.json()
+
 
 @mcp.tool(
     description="Check whether PDP One, its PostgreSQL database, and the trial dataset are reachable.",
@@ -34,6 +46,7 @@ async def api(method: str, path: str, **kwargs: Any) -> Any:
 )
 async def get_system_status() -> dict:
     return await api("GET", "system-status/")
+
 
 @mcp.tool(
     description="Use this when the user wants to find PDP One contracts by code, title, employer, or field.",
@@ -46,6 +59,7 @@ async def search_contracts(query: str = "", status: str | None = None) -> dict:
     result = await api("GET", "contracts/", params=params)
     items = result.get("results", result) if isinstance(result, dict) else result
     return {"contracts": items, "count": len(items)}
+
 
 @mcp.tool(
     description="Use this when the user asks for a current management summary of PDP One contracts and risks.",
@@ -76,6 +90,7 @@ async def search_receivables(query: str = "", status: str | None = None, contrac
 )
 async def get_financial_summary() -> dict:
     return await api("GET", "financial-summary/")
+
 
 @mcp.tool(
     description="Use this when the user explicitly asks to register a new contract in PDP One. This always creates a draft for human review.",
@@ -117,8 +132,100 @@ async def create_payment_receipt_draft(receivable_id: str, amount_rials: int, re
     }
     return {"draft": await api("POST", "payment-receipts/", json=payload), "requires_human_review": True}
 
+
 @mcp.tool(
-    description="Use this when the user explicitly asks to save a ChatGPT analysis in PDP One. The result is stored as an AI draft, never as an approved report.",
+    description="Start one guarded manual PDP procurement-analysis request using the currently active role, Prompt, keywords, company profile, qualifications, and experience. It does not publish decisions.",
+    annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, openWorldHint=False, idempotentHint=False),
+)
+async def start_procurement_analysis(limit: int = 20, extraction_run_id: str | None = None) -> dict:
+    payload: dict[str, Any] = {"trigger": "manual_chatgpt", "limit": max(1, min(int(limit), 50))}
+    if extraction_run_id:
+        payload["extraction_run"] = extraction_run_id
+    result = await api("POST", "procurement/analysis/engine/start/", json=payload)
+    return {
+        **result,
+        "next_step": "Call get_procurement_analysis_work with the returned request id, then save one AI draft per item.",
+        "requires_human_review": True,
+    }
+
+
+@mcp.tool(
+    description="Read the active context and the next notice work items for one previously started PDP procurement-analysis request. Use this before saving analysis drafts.",
+    annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, openWorldHint=False, idempotentHint=True),
+)
+async def get_procurement_analysis_work(request_id: str, limit: int = 10) -> dict:
+    return await api(
+        "GET",
+        f"procurement/analysis/engine/requests/{request_id}/work/",
+        params={"limit": max(1, min(int(limit), 50))},
+    )
+
+
+@mcp.tool(
+    description="Save one structured ChatGPT procurement analysis for a notice in an active PDP batch. The result is always an AI draft and never a final decision.",
+    annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, openWorldHint=False, idempotentHint=False),
+)
+async def save_procurement_notice_analysis(
+    notice_id: str,
+    batch_id: str,
+    is_recommended: bool,
+    score: int,
+    priority: str,
+    fit_for_pdp: str,
+    category: str,
+    reason: str,
+    recommended_action: str,
+    confidence: float,
+    matched_experience: list[str] | None = None,
+    risk_notes: list[str] | None = None,
+) -> dict:
+    payload = {
+        "notice": notice_id,
+        "batch": batch_id,
+        "is_recommended": bool(is_recommended),
+        "score": max(0, min(int(score), 100)),
+        "priority": priority,
+        "fit_for_pdp": fit_for_pdp,
+        "category": category,
+        "reason": reason,
+        "recommended_action": recommended_action,
+        "matched_experience": matched_experience or [],
+        "risk_notes": risk_notes or [],
+        "confidence": max(0.0, min(float(confidence), 100.0)),
+        "raw_output": {
+            "engine": "ChatGPT connected app",
+            "decision_is_draft": True,
+        },
+    }
+    draft = await api("POST", "procurement/analysis-drafts/", json=payload)
+    return {"draft": draft, "requires_human_review": True}
+
+
+@mcp.tool(
+    description="Finish one PDP procurement-analysis request after its notice drafts have been saved. Unresolved notice IDs are marked failed; nothing is published automatically.",
+    annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, openWorldHint=False, idempotentHint=False),
+)
+async def finish_procurement_analysis(request_id: str, failed_notice_ids: list[str] | None = None, summary_note: str = "") -> dict:
+    payload = {
+        "failed_notice_ids": failed_notice_ids or [],
+        "summary": {"note": summary_note[:1000], "engine": "ChatGPT connected app"},
+    }
+    return await api("POST", f"procurement/analysis/engine/requests/{request_id}/finish/", json=payload)
+
+
+@mcp.tool(
+    description="List recent procurement notice analysis drafts for human review. This does not approve or publish them.",
+    annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, openWorldHint=False, idempotentHint=True),
+)
+async def get_recent_procurement_analysis_drafts(review_status: str = "ai_draft", limit: int = 20) -> dict:
+    params = {"ordering": "-analyzed_at", "review_status": review_status}
+    result = await api("GET", "procurement/analysis-drafts/", params=params)
+    items = result.get("results", result) if isinstance(result, dict) else result
+    return {"drafts": list(items)[: max(1, min(int(limit), 50))], "requires_human_review": True}
+
+
+@mcp.tool(
+    description="Use this when the user explicitly asks to save a general ChatGPT analysis in PDP One. The result is stored as an AI draft, never as an approved report.",
     annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, openWorldHint=False, idempotentHint=False),
 )
 async def save_analysis_draft(title: str, summary: str, source_record_ids: list[str]) -> dict:
@@ -226,6 +333,7 @@ async def rotate_mcp_token(confirmation: str) -> dict:
     if confirmation.strip() != "ROTATE MCP TOKEN":
         raise ValueError("Exact confirmation ROTATE MCP TOKEN is required.")
     return enqueue("rotate_mcp_token", {"confirmation": confirmation.strip()})
+
 
 if __name__ == "__main__":
     mcp.run(transport="streamable-http")
