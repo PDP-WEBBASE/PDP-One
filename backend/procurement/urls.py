@@ -20,6 +20,12 @@ from .views_analysis import (
     latest_extraction_run,
     notice_analysis_context,
 )
+from .views_analysis_engine import (
+    analysis_engine_work,
+    finish_analysis_engine,
+    review_analysis_draft,
+    start_analysis_engine,
+)
 from .views_analysis_management import (
     ManagedAnalysisContextAttachmentViewSet,
     ManagedAnalysisContextSnapshotViewSet,
@@ -62,4 +68,8 @@ urlpatterns = [
     path("analysis/latest-extraction/", latest_extraction_run, name="analysis-latest-extraction"),
     path("analysis/queue/", analysis_queue, name="analysis-queue"),
     path("analysis/notices/<uuid:notice_id>/context/", notice_analysis_context, name="notice-analysis-context"),
+    path("analysis/engine/start/", start_analysis_engine, name="analysis-engine-start"),
+    path("analysis/engine/requests/<uuid:request_id>/work/", analysis_engine_work, name="analysis-engine-work"),
+    path("analysis/engine/requests/<uuid:request_id>/finish/", finish_analysis_engine, name="analysis-engine-finish"),
+    path("analysis/engine/drafts/<uuid:draft_id>/review/", review_analysis_draft, name="analysis-engine-review"),
 ]
