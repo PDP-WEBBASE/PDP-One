@@ -42,7 +42,8 @@ $bootstrapScripts = @(
     "New-PDPOneBackup.ps1", "Test-PDPOneBackupRestore.ps1", "Restore-PDPOneBackup.ps1",
     "Rollback-PDPOne.ps1", "Update-PDPOne.ps1", "Test-PDPOne.ps1",
     "Start-PDPOne.ps1", "Repair-PDPOneConnectivity.ps1", "Open-PDPOneLocal.ps1",
-    "Register-PDPOneStartupTask.ps1", "New-PDPOneDiagnostics.ps1", "Rotate-PDPOneMcpToken.ps1"
+    "Register-PDPOneStartupTask.ps1", "New-PDPOneDiagnostics.ps1", "Rotate-PDPOneMcpToken.ps1",
+    "Invoke-PDPOneDiskMaintenance.ps1"
 )
 foreach ($name in $bootstrapScripts) {
     $source = Join-Path $PSScriptRoot $name
