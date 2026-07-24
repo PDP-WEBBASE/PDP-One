@@ -41,22 +41,27 @@ const floatingButtonStyle = {
   boxShadow: "0 12px 28px rgba(15,23,42,.2)",
 } as const;
 
-function guardedRequestUrl(value: string) {
+function parsedRequestUrl(value: string) {
   try {
-    const parsed = new URL(value, window.location.origin);
-    return parsed.pathname.startsWith("/api/v1/procurement/") || parsed.pathname === "/api/v1/auth/session/";
+    return new URL(value, window.location.origin);
   } catch {
-    return false;
+    return null;
   }
 }
 
+function guardedRequestUrl(value: string) {
+  const parsed = parsedRequestUrl(value);
+  return Boolean(parsed && (parsed.pathname.startsWith("/api/v1/procurement/") || parsed.pathname === "/api/v1/auth/session/"));
+}
+
+function optionalStartupCollection(value: string) {
+  const parsed = parsedRequestUrl(value);
+  return parsed?.pathname === "/api/v1/procurement/extraction-runs/";
+}
+
 function displayRequestUrl(value: string) {
-  try {
-    const parsed = new URL(value, window.location.origin);
-    return `${parsed.pathname}${parsed.search}`;
-  } catch {
-    return value;
-  }
+  const parsed = parsedRequestUrl(value);
+  return parsed ? `${parsed.pathname}${parsed.search}` : value;
 }
 
 function wait(milliseconds: number) {
@@ -65,6 +70,13 @@ function wait(milliseconds: number) {
 
 function emitFetchFailure(detail: FetchFailure) {
   window.dispatchEvent(new CustomEvent<FetchFailure>(FETCH_FAILURE_EVENT, { detail }));
+}
+
+function emptyCollectionResponse() {
+  return new Response(JSON.stringify({ count: 0, next: null, previous: null, results: [] }), {
+    status: 200,
+    headers: { "Content-Type": "application/json" },
+  });
 }
 
 function ensureProcurementFetchGuard() {
@@ -82,6 +94,7 @@ function ensureProcurementFetchGuard() {
 
     const method = (init?.method || (input instanceof Request ? input.method : "GET")).toUpperCase();
     const maxAttempts = method === "GET" ? 2 : 1;
+    const mayDegrade = method === "GET" && optionalStartupCollection(requestUrl);
     let lastError: unknown = null;
 
     for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
@@ -113,6 +126,7 @@ function ensureProcurementFetchGuard() {
             status: response.status,
             at: Date.now(),
           });
+          if (mayDegrade) return emptyCollectionResponse();
         }
         return response;
       } catch (error) {
@@ -127,6 +141,7 @@ function ensureProcurementFetchGuard() {
           reason: timedOut ? "timeout" : "network",
           at: Date.now(),
         });
+        if (mayDegrade && retryable) return emptyCollectionResponse();
         throw error;
       } finally {
         window.clearTimeout(timeout);
@@ -134,14 +149,21 @@ function ensureProcurementFetchGuard() {
       }
     }
 
+    if (mayDegrade) return emptyCollectionResponse();
     throw lastError instanceof Error ? lastError : new Error("procurement-fetch-failed");
   };
 }
 
 function failureText(failure: FetchFailure) {
-  if (failure.reason === "timeout") return "پاسخ این Endpoint بیش از حد طول کشید";
+  if (failure.reason === "timeout") return "پاسخ این Endpoint بیش از ۱۰ ثانیه طول کشید";
   if (failure.reason === "service") return `سرویس با خطای موقت ${failure.status || "نامشخص"} پاسخ داد`;
   return "ارتباط شبکه با این Endpoint قطع شد";
+}
+
+function failureLead(failure: FetchFailure) {
+  return failure.url.startsWith("/api/v1/procurement/extraction-runs/")
+    ? "گزارش استخراج موقتاً بارگذاری نشد؛ سایر بخش‌های زیرسامانه فعال‌اند."
+    : "بارگذاری زیرسامانه کامل نشد.";
 }
 
 export default function ProcurementWorkspaceV14() {
@@ -196,7 +218,7 @@ export default function ProcurementWorkspaceV14() {
         fontSize: 13,
       }}
     >
-      <span><b>بارگذاری زیرسامانه کامل نشد.</b> {failureText(fetchFailure)}: <code dir="ltr">{fetchFailure.url}</code></span>
+      <span><b>{failureLead(fetchFailure)}</b> {failureText(fetchFailure)}: <code dir="ltr">{fetchFailure.url}</code></span>
       <button
         type="button"
         onClick={() => window.location.reload()}
