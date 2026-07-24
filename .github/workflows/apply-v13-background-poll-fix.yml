@@ -1,0 +1,34 @@
+name: Apply V13 Background Poll Fix
+
+on:
+  push:
+    branches:
+      - hotfix/browser-session-recovery-20260724
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: hotfix/browser-session-recovery-20260724
+          fetch-depth: 0
+
+      - name: Apply deterministic ProcurementWorkspaceV13 patch
+        run: python scripts/ci/apply-v13-background-poll-fix.py
+
+      - name: Commit patched source
+        run: |
+          if git diff --quiet -- app/procurement/ProcurementWorkspaceV13.tsx; then
+            echo "No source change required."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add app/procurement/ProcurementWorkspaceV13.tsx
+          git commit -m "Keep live procurement data during background polling"
+          git push origin HEAD:hotfix/browser-session-recovery-20260724
