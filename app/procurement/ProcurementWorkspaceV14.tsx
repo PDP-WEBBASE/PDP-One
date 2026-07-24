@@ -6,6 +6,20 @@ import AnalysisEnginePanel from "./AnalysisEnginePanel";
 import ProcurementWorkspaceV13 from "./ProcurementWorkspaceV13";
 
 type AnalysisSection = "prompts" | "keywords" | "company" | "versions";
+type FetchFailure = {
+  url: string;
+  reason: "timeout" | "network" | "service";
+  status?: number;
+  at: number;
+};
+
+type GuardWindow = Window & {
+  __pdpProcurementFetchGuardInstalled?: boolean;
+  __pdpProcurementNativeFetch?: typeof window.fetch;
+};
+
+const FETCH_FAILURE_EVENT = "pdp-procurement-fetch-failure";
+const TRANSIENT_HTTP_STATUSES = new Set([502, 503, 504]);
 
 const labelToSection: Record<string, AnalysisSection> = {
   "نقش و Prompt": "prompts",
@@ -27,9 +41,114 @@ const floatingButtonStyle = {
   boxShadow: "0 12px 28px rgba(15,23,42,.2)",
 } as const;
 
+function guardedRequestUrl(value: string) {
+  try {
+    const parsed = new URL(value, window.location.origin);
+    return parsed.pathname.startsWith("/api/v1/procurement/") || parsed.pathname === "/api/v1/auth/session/";
+  } catch {
+    return false;
+  }
+}
+
+function displayRequestUrl(value: string) {
+  try {
+    const parsed = new URL(value, window.location.origin);
+    return `${parsed.pathname}${parsed.search}`;
+  } catch {
+    return value;
+  }
+}
+
+function wait(milliseconds: number) {
+  return new Promise<void>((resolve) => window.setTimeout(resolve, milliseconds));
+}
+
+function emitFetchFailure(detail: FetchFailure) {
+  window.dispatchEvent(new CustomEvent<FetchFailure>(FETCH_FAILURE_EVENT, { detail }));
+}
+
+function ensureProcurementFetchGuard() {
+  if (typeof window === "undefined") return;
+  const guardedWindow = window as GuardWindow;
+  if (guardedWindow.__pdpProcurementFetchGuardInstalled) return;
+
+  const nativeFetch = window.fetch.bind(window);
+  guardedWindow.__pdpProcurementNativeFetch = nativeFetch;
+  guardedWindow.__pdpProcurementFetchGuardInstalled = true;
+
+  window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+    const requestUrl = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+    if (!guardedRequestUrl(requestUrl)) return nativeFetch(input, init);
+
+    const method = (init?.method || (input instanceof Request ? input.method : "GET")).toUpperCase();
+    const maxAttempts = method === "GET" ? 2 : 1;
+    let lastError: unknown = null;
+
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      const controller = new AbortController();
+      const originalSignal = init?.signal || (input instanceof Request ? input.signal : undefined);
+      const abortFromCaller = () => controller.abort();
+      let timedOut = false;
+
+      if (originalSignal) {
+        if (originalSignal.aborted) controller.abort();
+        else originalSignal.addEventListener("abort", abortFromCaller, { once: true });
+      }
+
+      const timeout = window.setTimeout(() => {
+        timedOut = true;
+        controller.abort();
+      }, 18_000);
+
+      try {
+        const response = await nativeFetch(input, { ...init, signal: controller.signal });
+        if (method === "GET" && TRANSIENT_HTTP_STATUSES.has(response.status)) {
+          if (attempt < maxAttempts) {
+            await wait(1_500);
+            continue;
+          }
+          emitFetchFailure({
+            url: displayRequestUrl(requestUrl),
+            reason: "service",
+            status: response.status,
+            at: Date.now(),
+          });
+        }
+        return response;
+      } catch (error) {
+        lastError = error;
+        const retryable = method === "GET" && (timedOut || error instanceof TypeError);
+        if (retryable && attempt < maxAttempts) {
+          await wait(1_500);
+          continue;
+        }
+        emitFetchFailure({
+          url: displayRequestUrl(requestUrl),
+          reason: timedOut ? "timeout" : "network",
+          at: Date.now(),
+        });
+        throw error;
+      } finally {
+        window.clearTimeout(timeout);
+        originalSignal?.removeEventListener("abort", abortFromCaller);
+      }
+    }
+
+    throw lastError instanceof Error ? lastError : new Error("procurement-fetch-failed");
+  };
+}
+
+function failureText(failure: FetchFailure) {
+  if (failure.reason === "timeout") return "پاسخ این Endpoint بیش از حد طول کشید";
+  if (failure.reason === "service") return `سرویس با خطای موقت ${failure.status || "نامشخص"} پاسخ داد`;
+  return "ارتباط شبکه با این Endpoint قطع شد";
+}
+
 export default function ProcurementWorkspaceV14() {
+  ensureProcurementFetchGuard();
   const [analysisSection, setAnalysisSection] = useState<AnalysisSection | null>(null);
   const [engineOpen, setEngineOpen] = useState(false);
+  const [fetchFailure, setFetchFailure] = useState<FetchFailure | null>(null);
 
   useEffect(() => {
     if (analysisSection) return;
@@ -45,8 +164,47 @@ export default function ProcurementWorkspaceV14() {
     return () => document.removeEventListener("click", handleClick);
   }, [analysisSection]);
 
+  useEffect(() => {
+    const handleFailure = (event: Event) => {
+      setFetchFailure((event as CustomEvent<FetchFailure>).detail);
+    };
+    window.addEventListener(FETCH_FAILURE_EVENT, handleFailure);
+    return () => window.removeEventListener(FETCH_FAILURE_EVENT, handleFailure);
+  }, []);
+
   return <>
     <ProcurementWorkspaceV13 />
+    {fetchFailure && <aside
+      role="alert"
+      dir="rtl"
+      style={{
+        position: "fixed",
+        zIndex: 1200,
+        insetInline: 20,
+        top: 14,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "space-between",
+        gap: 12,
+        flexWrap: "wrap",
+        padding: "10px 14px",
+        border: "1px solid #f3a59a",
+        borderRadius: 12,
+        background: "#fff1ef",
+        color: "#7f1d1d",
+        boxShadow: "0 14px 34px rgba(15,23,42,.18)",
+        fontSize: 13,
+      }}
+    >
+      <span><b>بارگذاری زیرسامانه کامل نشد.</b> {failureText(fetchFailure)}: <code dir="ltr">{fetchFailure.url}</code></span>
+      <button
+        type="button"
+        onClick={() => window.location.reload()}
+        style={{border:0,borderRadius:8,padding:"7px 11px",background:"#991b1b",color:"white",font:"inherit",fontWeight:700,cursor:"pointer"}}
+      >
+        تلاش مجدد
+      </button>
+    </aside>}
     <button
       type="button"
       onClick={() => setAnalysisSection("prompts")}
