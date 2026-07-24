@@ -46,7 +46,19 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
-      - run: npm run lint
+      - name: Run frontend lint
+        shell: bash
+        run: |
+          set -o pipefail
+          npm run lint 2>&1 | tee frontend-lint.log
+      - name: Upload frontend lint log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pdp-one-frontend-lint-log-${{ github.event.pull_request.head.sha || github.sha }}
+          path: frontend-lint.log
+          if-no-files-found: warn
+          retention-days: 7
       - run: npm test
       - name: Add procurement preview manifest
         if: github.event_name == 'pull_request'
