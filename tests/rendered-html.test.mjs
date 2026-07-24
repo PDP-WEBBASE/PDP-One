@@ -130,8 +130,9 @@ test("PDP engine creates guarded requests and keeps results as human-reviewed dr
   const mcp = await readFile(new URL("../services/pdp_mcp/server.py", import.meta.url), "utf8");
 
   assert.match(wrapper, /موتور تحلیل PDP/);
-  assert.match(panel, /analysis\/engine\/start/);
-  assert.match(panel, /requires_human_review|پیش‌نویس ChatGPT/);
+  assert.match(panel, /const ENGINE_API = `\$\{API_BASE\}\/procurement\/analysis\/engine`/);
+  assert.match(panel, /fetch\(`\$\{ENGINE_API\}\/start\//);
+  assert.match(panel, /پیش‌نویس ChatGPT/);
   assert.match(panel, /review_status/);
   assert.match(panel, /شروع درخواست PDP/);
   assert.match(mcp, /start_procurement_analysis/);
