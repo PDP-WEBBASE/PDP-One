@@ -22,7 +22,8 @@ function Invoke-PDPOneAcquisitionRetry([string]$Stage, [scriptblock]$Action, [in
         } catch {
             $lastError = $_
             if ($attempt -ge $Attempts) { break }
-            Start-Sleep -Seconds ([Math]::Min(8, [Math]::Pow(2, $attempt)))
+            $delaySeconds = [Math]::Min(8, [int][Math]::Pow(2, $attempt))
+            Start-Sleep -Seconds $delaySeconds
         }
     }
     $message = if ($null -ne $lastError) { ConvertTo-PDPOneRedactedText $lastError.Exception.Message } else { "Unknown acquisition error." }
