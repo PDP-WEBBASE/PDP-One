@@ -53,6 +53,7 @@ test("routes procurement to V14 while preserving the live V13 workspace", async 
   assert.match(pageSource, /ProcurementWorkspaceV14/);
   assert.match(wrapperSource, /ProcurementWorkspaceV13/);
   assert.match(wrapperSource, /AnalysisContextManager/);
+  assert.match(wrapperSource, /AnalysisEnginePanel/);
   assert.match(workspaceSource, /متصل به API و پایگاه‌داده واقعی سامانه/);
   assert.doesNotMatch(workspaceSource, /Preview تعاملی/);
   assert.doesNotMatch(workspaceSource, /const notices\s*:/);
@@ -121,4 +122,21 @@ test("analysis settings are persisted through versioned live APIs", async () => 
   assert.match(manager, /کلیدواژه‌های فعال/);
   assert.match(manager, /پروفایل خلاصه شرکت/);
   assert.match(wrapper, /تنظیمات تحلیل واقعی/);
+});
+
+test("PDP engine creates guarded requests and keeps results as human-reviewed drafts", async () => {
+  const panel = await readFile(new URL("../app/procurement/AnalysisEnginePanel.tsx", import.meta.url), "utf8");
+  const wrapper = await readFile(new URL("../app/procurement/ProcurementWorkspaceV14.tsx", import.meta.url), "utf8");
+  const mcp = await readFile(new URL("../services/pdp_mcp/server.py", import.meta.url), "utf8");
+
+  assert.match(wrapper, /موتور تحلیل PDP/);
+  assert.match(panel, /analysis\/engine\/start/);
+  assert.match(panel, /requires_human_review|پیش‌نویس ChatGPT/);
+  assert.match(panel, /review_status/);
+  assert.match(panel, /شروع درخواست PDP/);
+  assert.match(mcp, /start_procurement_analysis/);
+  assert.match(mcp, /get_procurement_analysis_work/);
+  assert.match(mcp, /save_procurement_notice_analysis/);
+  assert.match(mcp, /finish_procurement_analysis/);
+  assert.match(mcp, /Human review is always required/);
 });
