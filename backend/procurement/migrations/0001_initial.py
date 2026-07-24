@@ -1,0 +1,203 @@
+import django.core.validators
+import django.db.models.deletion
+import uuid
+from django.conf import settings
+from django.db import migrations, models
+
+
+class Migration(migrations.Migration):
+
+    initial = True
+
+    dependencies = [
+        migrations.swappable_dependency(settings.AUTH_USER_MODEL),
+    ]
+
+    operations = [
+        migrations.CreateModel(
+            name="ProcurementSource",
+            fields=[
+                ("id", models.UUIDField(default=uuid.uuid4, editable=False, primary_key=True, serialize=False)),
+                ("created_at", models.DateTimeField(auto_now_add=True)),
+                ("updated_at", models.DateTimeField(auto_now=True)),
+                ("key", models.SlugField(max_length=60, unique=True)),
+                ("name", models.CharField(max_length=120)),
+                ("base_url", models.URLField(max_length=500)),
+                ("enabled", models.BooleanField(default=True)),
+                ("status", models.CharField(choices=[("active", "فعال"), ("inactive", "غیرفعال توسط کاربر"), ("pending_source_analysis", "در انتظار بررسی فنی"), ("degraded", "دارای اختلال")], default="active", max_length=32)),
+                ("configuration", models.JSONField(blank=True, default=dict)),
+                ("last_success_at", models.DateTimeField(blank=True, null=True)),
+                ("last_failure_at", models.DateTimeField(blank=True, null=True)),
+            ],
+            options={"ordering": ["name"]},
+        ),
+        migrations.CreateModel(
+            name="ProcurementNotice",
+            fields=[
+                ("id", models.UUIDField(default=uuid.uuid4, editable=False, primary_key=True, serialize=False)),
+                ("created_at", models.DateTimeField(auto_now_add=True)),
+                ("updated_at", models.DateTimeField(auto_now=True)),
+                ("resolved_notice_type", models.CharField(choices=[("tender", "مناقصه"), ("inquiry", "استعلام")], max_length=12)),
+                ("type_resolution_status", models.CharField(choices=[("resolved", "تعیین‌شده"), ("needs_review", "نیازمند بررسی نوع")], default="resolved", max_length=20)),
+                ("title", models.CharField(max_length=600)),
+                ("normalized_title", models.CharField(blank=True, max_length=600)),
+                ("summary", models.TextField(blank=True)),
+                ("description", models.TextField(blank=True)),
+                ("conditions", models.TextField(blank=True)),
+                ("employer_name", models.CharField(blank=True, max_length=400)),
+                ("notice_number", models.CharField(blank=True, max_length=160)),
+                ("province", models.CharField(blank=True, max_length=120)),
+                ("city", models.CharField(blank=True, max_length=120)),
+                ("execution_location", models.CharField(blank=True, max_length=300)),
+                ("published_date", models.DateField(blank=True, null=True)),
+                ("submission_deadline", models.DateTimeField(blank=True, null=True)),
+                ("date_metadata", models.JSONField(blank=True, default=dict)),
+                ("estimated_amount_rials", models.DecimalField(blank=True, decimal_places=0, max_digits=24, null=True)),
+                ("guarantee_amount_rials", models.DecimalField(blank=True, decimal_places=0, max_digits=24, null=True)),
+                ("qualification_text", models.TextField(blank=True)),
+                ("contact_text", models.TextField(blank=True)),
+                ("processing_status", models.CharField(choices=[("captured", "دریافت‌شده"), ("normalized", "استانداردشده"), ("ready_for_analysis", "آماده تحلیل"), ("analysis_queued", "در صف تحلیل"), ("analyzed", "تحلیل‌شده"), ("analysis_failed", "تحلیل ناموفق"), ("expired", "مهلت گذشته"), ("retention_cleaned", "پاک‌سازی‌شده")], default="captured", max_length=24)),
+                ("is_recommended", models.BooleanField(default=False)),
+                ("is_hidden", models.BooleanField(default=False)),
+                ("retention_protected", models.BooleanField(default=False)),
+                ("soft_deleted_at", models.DateTimeField(blank=True, null=True)),
+                ("first_seen_at", models.DateTimeField()),
+                ("last_seen_at", models.DateTimeField()),
+            ],
+            options={
+                "ordering": ["-last_seen_at"],
+                "indexes": [
+                    models.Index(fields=["resolved_notice_type", "submission_deadline"], name="proc_notice_type_deadline_idx"),
+                    models.Index(fields=["processing_status", "is_recommended"], name="proc_notice_status_rec_idx"),
+                    models.Index(fields=["employer_name"], name="proc_notice_employer_idx"),
+                    models.Index(fields=["province"], name="proc_notice_province_idx"),
+                ],
+            },
+        ),
+        migrations.CreateModel(
+            name="ProcurementConnector",
+            fields=[
+                ("id", models.UUIDField(default=uuid.uuid4, editable=False, primary_key=True, serialize=False)),
+                ("created_at", models.DateTimeField(auto_now_add=True)),
+                ("updated_at", models.DateTimeField(auto_now=True)),
+                ("key", models.SlugField(max_length=80, unique=True)),
+                ("notice_type", models.CharField(choices=[("tender", "مناقصه"), ("inquiry", "استعلام")], max_length=12)),
+                ("enabled", models.BooleanField(default=True)),
+                ("status", models.CharField(choices=[("active", "فعال"), ("inactive", "غیرفعال توسط کاربر"), ("pending_source_analysis", "در انتظار بررسی فنی"), ("error", "خطا")], default="active", max_length=32)),
+                ("list_url_template", models.CharField(max_length=500)),
+                ("parser_version", models.CharField(default="v1", max_length=80)),
+                ("supports_detail", models.BooleanField(default=True)),
+                ("requires_browser", models.BooleanField(default=False)),
+                ("page_size_hint", models.PositiveSmallIntegerField(blank=True, null=True)),
+                ("max_pages", models.PositiveIntegerField(default=100)),
+                ("timeout_seconds", models.PositiveSmallIntegerField(default=60)),
+                ("retry_count", models.PositiveSmallIntegerField(default=3)),
+                ("overlap_days", models.PositiveSmallIntegerField(default=2)),
+                ("last_success_at", models.DateTimeField(blank=True, null=True)),
+                ("last_failure_at", models.DateTimeField(blank=True, null=True)),
+                ("last_successful_page", models.PositiveIntegerField(blank=True, null=True)),
+                ("source", models.ForeignKey(on_delete=django.db.models.deletion.PROTECT, related_name="connectors", to="procurement.procurementsource")),
+            ],
+            options={"ordering": ["source__name", "notice_type"]},
+        ),
+        migrations.CreateModel(
+            name="SourceNotice",
+            fields=[
+                ("id", models.UUIDField(default=uuid.uuid4, editable=False, primary_key=True, serialize=False)),
+                ("created_at", models.DateTimeField(auto_now_add=True)),
+                ("updated_at", models.DateTimeField(auto_now=True)),
+                ("source_record_id", models.CharField(max_length=160)),
+                ("source_url", models.URLField(max_length=1000)),
+                ("detail_url", models.URLField(blank=True, max_length=1000)),
+                ("source_declared_type", models.CharField(choices=[("tender", "مناقصه"), ("inquiry", "استعلام")], max_length=12)),
+                ("title_raw", models.CharField(max_length=600)),
+                ("employer_raw", models.CharField(blank=True, max_length=400)),
+                ("province_raw", models.CharField(blank=True, max_length=120)),
+                ("published_at_raw", models.CharField(blank=True, max_length=120)),
+                ("deadline_raw", models.CharField(blank=True, max_length=120)),
+                ("raw_payload", models.JSONField(default=dict)),
+                ("content_hash", models.CharField(max_length=64)),
+                ("detail_status", models.CharField(choices=[("not_requested", "درخواست نشده"), ("enriched", "تکمیل‌شده"), ("access_limited", "دسترسی محدود"), ("security_challenge", "کد امنیتی"), ("failed", "ناموفق")], default="not_requested", max_length=24)),
+                ("first_seen_at", models.DateTimeField()),
+                ("last_seen_at", models.DateTimeField()),
+                ("is_active", models.BooleanField(default=True)),
+                ("connector", models.ForeignKey(on_delete=django.db.models.deletion.PROTECT, related_name="source_notices", to="procurement.procurementconnector")),
+            ],
+            options={"ordering": ["-last_seen_at"]},
+        ),
+        migrations.CreateModel(
+            name="NoticeSourceLink",
+            fields=[
+                ("id", models.UUIDField(default=uuid.uuid4, editable=False, primary_key=True, serialize=False)),
+                ("created_at", models.DateTimeField(auto_now_add=True)),
+                ("updated_at", models.DateTimeField(auto_now=True)),
+                ("match_type", models.CharField(choices=[("exact", "قطعی"), ("probable", "احتمالی"), ("possible", "ممکن"), ("manual", "تأیید دستی")], default="exact", max_length=12)),
+                ("confidence", models.DecimalField(decimal_places=2, default=100, max_digits=5, validators=[django.core.validators.MinValueValidator(0), django.core.validators.MaxValueValidator(100)])),
+                ("rationale", models.TextField(blank=True)),
+                ("confirmed_by", models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, related_name="procurement_source_links_confirmed", to=settings.AUTH_USER_MODEL)),
+                ("procurement_notice", models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name="source_links", to="procurement.procurementnotice")),
+                ("source_notice", models.OneToOneField(on_delete=django.db.models.deletion.PROTECT, related_name="notice_link", to="procurement.sourcenotice")),
+            ],
+        ),
+        migrations.CreateModel(
+            name="SourceNoticeRevision",
+            fields=[
+                ("id", models.UUIDField(default=uuid.uuid4, editable=False, primary_key=True, serialize=False)),
+                ("created_at", models.DateTimeField(auto_now_add=True)),
+                ("updated_at", models.DateTimeField(auto_now=True)),
+                ("revision_number", models.PositiveIntegerField()),
+                ("content_hash", models.CharField(max_length=64)),
+                ("raw_payload", models.JSONField(default=dict)),
+                ("parsed_payload", models.JSONField(default=dict)),
+                ("changed_fields", models.JSONField(default=list)),
+                ("parser_version", models.CharField(max_length=80)),
+                ("captured_at", models.DateTimeField()),
+                ("source_notice", models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name="revisions", to="procurement.sourcenotice")),
+            ],
+            options={"ordering": ["source_notice", "revision_number"]},
+        ),
+        migrations.CreateModel(
+            name="ProcurementCase",
+            fields=[
+                ("id", models.UUIDField(default=uuid.uuid4, editable=False, primary_key=True, serialize=False)),
+                ("created_at", models.DateTimeField(auto_now_add=True)),
+                ("updated_at", models.DateTimeField(auto_now=True)),
+                ("stage", models.CharField(choices=[("selected", "منتخب"), ("evaluating", "در حال ارزیابی"), ("participate", "تصمیم به شرکت یا پاسخ"), ("do_not_participate", "تصمیم به عدم شرکت یا پاسخ"), ("preparing", "در دست تهیه"), ("ready_to_submit", "آماده ارسال"), ("submitted", "ارسال‌شده"), ("awaiting_result", "در انتظار نتیجه"), ("won", "برنده"), ("lost", "بازنده"), ("cancelled", "لغوشده"), ("renewed", "تجدیدشده")], default="selected", max_length=24)),
+                ("next_action", models.CharField(blank=True, max_length=500)),
+                ("next_action_due", models.DateTimeField(blank=True, null=True)),
+                ("progress", models.PositiveSmallIntegerField(default=0, validators=[django.core.validators.MinValueValidator(0), django.core.validators.MaxValueValidator(100)])),
+                ("decision_reason", models.CharField(blank=True, max_length=500)),
+                ("protected_from_retention", models.BooleanField(default=True)),
+                ("created_by", models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.PROTECT, related_name="procurement_cases_created", to=settings.AUTH_USER_MODEL)),
+                ("responsible", models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.PROTECT, related_name="procurement_cases_responsible", to=settings.AUTH_USER_MODEL)),
+                ("notice", models.OneToOneField(on_delete=django.db.models.deletion.PROTECT, related_name="case", to="procurement.procurementnotice")),
+            ],
+            options={
+                "ordering": ["next_action_due", "-created_at"],
+                "indexes": [
+                    models.Index(fields=["stage", "next_action_due"], name="proc_case_stage_due_idx"),
+                    models.Index(fields=["responsible", "stage"], name="proc_case_owner_stage_idx"),
+                ],
+            },
+        ),
+        migrations.AddConstraint(
+            model_name="procurementconnector",
+            constraint=models.UniqueConstraint(fields=("source", "notice_type"), name="proc_source_notice_type_uniq"),
+        ),
+        migrations.AddIndex(
+            model_name="sourcenotice",
+            index=models.Index(fields=["connector", "last_seen_at"], name="proc_src_connector_seen_idx"),
+        ),
+        migrations.AddIndex(
+            model_name="sourcenotice",
+            index=models.Index(fields=["content_hash"], name="proc_src_hash_idx"),
+        ),
+        migrations.AddConstraint(
+            model_name="sourcenotice",
+            constraint=models.UniqueConstraint(fields=("connector", "source_record_id"), name="proc_connector_record_uniq"),
+        ),
+        migrations.AddConstraint(
+            model_name="sourcenoticerevision",
+            constraint=models.UniqueConstraint(fields=("source_notice", "revision_number"), name="proc_notice_revision_uniq"),
+        ),
+    ]

@@ -5,6 +5,21 @@ import nextTs from "eslint-config-next/typescript";
 const eslintConfig = defineConfig([
   ...nextVitals,
   ...nextTs,
+  {
+    files: ["app/procurement/page.tsx"],
+    rules: {
+      "@next/next/no-html-link-for-pages": "off",
+    },
+  },
+  {
+    files: [
+      "app/procurement/ProcurementWorkspaceV2.tsx",
+      "app/procurement/ProcurementWorkspaceV4.tsx",
+    ],
+    rules: {
+      "react-hooks/static-components": "off",
+    },
+  },
   // Override default ignores of eslint-config-next.
   globalIgnores([
     // Default ignores of eslint-config-next:

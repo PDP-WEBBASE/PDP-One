@@ -41,7 +41,9 @@ $bootstrapScripts = @(
     "PDPOne.Common.ps1", "Deployment-Agent.ps1", "Invoke-PDPOneDeployment.ps1",
     "New-PDPOneBackup.ps1", "Test-PDPOneBackupRestore.ps1", "Restore-PDPOneBackup.ps1",
     "Rollback-PDPOne.ps1", "Update-PDPOne.ps1", "Test-PDPOne.ps1",
-    "Start-PDPOne.ps1", "New-PDPOneDiagnostics.ps1", "Rotate-PDPOneMcpToken.ps1"
+    "Start-PDPOne.ps1", "Repair-PDPOneConnectivity.ps1", "Open-PDPOneLocal.ps1",
+    "Register-PDPOneStartupTask.ps1", "New-PDPOneDiagnostics.ps1", "Rotate-PDPOneMcpToken.ps1",
+    "Invoke-PDPOneDiskMaintenance.ps1"
 )
 foreach ($name in $bootstrapScripts) {
     $source = Join-Path $PSScriptRoot $name
@@ -86,4 +88,8 @@ $settings = New-ScheduledTaskSettingsSet -RestartCount 20 -RestartInterval (New-
 Register-ScheduledTask -TaskName "PDP One Local Deployment Agent" -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Description "Processes only signed, allowlisted PDP One deployment requests." -Force | Out-Null
 Start-ScheduledTask -TaskName "PDP One Local Deployment Agent"
 
-Write-Host "Local deployment agent installed. This one-time Windows action is complete." -ForegroundColor Green
+& powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "Register-PDPOneStartupTask.ps1") -ProjectRoot $ProjectRoot
+if ($LASTEXITCODE -ne 0) { throw "Stable startup tasks could not be registered." }
+Start-ScheduledTask -TaskName "PDP One Stable Startup"
+
+Write-Host "Local deployment agent and stable startup watchdog installed. This one-time Windows action is complete." -ForegroundColor Green

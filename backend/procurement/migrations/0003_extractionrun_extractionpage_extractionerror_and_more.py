@@ -1,0 +1,123 @@
+import django.db.models.deletion
+import uuid
+from django.conf import settings
+from django.db import migrations, models
+
+
+class Migration(migrations.Migration):
+
+    dependencies = [
+        ("procurement", "0002_seed_sources"),
+        migrations.swappable_dependency(settings.AUTH_USER_MODEL),
+    ]
+
+    operations = [
+        migrations.CreateModel(
+            name="ExtractionRun",
+            fields=[
+                ("id", models.UUIDField(default=uuid.uuid4, editable=False, primary_key=True, serialize=False)),
+                ("created_at", models.DateTimeField(auto_now_add=True)),
+                ("updated_at", models.DateTimeField(auto_now=True)),
+                ("trigger", models.CharField(choices=[("manual", "دستی"), ("scheduled", "زمان‌بندی‌شده"), ("retry", "تلاش مجدد")], default="manual", max_length=16)),
+                ("status", models.CharField(choices=[("queued", "در صف"), ("running", "در حال اجرا"), ("succeeded", "موفق"), ("succeeded_with_warnings", "موفق با هشدار"), ("partial", "ناقص"), ("failed", "ناموفق"), ("cancelled", "متوقف‌شده")], default="queued", max_length=32)),
+                ("date_from_raw", models.CharField(blank=True, max_length=40)),
+                ("date_to_raw", models.CharField(blank=True, max_length=40)),
+                ("include_details", models.BooleanField(default=True)),
+                ("analyze_after_success", models.BooleanField(default=True)),
+                ("page_cap", models.PositiveIntegerField(blank=True, null=True)),
+                ("started_at", models.DateTimeField(blank=True, null=True)),
+                ("finished_at", models.DateTimeField(blank=True, null=True)),
+                ("pages_processed", models.PositiveIntegerField(default=0)),
+                ("records_seen", models.PositiveIntegerField(default=0)),
+                ("records_new", models.PositiveIntegerField(default=0)),
+                ("records_updated", models.PositiveIntegerField(default=0)),
+                ("records_duplicate", models.PositiveIntegerField(default=0)),
+                ("records_failed", models.PositiveIntegerField(default=0)),
+                ("summary", models.JSONField(blank=True, default=dict)),
+                ("connectors", models.ManyToManyField(related_name="extraction_runs", to="procurement.procurementconnector")),
+                ("requested_by", models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, related_name="procurement_extraction_runs_requested", to=settings.AUTH_USER_MODEL)),
+            ],
+            options={"ordering": ["-created_at"]},
+        ),
+        migrations.CreateModel(
+            name="ExtractionPage",
+            fields=[
+                ("id", models.UUIDField(default=uuid.uuid4, editable=False, primary_key=True, serialize=False)),
+                ("created_at", models.DateTimeField(auto_now_add=True)),
+                ("updated_at", models.DateTimeField(auto_now=True)),
+                ("page_number", models.PositiveIntegerField()),
+                ("url", models.URLField(max_length=1000)),
+                ("http_status", models.PositiveSmallIntegerField(blank=True, null=True)),
+                ("content_hash", models.CharField(blank=True, max_length=64)),
+                ("response_bytes", models.PositiveIntegerField(default=0)),
+                ("parse_status", models.CharField(choices=[("pending", "در انتظار"), ("succeeded", "موفق"), ("warning", "موفق با هشدار"), ("failed", "ناموفق")], default="pending", max_length=16)),
+                ("captured_at", models.DateTimeField(blank=True, null=True)),
+                ("error_code", models.CharField(blank=True, max_length=80)),
+                ("error_message", models.CharField(blank=True, max_length=1000)),
+                ("connector", models.ForeignKey(on_delete=django.db.models.deletion.PROTECT, related_name="extraction_pages", to="procurement.procurementconnector")),
+                ("run", models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name="pages", to="procurement.extractionrun")),
+            ],
+            options={"ordering": ["run", "connector", "page_number"]},
+        ),
+        migrations.CreateModel(
+            name="ExtractionError",
+            fields=[
+                ("id", models.UUIDField(default=uuid.uuid4, editable=False, primary_key=True, serialize=False)),
+                ("created_at", models.DateTimeField(auto_now_add=True)),
+                ("updated_at", models.DateTimeField(auto_now=True)),
+                ("page_number", models.PositiveIntegerField(blank=True, null=True)),
+                ("url", models.URLField(blank=True, max_length=1000)),
+                ("category", models.CharField(choices=[("network", "شبکه"), ("http", "پاسخ سایت"), ("parse", "پردازش صفحه"), ("security_challenge", "کد امنیتی"), ("validation", "اعتبارسنجی"), ("unexpected", "پیش‌بینی‌نشده")], max_length=24)),
+                ("safe_message", models.CharField(max_length=1000)),
+                ("technical_details", models.JSONField(blank=True, default=dict)),
+                ("retryable", models.BooleanField(default=False)),
+                ("resolved_at", models.DateTimeField(blank=True, null=True)),
+                ("connector", models.ForeignKey(on_delete=django.db.models.deletion.PROTECT, related_name="extraction_errors", to="procurement.procurementconnector")),
+                ("resolved_by", models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, related_name="procurement_extraction_errors_resolved", to=settings.AUTH_USER_MODEL)),
+                ("run", models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name="errors", to="procurement.extractionrun")),
+            ],
+            options={"ordering": ["-created_at"]},
+        ),
+        migrations.CreateModel(
+            name="ExtractionRunItem",
+            fields=[
+                ("id", models.UUIDField(default=uuid.uuid4, editable=False, primary_key=True, serialize=False)),
+                ("created_at", models.DateTimeField(auto_now_add=True)),
+                ("updated_at", models.DateTimeField(auto_now=True)),
+                ("source_record_id", models.CharField(max_length=160)),
+                ("page_number", models.PositiveIntegerField(blank=True, null=True)),
+                ("position", models.PositiveIntegerField(blank=True, null=True)),
+                ("status", models.CharField(choices=[("new", "جدید"), ("updated", "به‌روزرسانی‌شده"), ("duplicate", "تکراری"), ("skipped", "ردشده"), ("failed", "ناموفق")], max_length=16)),
+                ("changed_fields", models.JSONField(blank=True, default=list)),
+                ("safe_message", models.CharField(blank=True, max_length=1000)),
+                ("connector", models.ForeignKey(on_delete=django.db.models.deletion.PROTECT, related_name="extraction_items", to="procurement.procurementconnector")),
+                ("run", models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name="items", to="procurement.extractionrun")),
+                ("source_notice", models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, related_name="extraction_items", to="procurement.sourcenotice")),
+            ],
+            options={"ordering": ["run", "connector", "page_number", "position"]},
+        ),
+        migrations.CreateModel(
+            name="ExtractionSchedule",
+            fields=[
+                ("id", models.UUIDField(default=uuid.uuid4, editable=False, primary_key=True, serialize=False)),
+                ("created_at", models.DateTimeField(auto_now_add=True)),
+                ("updated_at", models.DateTimeField(auto_now=True)),
+                ("enabled", models.BooleanField(default=True)),
+                ("interval_minutes", models.PositiveIntegerField(default=60)),
+                ("include_details", models.BooleanField(default=True)),
+                ("analyze_after_success", models.BooleanField(default=True)),
+                ("page_cap", models.PositiveIntegerField(blank=True, null=True)),
+                ("next_run_at", models.DateTimeField(blank=True, null=True)),
+                ("last_run_at", models.DateTimeField(blank=True, null=True)),
+                ("connector", models.OneToOneField(on_delete=django.db.models.deletion.CASCADE, related_name="extraction_schedule", to="procurement.procurementconnector")),
+            ],
+            options={"ordering": ["connector__source__name", "connector__notice_type"]},
+        ),
+        migrations.AddIndex(model_name="extractionrun", index=models.Index(fields=["status", "created_at"], name="proc_ext_status_created_idx")),
+        migrations.AddIndex(model_name="extractionrun", index=models.Index(fields=["trigger", "created_at"], name="proc_ext_trigger_created_idx")),
+        migrations.AddIndex(model_name="extractionpage", index=models.Index(fields=["connector", "captured_at"], name="proc_ext_page_captured_idx")),
+        migrations.AddConstraint(model_name="extractionpage", constraint=models.UniqueConstraint(fields=("run", "connector", "page_number"), name="proc_ext_run_conn_page_uniq")),
+        migrations.AddIndex(model_name="extractionerror", index=models.Index(fields=["connector", "category", "created_at"], name="proc_ext_error_lookup_idx")),
+        migrations.AddIndex(model_name="extractionrunitem", index=models.Index(fields=["run", "status"], name="proc_ext_item_status_idx")),
+        migrations.AddIndex(model_name="extractionrunitem", index=models.Index(fields=["connector", "source_record_id"], name="proc_ext_item_record_idx")),
+    ]

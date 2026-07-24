@@ -46,8 +46,45 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
-      - run: npm run lint
+      - name: Run frontend lint
+        shell: bash
+        run: |
+          set -o pipefail
+          npm run lint 2>&1 | tee frontend-lint.log
+      - name: Upload frontend lint log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pdp-one-frontend-lint-log-${{ github.event.pull_request.head.sha || github.sha }}
+          path: frontend-lint.log
+          if-no-files-found: warn
+          retention-days: 7
       - run: npm test
+      - name: Add procurement preview manifest
+        if: github.event_name == 'pull_request'
+        shell: bash
+        run: |
+          mkdir -p dist/.pdpone-preview
+          cat > dist/.pdpone-preview/manifest.json <<EOF
+          {
+            "repository": "${GITHUB_REPOSITORY}",
+            "commit": "${{ github.event.pull_request.head.sha }}",
+            "pull_request": ${{ github.event.pull_request.number }},
+            "preview_route": "/procurement",
+            "production_changed": false,
+            "database_migrated": false,
+            "deployment_authorized": false
+          }
+          EOF
+      - name: Upload procurement preview artifact
+        if: github.event_name == 'pull_request'
+        uses: actions/upload-artifact@v4
+        with:
+          name: pdp-one-procurement-preview-${{ github.event.pull_request.head.sha }}
+          path: dist
+          if-no-files-found: error
+          include-hidden-files: true
+          retention-days: 7
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
@@ -57,9 +94,21 @@ jobs:
       - name: Verify Python syntax and migrations
         env:
           DJANGO_SETTINGS_MODULE: config.settings_test
+        shell: bash
         run: |
-          python -m compileall -q backend services/pdp_mcp
-          python backend/manage.py makemigrations --check --dry-run
+          set -o pipefail
+          python -m compileall -q backend services/pdp_mcp 2>&1 | tee python-compile.log
+          python backend/manage.py makemigrations --check --dry-run 2>&1 | tee migration-check.log
+      - name: Upload Python and migration verification logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pdp-one-python-migration-log-${{ github.event.pull_request.head.sha || github.sha }}
+          path: |
+            python-compile.log
+            migration-check.log
+          if-no-files-found: warn
+          retention-days: 7
       - name: Test signed deployment queue
         env:
           PYTHONPATH: services/pdp_mcp
@@ -67,7 +116,96 @@ jobs:
       - name: Run backend tests
         env:
           DJANGO_SETTINGS_MODULE: config.settings_test
-        run: python backend/manage.py test core.tests -v 2
+        shell: bash
+        run: |
+          set -o pipefail
+          python backend/manage.py test core.tests procurement.tests -v 2 2>&1 | tee backend-test.log
+      - name: Upload backend test log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pdp-one-backend-test-log-${{ github.event.pull_request.head.sha || github.sha }}
+          path: backend-test.log
+          if-no-files-found: warn
+          retention-days: 7
+      - name: Build controlled SETAD live-test source package
+        if: github.event_name == 'pull_request' && success()
+        shell: bash
+        run: |
+          mkdir -p setad-live-test-package
+          git archive --format=zip --output="setad-live-test-package/PDP-One-SETAD-Live-Test-Source-${{ github.event.pull_request.head.sha }}.zip" HEAD
+          cat > setad-live-test-package/README-SETAD-LIVE-TEST.txt <<'EOF'
+          PDP One - SETAD controlled live test
+
+          1. Extract the source ZIP to a new folder.
+          2. Start Rancher Desktop and wait for Docker to become ready.
+          3. Double-click TEST-SETAD-CONNECTORS.bat.
+          4. The test uses an ephemeral backend container and does not replace the running backend.
+          5. A PostgreSQL backup is created before migration.
+          6. Upload only the generated PDP-ONE-SETAD-LIVE-TEST-....zip report.
+             Do not upload the separate database backup.
+          EOF
+      - name: Upload controlled SETAD live-test source package
+        if: github.event_name == 'pull_request' && success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pdp-one-setad-live-test-${{ github.event.pull_request.head.sha }}
+          path: setad-live-test-package
+          if-no-files-found: error
+          retention-days: 7
+      - name: Build Hezareh and Pars Namad live-test source package
+        if: github.event_name == 'pull_request' && success()
+        shell: bash
+        run: |
+          mkdir -p hezareh-parsnamad-live-test-package
+          git archive --format=zip --output="hezareh-parsnamad-live-test-package/PDP-One-Hezareh-ParsNamad-Live-Test-Source-${{ github.event.pull_request.head.sha }}.zip" HEAD
+          cat > hezareh-parsnamad-live-test-package/README-HEZAREH-PARSNAMAD-LIVE-TEST.txt <<'EOF'
+          PDP One - Hezareh and Pars Namad controlled live test
+
+          1. Extract the source ZIP to a new folder.
+          2. Start Rancher Desktop and wait for Docker to become ready.
+          3. Double-click TEST-HEZAREH-PARSNAMAD-CONNECTORS.bat.
+          4. Four connectors are tested: tenders and inquiries for both sources.
+          5. Five pages are requested for each connector; SETAD is not included.
+          6. The test uses an ephemeral backend container and does not replace the running backend.
+          7. A PostgreSQL backup is created before migration.
+          8. Upload only the generated PDP-ONE-HEZAREH-PARSNAMAD-LIVE-TEST-....zip report.
+             Do not upload the separate database backup.
+          EOF
+      - name: Upload Hezareh and Pars Namad live-test source package
+        if: github.event_name == 'pull_request' && success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pdp-one-hezareh-parsnamad-live-test-${{ github.event.pull_request.head.sha }}
+          path: hezareh-parsnamad-live-test-package
+          if-no-files-found: error
+          retention-days: 7
+      - name: Build Pars Namad tender repair and retest package
+        if: github.event_name == 'pull_request' && success()
+        shell: bash
+        run: |
+          mkdir -p parsnamad-tender-repair-package
+          git archive --format=zip --output="parsnamad-tender-repair-package/PDP-One-ParsNamad-Tender-Repair-Source-${{ github.event.pull_request.head.sha }}.zip" HEAD
+          cat > parsnamad-tender-repair-package/README-PARSNAMAD-TENDER-REPAIR.txt <<'EOF'
+          PDP One - Pars Namad tender repair and five-page retest
+
+          1. Extract the source ZIP to a new folder.
+          2. Start Rancher Desktop and wait for Docker to become ready.
+          3. Double-click REPAIR-RETEST-PARSNAMAD-TENDERS.bat.
+          4. A PostgreSQL backup is created before any cleanup.
+          5. Only new, unprotected records from the incorrect controlled test are removed.
+          6. The corrected tender route is tested for five pages.
+          7. Upload only the generated PDP-ONE-PARSNAMAD-TENDER-REPAIR-....zip report.
+             Do not upload the separate database backup.
+          EOF
+      - name: Upload Pars Namad tender repair and retest package
+        if: github.event_name == 'pull_request' && success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pdp-one-parsnamad-tender-repair-${{ github.event.pull_request.head.sha }}
+          path: parsnamad-tender-repair-package
+          if-no-files-found: error
+          retention-days: 7
 
   windows-powershell-51:
     name: Windows PowerShell 5.1 compatibility
