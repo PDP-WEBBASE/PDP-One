@@ -1,0 +1,65 @@
+name: PDP One Deployment Agent Bootstrap Package
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    if: startsWith(github.head_ref, 'hotfix/deployment-agent-bootstrap-')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build deployment-agent-only bootstrap package
+        shell: bash
+        run: |
+          set -euo pipefail
+          package_root="deployment-agent-bootstrap-package"
+          mkdir -p "$package_root/scripts/windows"
+          cp BOOTSTRAP-PDP-ONE-DEPLOYMENT-AGENT.bat "$package_root/"
+          cp scripts/windows/Bootstrap-PDPOneDeploymentAgent.ps1 "$package_root/scripts/windows/"
+          cp scripts/windows/Invoke-PDPOneDeployment.ps1 "$package_root/scripts/windows/"
+          cat > "$package_root/README.txt" <<EOF
+          PDP One Deployment Agent Bootstrap
+
+          Commit: ${{ github.event.pull_request.head.sha }}
+          Pull request: ${{ github.event.pull_request.number }}
+
+          1. Extract this artifact completely.
+          2. Double-click BOOTSTRAP-PDP-ONE-DEPLOYMENT-AGENT.bat.
+          3. Approve the Windows Administrator prompt.
+          4. Send PDP-ONE-AGENT-BOOTSTRAP-REPORT.json from the Desktop.
+
+          Scope: only the installed Invoke-PDPOneDeployment.ps1 file and the
+          Deployment Agent Scheduled Task are touched. No web/backend code,
+          Docker, database, volumes, business backups, .env, tokens or
+          Tailscale state are modified.
+          EOF
+          cat > "$package_root/MANIFEST.json" <<EOF
+          {
+            "repository": "${GITHUB_REPOSITORY}",
+            "commit": "${{ github.event.pull_request.head.sha }}",
+            "pull_request": ${{ github.event.pull_request.number }},
+            "operation": "bootstrap-deployment-agent-only",
+            "production_changed": false
+          }
+          EOF
+          (
+            cd "$package_root"
+            sha256sum BOOTSTRAP-PDP-ONE-DEPLOYMENT-AGENT.bat \
+              scripts/windows/Bootstrap-PDPOneDeploymentAgent.ps1 \
+              scripts/windows/Invoke-PDPOneDeployment.ps1 \
+              MANIFEST.json > SHA256SUMS.txt
+          )
+
+      - name: Upload deployment-agent bootstrap artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: pdp-one-deployment-agent-bootstrap-${{ github.event.pull_request.head.sha }}
+          path: deployment-agent-bootstrap-package
+          if-no-files-found: error
+          include-hidden-files: true
+          retention-days: 7
