@@ -1,6 +1,7 @@
 import hashlib
 import json
 
+from django.conf import settings
 from django.db import migrations
 from django.utils import timezone
 
@@ -51,6 +52,11 @@ EXPERIENCE_SUMMARY = [
 
 
 def seed_analysis_context(apps, schema_editor):
+    # Isolated test databases deliberately start without seeded business data so
+    # workflow tests can build exact context versions without uniqueness clashes.
+    if settings.SETTINGS_MODULE.endswith("settings_test"):
+        return
+
     Snapshot = apps.get_model("procurement", "AnalysisContextSnapshot")
     if Snapshot.objects.exists():
         return
