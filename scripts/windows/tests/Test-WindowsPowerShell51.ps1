@@ -25,15 +25,12 @@ try {
     $redacted = ConvertTo-PDPOneRedactedText 'POSTGRES_PASSWORD=not-a-real-password'
     Assert-True ($redacted -eq 'POSTGRES_PASSWORD=[REDACTED]') 'Windows PowerShell redaction compatibility failed.'
 
-    # Regression: Django shell can print informational lines before the count.
     $sampleCountOutput = @('9 objects imported automatically.', '9,2')
     $sampleCountText = ($sampleCountOutput | Out-String)
     $sampleCountMatch = [regex]::Match($sampleCountText, '(?m)^\s*(\d+),(\d+)\s*$')
     Assert-True $sampleCountMatch.Success 'Multiline Django count output was not parsed.'
     Assert-True ($sampleCountMatch.Value.Trim() -eq '9,2') 'Parsed Django counts are incorrect.'
 
-    # Regression: a switch passed to a child powershell.exe must be added as a
-    # standalone token. -RestoreDatabase:$bool is transformed into text by 5.1.
     $updateScript = [IO.File]::ReadAllText((Join-Path $root 'Update-PDPOne.ps1'))
     $rollbackScript = [IO.File]::ReadAllText((Join-Path $root 'Rollback-PDPOne.ps1'))
     $connectivityScript = [IO.File]::ReadAllText((Join-Path $root 'Repair-PDPOneConnectivity.ps1'))
@@ -44,9 +41,6 @@ try {
     Assert-True ($updateScript -match '\$rollbackArgs \+= "-RestoreDatabase"') 'Conditional rollback switch token is missing.'
     Assert-True ($updateScript -match 'manual-update') 'Manual diagnostic fallback identifier is missing.'
 
-    # Regression: Docker Compose writes normal lifecycle progress to stderr.
-    # Windows PowerShell 5.1 must use the native exit code instead of treating
-    # messages such as "Restarting" as a terminating NativeCommandError.
     foreach ($scriptText in @($updateScript, $rollbackScript)) {
         Assert-True ($scriptText -match 'function Invoke-PDPOneDockerCompose') 'Docker Compose native wrapper is missing.'
         Assert-True ($scriptText -match '\$ErrorActionPreference = "Continue"') 'Docker Compose stderr is not kept non-terminating.'
@@ -61,7 +55,6 @@ try {
     Assert-True ($rollbackScript -notmatch '(?m)^\s*& docker compose ') 'Raw Docker Compose calls returned to rollback.'
     Assert-True ($connectivityScript -notmatch '(?m)^\s*& docker compose ') 'Raw Docker Compose calls returned to connectivity repair.'
 
-    # Disk maintenance must never touch named volumes or use broad system prune.
     Assert-True ($maintenanceScript -match 'container", "prune", "--force"') 'Stopped-container cleanup is missing.'
     Assert-True ($maintenanceScript -match 'image", "prune", "--all", "--force"') 'Unused-image cleanup is missing.'
     Assert-True ($maintenanceScript -match 'builder", "prune", "--all", "--force"') 'Build-cache cleanup is missing.'
@@ -73,12 +66,17 @@ try {
     Assert-True ($updateScript -match 'Invoke-PDPOneDiskMaintenance\.ps1') 'Post-deployment disk maintenance is not wired into the updater.'
     Assert-True ($updateScript -match '-ProtectedBackupPath \$BackupPath') 'Current rollback backup is not protected during cleanup.'
 
-    # The verified final backup created at the gate must be reused by deploy.
     Assert-True ($agentScript -match 'state\\approved-backup\.json') 'Verified backup state is not recorded by the agent.'
     Assert-True ($agentScript -match '-VerifiedBackupPath \(\[string\]\$backupState\.backup_path\)') 'Deploy does not reuse the verified backup.'
     Assert-True ($deploymentScript -match '\[string\]\$VerifiedBackupPath = ""') 'Deployment does not accept a verified backup path.'
     Assert-True ($deploymentScript -match 'Verified backup commit does not match') 'Verified backup commit binding is missing.'
     Assert-True ($deploymentScript -match 'Remove-Item -LiteralPath \$downloadDirectory -Recurse -Force') 'Deployment staging cleanup is missing.'
+
+    Assert-True ($agentScript -match '"run_disk_maintenance"') 'Signed immediate disk-maintenance action is missing.'
+    Assert-True ($agentScript -match '-Mode", "cleanup"') 'Immediate maintenance does not invoke cleanup mode.'
+    Assert-True ($agentScript -match 'Backup retention must be between 2 and 10') 'Immediate maintenance retention validation is missing.'
+    Assert-True ($agentScript -match 'volumes_pruned = \$false') 'Immediate maintenance does not enforce volume-protection results.'
+    Assert-True ($agentScript -match 'state\\last-deployment\.json') 'Immediate maintenance does not protect the last rollback backup.'
 
     Write-Host 'Windows PowerShell 5.1 compatibility tests passed.' -ForegroundColor Green
 } finally {
