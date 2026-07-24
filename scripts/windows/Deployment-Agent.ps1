@@ -80,7 +80,17 @@ function Invoke-AgentAction($Payload) {
             $path = [string]$output[-1]
             & powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File (Join-Path $scripts "Test-PDPOneBackupRestore.ps1") -BackupPath $path | Out-Null
             if ($LASTEXITCODE -ne 0) { throw "Final backup restore verification failed." }
-            return @{ backup_id = (Split-Path $path -Leaf); restore_verified = $true; production_changed = $false }
+            $backupState = [ordered]@{
+                commit_sha = $commit
+                deployment_id = $deploymentId
+                backup_path = $path
+                backup_id = (Split-Path $path -Leaf)
+                restore_verified = $true
+                verified_at = (Get-Date).ToUniversalTime().ToString("o")
+                expires_at = (Get-Date).ToUniversalTime().AddHours(24).ToString("o")
+            }
+            $backupState | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $AgentRoot "state\approved-backup.json") -Encoding UTF8
+            return @{ backup_id = (Split-Path $path -Leaf); restore_verified = $true; production_changed = $false; reusable_for_deploy = $true }
         }
         "verify_backup_restore" {
             $path = Get-SafeBackupPath ([string]$params.backup_id)
@@ -96,10 +106,20 @@ function Invoke-AgentAction($Payload) {
             $approval = Get-Content -LiteralPath $approvalPath -Raw -Encoding UTF8 | ConvertFrom-Json
             if ([DateTimeOffset]::Parse($approval.expires_at) -le [DateTimeOffset]::UtcNow) { throw "Release approval expired." }
             if ($approval.commit_sha -ne ([string]$params.commit_sha) -or $approval.preview_id -ne $previewId) { throw "Requested deployment does not match the approved preview." }
-            $report = & powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File (Join-Path $scripts "Invoke-PDPOneDeployment.ps1") -CommitSha ([string]$params.commit_sha) -DeploymentId $deploymentId -PreviewId $previewId -AgentRoot $AgentRoot
+
+            $backupStatePath = Join-Path $AgentRoot "state\approved-backup.json"
+            if (-not (Test-Path -LiteralPath $backupStatePath)) { throw "No fresh verified final backup is recorded for this deployment." }
+            $backupState = Get-Content -LiteralPath $backupStatePath -Raw -Encoding UTF8 | ConvertFrom-Json
+            if ([DateTimeOffset]::Parse($backupState.expires_at) -le [DateTimeOffset]::UtcNow) { throw "Verified final backup authorization expired." }
+            if ([string]$backupState.commit_sha -ne ([string]$params.commit_sha)) { throw "Verified final backup commit does not match the approved deployment." }
+            if ([string]$backupState.deployment_id -ne $deploymentId) { throw "Verified final backup deployment identifier does not match." }
+            if (-not [bool]$backupState.restore_verified -or -not (Test-Path -LiteralPath ([string]$backupState.backup_path))) { throw "Verified final backup is not available." }
+
+            $report = & powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File (Join-Path $scripts "Invoke-PDPOneDeployment.ps1") -CommitSha ([string]$params.commit_sha) -DeploymentId $deploymentId -PreviewId $previewId -AgentRoot $AgentRoot -VerifiedBackupPath ([string]$backupState.backup_path)
             if ($LASTEXITCODE -ne 0) { throw "Deployment failed; see the rollback result in the deployment report." }
             Remove-Item -LiteralPath $approvalPath -Force
-            return @{ deployment_id = ([string]$params.deployment_id); commit_sha = ([string]$params.commit_sha); status = "healthy"; report = ($report | Select-Object -Last 1) }
+            Remove-Item -LiteralPath $backupStatePath -Force
+            return @{ deployment_id = ([string]$params.deployment_id); commit_sha = ([string]$params.commit_sha); status = "healthy"; report = ($report | Select-Object -Last 1); reused_verified_backup = [string]$backupState.backup_id }
         }
         "check_deployment_health" {
             $deploymentId = Assert-SafeIdentifier ([string]$params.deployment_id) "deployment_id"
