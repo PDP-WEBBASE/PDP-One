@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { CSSProperties, FormEvent, useEffect, useMemo, useState } from "react";
+import { CSSProperties, FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import ConnectorHealthBanner from "./ConnectorHealthBanner";
 import styles from "./workspace-v4.module.css";
 
@@ -285,11 +285,12 @@ export default function ProcurementWorkspaceV13() {
   const [detail, setDetail] = useState<DetailItem>(null);
   const [directModal, setDirectModal] = useState(false);
   const [updatingConnector, setUpdatingConnector] = useState("");
+  const hasLoadedOnce = useRef(false);
 
   useEffect(() => {
     let active = true;
     async function load() {
-      setMode("loading");
+      if (!hasLoadedOnce.current) setMode("loading");
       try {
         const sessionResponse = await fetch(`${API_BASE}/auth/session/`, { credentials: "include", headers: { Accept: "application/json" } });
         if (!sessionResponse.ok) throw new Error("session-unavailable");
@@ -330,10 +331,15 @@ export default function ProcurementWorkspaceV13() {
             intervalHours: Math.max(1, Math.round(currentAutomation.interval_minutes / 60)),
           }));
         }
+        hasLoadedOnce.current = true;
         setMode("live");
       } catch (error) {
         if (!active) return;
-        setMode(error instanceof Error && error.message === "unauthorized" ? "unauthorized" : "error");
+        if (!hasLoadedOnce.current) {
+          setMode(error instanceof Error && error.message === "unauthorized" ? "unauthorized" : "error");
+        } else {
+          setMessage("به‌روزرسانی پس‌زمینه موقتاً انجام نشد؛ داده‌های قبلی حفظ شدند.");
+        }
       }
     }
     load();
@@ -343,9 +349,28 @@ export default function ProcurementWorkspaceV13() {
   const activeRun = extractionRuns.find((run) => run.status === "queued" || run.status === "running");
   useEffect(() => {
     if (!activeRun) return;
-    const timer = window.setTimeout(() => setRefresh((value) => value + 1), 5000);
-    return () => window.clearTimeout(timer);
-  }, [activeRun, refresh]);
+    let cancelled = false;
+    const poll = async () => {
+      try {
+        const response = await fetch(`${PROCUREMENT_API}/extraction-runs/${activeRun.id}/`, { credentials: "include", headers: { Accept: "application/json" } });
+        if (!response.ok || !(response.headers.get("content-type") || "").includes("application/json")) return;
+        const updated = await response.json() as ApiExtractionRun;
+        if (cancelled) return;
+        setExtractionRuns((current) => current.map((run) => run.id === updated.id ? updated : run));
+        if (updated.status !== "queued" && updated.status !== "running") {
+          window.clearInterval(timer);
+          setRefresh((value) => value + 1);
+        }
+      } catch {
+        // Preserve the last successful screen while the next background poll retries.
+      }
+    };
+    const timer = window.setInterval(poll, 5000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [activeRun?.id]);
 
   const noticeViews: [WorkflowView, string][] = [["all", allLabel(tab)], ...standardViews];
   const directViews: [WorkflowView, string][] = [["all", allLabel("direct")], ...standardViews];
