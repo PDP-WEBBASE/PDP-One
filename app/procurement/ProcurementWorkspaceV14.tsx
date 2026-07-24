@@ -54,6 +54,10 @@ function guardedRequestUrl(value: string) {
   return Boolean(parsed && (parsed.pathname.startsWith("/api/v1/procurement/") || parsed.pathname === "/api/v1/auth/session/"));
 }
 
+function sessionRequest(value: string) {
+  return parsedRequestUrl(value)?.pathname === "/api/v1/auth/session/";
+}
+
 // Extraction history can be several megabytes. It must not prevent the tender
 // and inquiry workspace from opening after Windows or Rancher startup.
 function optionalStartupCollection(value: string) {
@@ -81,6 +85,29 @@ function emptyCollectionResponse() {
   });
 }
 
+async function recoverBrowserSession(nativeFetch: typeof window.fetch) {
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), 10_000);
+  try {
+    const response = await nativeFetch("/api/v1/auth/session/?pdp_reset_session=1", {
+      method: "GET",
+      credentials: "include",
+      cache: "no-store",
+      headers: {
+        Accept: "application/json",
+        "X-PDP-Reset-Session": "1",
+      },
+      signal: controller.signal,
+    });
+    if (!response.ok || response.headers.get("X-PDP-Session-Recovered") !== "1") {
+      throw new Error(`session-recovery-${response.status}`);
+    }
+    return response;
+  } finally {
+    window.clearTimeout(timeout);
+  }
+}
+
 function ensureProcurementFetchGuard() {
   if (typeof window === "undefined") return;
   const guardedWindow = window as GuardWindow;
@@ -95,7 +122,8 @@ function ensureProcurementFetchGuard() {
     if (!guardedRequestUrl(requestUrl)) return nativeFetch(input, init);
 
     const method = (init?.method || (input instanceof Request ? input.method : "GET")).toUpperCase();
-    const maxAttempts = method === "GET" ? 2 : 1;
+    const isSessionRequest = method === "GET" && sessionRequest(requestUrl);
+    const maxAttempts = isSessionRequest ? 1 : method === "GET" ? 2 : 1;
     const mayDegrade = method === "GET" && optionalStartupCollection(requestUrl);
     let lastError: unknown = null;
 
@@ -138,13 +166,20 @@ function ensureProcurementFetchGuard() {
           await wait(1_500);
           continue;
         }
+        if (isSessionRequest && retryable) {
+          try {
+            return await recoverBrowserSession(nativeFetch);
+          } catch (recoveryError) {
+            lastError = recoveryError;
+          }
+        }
         emitFetchFailure({
           url: displayRequestUrl(requestUrl),
           reason: timedOut ? "timeout" : "network",
           at: Date.now(),
         });
         if (mayDegrade && retryable) return emptyCollectionResponse();
-        throw error;
+        throw lastError;
       } finally {
         window.clearTimeout(timeout);
         originalSignal?.removeEventListener("abort", abortFromCaller);
