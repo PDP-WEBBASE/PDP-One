@@ -54,6 +54,8 @@ function guardedRequestUrl(value: string) {
   return Boolean(parsed && (parsed.pathname.startsWith("/api/v1/procurement/") || parsed.pathname === "/api/v1/auth/session/"));
 }
 
+// Extraction history can be several megabytes. It must not prevent the tender
+// and inquiry workspace from opening after Windows or Rancher startup.
 function optionalStartupCollection(value: string) {
   const parsed = parsedRequestUrl(value);
   return parsed?.pathname === "/api/v1/procurement/extraction-runs/";
