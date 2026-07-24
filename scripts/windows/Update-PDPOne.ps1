@@ -16,6 +16,41 @@ $ProgressPreference = "SilentlyContinue"
 Set-StrictMode -Version Latest
 . (Join-Path $PSScriptRoot "PDPOne.Common.ps1")
 
+function Invoke-PDPOneDockerCompose {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string[]]$Arguments,
+        [Parameter(Mandatory = $true)][string]$FailureMessage,
+        [switch]$IgnoreFailure,
+        [switch]$Quiet
+    )
+
+    $previousPreference = $ErrorActionPreference
+    $nativeOutput = @()
+    $exitCode = -1
+    try {
+        # Docker Compose writes normal progress messages such as "Restarting"
+        # to stderr. In Windows PowerShell 5.1, an agent-captured stderr stream
+        # can become NativeCommandError while the native exit code is still 0.
+        # Temporarily keep native stderr non-terminating and trust exit code.
+        $ErrorActionPreference = "Continue"
+        $nativeOutput = @(& docker compose @Arguments 2>&1)
+        $exitCode = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $previousPreference
+    }
+
+    if (-not $Quiet -and $nativeOutput.Count -gt 0) {
+        $nativeText = ConvertTo-PDPOneRedactedText (($nativeOutput | ForEach-Object { [string]$_ }) -join [Environment]::NewLine)
+        if (-not [string]::IsNullOrWhiteSpace($nativeText)) { Write-Host $nativeText }
+    }
+
+    if ($exitCode -ne 0 -and -not $IgnoreFailure) {
+        throw "$FailureMessage (docker compose exit code $exitCode)."
+    }
+    return $exitCode
+}
+
 if (-not $SourceRoot) { $SourceRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path }
 if (-not $InstalledRoot) { $InstalledRoot = Get-PDPOneProjectRoot }
 $SourceRoot = (Resolve-Path -LiteralPath $SourceRoot).Path
@@ -51,25 +86,19 @@ $migrationAttempted = $false
 $productionTouched = $false
 try {
     Set-Location $InstalledRoot
-    & docker compose --profile tunnel stop backend worker beat mcp web nginx tailscale
-    if ($LASTEXITCODE -ne 0) { throw "Application services could not be stopped cleanly." }
+    Invoke-PDPOneDockerCompose -Arguments @("--profile", "tunnel", "stop", "backend", "worker", "beat", "mcp", "web", "nginx", "tailscale") -FailureMessage "Application services could not be stopped cleanly." | Out-Null
     $productionTouched = $true
 
     & robocopy.exe $SourceRoot $InstalledRoot /E /COPY:DAT /DCOPY:DAT /R:2 /W:1 /NFL /NDL /NP /XF .env /XD .git work node_modules .next
     if ($LASTEXITCODE -gt 7) { throw "Approved application files could not be copied." }
-    & docker compose config --quiet
-    if ($LASTEXITCODE -ne 0) { throw "Updated Docker Compose configuration is invalid." }
+    Invoke-PDPOneDockerCompose -Arguments @("config", "--quiet") -FailureMessage "Updated Docker Compose configuration is invalid." | Out-Null
 
-    & docker compose build backend worker beat mcp web
-    if ($LASTEXITCODE -ne 0) { throw "Updated images could not be built." }
-    & docker compose up --detach db redis
-    if ($LASTEXITCODE -ne 0) { throw "Database dependencies could not be started." }
+    Invoke-PDPOneDockerCompose -Arguments @("build", "backend", "worker", "beat", "mcp", "web") -FailureMessage "Updated images could not be built." | Out-Null
+    Invoke-PDPOneDockerCompose -Arguments @("up", "--detach", "db", "redis") -FailureMessage "Database dependencies could not be started." | Out-Null
     $migrationAttempted = $true
-    & docker compose run --rm backend python manage.py migrate --noinput
-    if ($LASTEXITCODE -ne 0) { throw "Controlled database migration failed." }
+    Invoke-PDPOneDockerCompose -Arguments @("run", "--rm", "backend", "python", "manage.py", "migrate", "--noinput") -FailureMessage "Controlled database migration failed." | Out-Null
 
-    & docker compose --profile tunnel up --detach --no-build
-    if ($LASTEXITCODE -ne 0) { throw "Updated services failed to start." }
+    Invoke-PDPOneDockerCompose -Arguments @("--profile", "tunnel", "up", "--detach", "--no-build") -FailureMessage "Updated services failed to start." | Out-Null
     if (-not (Wait-PDPOneUrl "http://127.0.0.1:8080/healthz" 180)) { throw "Updated local health timed out." }
     $tokenAfter = Get-PDPOneTokenFingerprint (Get-PDPOneEnvValue $envPath "PDP_MCP_PATH_TOKEN")
     if ($tokenBefore -ne $tokenAfter) { throw "Update changed the MCP path token without authorization." }
