@@ -286,6 +286,7 @@ export default function ProcurementWorkspaceV13() {
   const [directModal, setDirectModal] = useState(false);
   const [updatingConnector, setUpdatingConnector] = useState("");
   const hasLoadedOnce = useRef(false);
+  const managementLoadVersion = useRef(-1);
 
   useEffect(() => {
     let active = true;
@@ -302,37 +303,39 @@ export default function ProcurementWorkspaceV13() {
           }
           return;
         }
-        const [noticeItems, directItems, dashboardResponse, sourceItems, runItems, automationItems] = await Promise.all([
-          fetchCollection<ApiNotice>(`${PROCUREMENT_API}/notices/?ordering=-last_seen_at`),
-          fetchCollection<ApiDirectOpportunity>(`${PROCUREMENT_API}/direct-opportunities/?ordering=-last_activity_at`),
+
+        // Critical path: authenticate, load dashboard totals and only the first
+        // page of operational records. This lets the workspace become usable
+        // without waiting for every historical page or management-only dataset.
+        const [noticeItems, directItems, dashboardResponse] = await Promise.all([
+          fetchCollection<ApiNotice>(`${PROCUREMENT_API}/notices/?ordering=-last_seen_at`, 1),
+          fetchCollection<ApiDirectOpportunity>(`${PROCUREMENT_API}/direct-opportunities/?ordering=-last_activity_at`, 1),
           fetch(`${PROCUREMENT_API}/dashboard/`, { credentials: "include", headers: { Accept: "application/json" } }),
-          fetchCollection<ApiSource>(`${PROCUREMENT_API}/sources/`),
-          fetchCollection<ApiExtractionRun>(`${PROCUREMENT_API}/extraction-runs/?ordering=-created_at`),
-          fetchCollection<ApiAutomationSettings>(`${PROCUREMENT_API}/automation-settings/`),
         ]);
         if (dashboardResponse.status === 401 || dashboardResponse.status === 403) throw new Error("unauthorized");
         if (!dashboardResponse.ok) throw new Error(`dashboard-${dashboardResponse.status}`);
         const dashboardPayload = await dashboardResponse.json() as DashboardPayload;
         if (!active) return;
-        const currentAutomation = automationItems[0] || null;
+
         setUsername(session.username || "");
         setNotices(noticeItems);
         setDirectReferrals(directItems);
         setDashboard(dashboardPayload);
-        setSources(sourceItems);
-        setExtractionRuns(runItems);
-        setAutomation(currentAutomation);
-        if (currentAutomation) {
-          setSchedule((current) => ({
-            ...current,
-            enabled: currentAutomation.enabled,
-            cadence: currentAutomation.cadence,
-            dailyTime: currentAutomation.daily_time?.slice(0,5) || "07:30",
-            intervalHours: Math.max(1, Math.round(currentAutomation.interval_minutes / 60)),
-          }));
-        }
         hasLoadedOnce.current = true;
         setMode("live");
+
+        // Complete the operational collections in the background. A slow later
+        // page must never cover or remove the already usable workspace.
+        void Promise.all([
+          fetchCollection<ApiNotice>(`${PROCUREMENT_API}/notices/?ordering=-last_seen_at`),
+          fetchCollection<ApiDirectOpportunity>(`${PROCUREMENT_API}/direct-opportunities/?ordering=-last_activity_at`),
+        ]).then(([allNotices, allDirectItems]) => {
+          if (!active) return;
+          setNotices(allNotices);
+          setDirectReferrals(allDirectItems);
+        }).catch(() => {
+          if (active) setMessage("ادامه اطلاعات در پس‌زمینه موقتاً کامل نشد؛ اطلاعات اولیه قابل استفاده است.");
+        });
       } catch (error) {
         if (!active) return;
         if (!hasLoadedOnce.current) {
@@ -345,6 +348,46 @@ export default function ProcurementWorkspaceV13() {
     load();
     return () => { active = false; };
   }, [refresh]);
+
+  // Sources, extraction history and automation settings are management-only
+  // data. Fetch them lazily when that tab is opened instead of delaying every
+  // visit to the dashboard, tenders or inquiries.
+  useEffect(() => {
+    if (tab !== "management" || mode !== "live" || managementLoadVersion.current === refresh) return;
+    managementLoadVersion.current = refresh;
+    let active = true;
+
+    async function loadManagementData() {
+      try {
+        const [sourceItems, runItems, automationItems] = await Promise.all([
+          fetchCollection<ApiSource>(`${PROCUREMENT_API}/sources/`),
+          fetchCollection<ApiExtractionRun>(`${PROCUREMENT_API}/extraction-runs/?ordering=-created_at`),
+          fetchCollection<ApiAutomationSettings>(`${PROCUREMENT_API}/automation-settings/`),
+        ]);
+        if (!active) return;
+        const currentAutomation = automationItems[0] || null;
+        setSources(sourceItems);
+        setExtractionRuns(runItems);
+        setAutomation(currentAutomation);
+        if (currentAutomation) {
+          setSchedule((current) => ({
+            ...current,
+            enabled: currentAutomation.enabled,
+            cadence: currentAutomation.cadence,
+            dailyTime: currentAutomation.daily_time?.slice(0,5) || "07:30",
+            intervalHours: Math.max(1, Math.round(currentAutomation.interval_minutes / 60)),
+          }));
+        }
+      } catch {
+        if (!active) return;
+        managementLoadVersion.current = -1;
+        setMessage("اطلاعات مدیریت زیرسامانه موقتاً بارگذاری نشد؛ سایر بخش‌ها فعال‌اند.");
+      }
+    }
+
+    loadManagementData();
+    return () => { active = false; };
+  }, [tab, mode, refresh]);
 
   const activeRun = extractionRuns.find((run) => run.status === "queued" || run.status === "running");
   useEffect(() => {

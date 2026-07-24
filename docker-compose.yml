@@ -81,11 +81,11 @@ services:
       dockerfile: infra/docker/web.Dockerfile
       args:
         PDP_DOCKER_REGISTRY: ${PDP_DOCKER_REGISTRY:-docker.arvancloud.ir/library}
-        PDP_BUILD_ID: ${PDP_BUILD_ID:-procurement-session-poll-v24-20260724}
+        PDP_BUILD_ID: ${PDP_BUILD_ID:-procurement-fast-initial-v25-20260725}
     restart: unless-stopped
     environment:
       NEXT_PUBLIC_API_URL: /api/v1
-      PDP_BUILD_ID: ${PDP_BUILD_ID:-procurement-session-poll-v24-20260724}
+      PDP_BUILD_ID: ${PDP_BUILD_ID:-procurement-fast-initial-v25-20260725}
     healthcheck:
       test:
         - CMD-SHELL
