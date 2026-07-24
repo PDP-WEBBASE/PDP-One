@@ -1,6 +1,7 @@
 "use client";
 
-import { ChangeEvent, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import type { ChangeEvent } from "react";
 import styles from "./analysis-context-manager.module.css";
 
 type Section = "prompts" | "keywords" | "company" | "versions";
@@ -179,7 +180,7 @@ export default function AnalysisContextManager({
     [snapshots, selectedId, draft, active],
   );
 
-  async function load(preferredId = "") {
+  const load = useCallback(async (preferredId = "") => {
     setLoading(true);
     setError("");
     try {
@@ -203,21 +204,21 @@ export default function AnalysisContextManager({
     } finally {
       setLoading(false);
     }
-  }
-
-  useEffect(() => {
-    void load();
   }, []);
 
   useEffect(() => {
-    if (!selected) return;
-    setForm(formFromSnapshot(selected));
-    setEditing(false);
-  }, [selected?.id]);
+    void load();
+  }, [load]);
 
   function notify(text: string) {
     setMessage(text);
     window.setTimeout(() => setMessage(""), 5000);
+  }
+
+  function selectSnapshot(snapshot: ContextSnapshot) {
+    setSelectedId(snapshot.id);
+    setForm(formFromSnapshot(snapshot));
+    setEditing(false);
   }
 
   async function createDraft() {
@@ -437,7 +438,7 @@ export default function AnalysisContextManager({
 
         {!loading && section === "versions" && <div className={styles.versionArea}>
           <div className={styles.versionCards}>
-            {snapshots.map((snapshot) => <button key={snapshot.id} className={`${styles.versionCard} ${selected?.id === snapshot.id ? styles.selectedVersion : ""}`} onClick={() => setSelectedId(snapshot.id)}>
+            {snapshots.map((snapshot) => <button key={snapshot.id} className={`${styles.versionCard} ${selected?.id === snapshot.id ? styles.selectedVersion : ""}`} onClick={() => selectSnapshot(snapshot)}>
               <span><b>نسخه {fa.format(snapshot.version)}</b><small>{snapshot.status_label}</small></span>
               <span><small>ثبت: {formatDate(snapshot.created_at)}</small><small>فعال‌سازی: {formatDate(snapshot.activated_at)}</small></span>
               <span><small>تغییرات: {snapshot.changed_components.length ? snapshot.changed_components.join("، ") : "بدون تغییر ثبت‌شده"}</small></span>
