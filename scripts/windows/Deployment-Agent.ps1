@@ -64,8 +64,6 @@ function Invoke-AgentAction($Payload) {
             $commit = [string]$params.commit_sha
             $previewId = Assert-SafeIdentifier ([string]$params.preview_id) "preview_id"
             if ($commit -notmatch '^[0-9a-f]{40}$') { throw "Approval commit is invalid." }
-            # Keep the script source ASCII-safe for Windows PowerShell 5.1.
-            # The helper constructs the approved Persian phrases from Unicode code points.
             if (-not (Test-PDPOneExplicitDeploymentApproval ([string]$params.approval_text))) { throw "Explicit approval phrase is invalid." }
             $approval = [ordered]@{ commit_sha = $commit; preview_id = $previewId; approved_at = (Get-Date).ToUniversalTime().ToString("o"); expires_at = (Get-Date).ToUniversalTime().AddHours(24).ToString("o") }
             $approval | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $AgentRoot "state\approved-release.json") -Encoding UTF8
@@ -126,6 +124,43 @@ function Invoke-AgentAction($Payload) {
             & powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File (Join-Path $scripts "Test-PDPOne.ps1") -SkipChatGPTToolCheck | Out-Null
             if ($LASTEXITCODE -ne 0) { throw "Layered deployment health failed." }
             return @{ deployment_id = $deploymentId; health = "healthy"; chatgpt_tool_check = "reported-through-connected-app" }
+        }
+        "run_disk_maintenance" {
+            $keep = [int]$params.keep_local_final_backups
+            if ($keep -lt 2 -or $keep -gt 10) { throw "Backup retention must be between 2 and 10." }
+            $protectedBackup = ""
+            $statePath = Join-Path $AgentRoot "state\last-deployment.json"
+            if (Test-Path -LiteralPath $statePath) {
+                $deploymentState = Get-Content -LiteralPath $statePath -Raw -Encoding UTF8 | ConvertFrom-Json
+                if ($null -ne $deploymentState.PSObject.Properties["backup_path"] -and (Test-Path -LiteralPath ([string]$deploymentState.backup_path))) {
+                    $protectedBackup = [string]$deploymentState.backup_path
+                }
+            }
+            $maintenanceArgs = @(
+                "-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
+                (Join-Path $scripts "Invoke-PDPOneDiskMaintenance.ps1"),
+                "-Mode", "cleanup",
+                "-KeepLocalFinalBackups", ([string]$keep)
+            )
+            if ($protectedBackup) { $maintenanceArgs += @("-ProtectedBackupPath", $protectedBackup) }
+            $output = @(& powershell.exe @maintenanceArgs)
+            if ($LASTEXITCODE -ne 0) { throw "Signed disk maintenance failed." }
+            $maintenanceReport = [string]$output[-1]
+            if (-not (Test-Path -LiteralPath $maintenanceReport)) { throw "Disk maintenance report was not created." }
+            $result = Get-Content -LiteralPath $maintenanceReport -Raw -Encoding UTF8 | ConvertFrom-Json
+            if ([bool]$result.volumes_pruned -or [bool]$result.database_volume_touched -or [bool]$result.private_files_volume_touched -or [bool]$result.tailscale_volume_touched) {
+                throw "Disk maintenance protection markers are invalid."
+            }
+            return @{
+                report = $maintenanceReport
+                c_free_bytes_before = [int64]$result.c_free_bytes_before
+                c_free_bytes_after = [int64]$result.c_free_bytes_after
+                c_free_bytes_delta = [int64]$result.c_free_bytes_delta
+                removed_verified_final_backups = @($result.removed_verified_final_backups)
+                externally_archived_backups = @($result.externally_archived_backups)
+                removed_agent_download_directories = @($result.removed_agent_download_directories)
+                volumes_pruned = $false
+            }
         }
         "rollback_deployment" {
             $deploymentId = Assert-SafeIdentifier ([string]$params.deployment_id) "deployment_id"
