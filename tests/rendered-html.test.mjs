@@ -45,11 +45,14 @@ test("renders development preview metadata", async () => {
   assert.match(await response.text(), developmentPreviewMeta);
 });
 
-test("routes procurement to the live V13 workspace", async () => {
+test("routes procurement to V14 while preserving the live V13 workspace", async () => {
   const pageSource = await readFile(new URL("../app/procurement/page.tsx", import.meta.url), "utf8");
+  const wrapperSource = await readFile(new URL("../app/procurement/ProcurementWorkspaceV14.tsx", import.meta.url), "utf8");
   const workspaceSource = await readFile(new URL("../app/procurement/ProcurementWorkspaceV13.tsx", import.meta.url), "utf8");
 
-  assert.match(pageSource, /ProcurementWorkspaceV13/);
+  assert.match(pageSource, /ProcurementWorkspaceV14/);
+  assert.match(wrapperSource, /ProcurementWorkspaceV13/);
+  assert.match(wrapperSource, /AnalysisContextManager/);
   assert.match(workspaceSource, /متصل به API و پایگاه‌داده واقعی سامانه/);
   assert.doesNotMatch(workspaceSource, /Preview تعاملی/);
   assert.doesNotMatch(workspaceSource, /const notices\s*:/);
@@ -102,4 +105,20 @@ test("does not silently replace API failures with sample procurement data", asyn
   assert.match(source, /هیچ داده نمونه‌ای جایگزین نشده است/);
   assert.match(source, /رکورد واقعی مطابق این فیلتر وجود ندارد/);
   assert.match(source, /هنوز استخراج واقعی ثبت نشده است/);
+});
+
+test("analysis settings are persisted through versioned live APIs", async () => {
+  const manager = await readFile(new URL("../app/procurement/AnalysisContextManager.tsx", import.meta.url), "utf8");
+  const wrapper = await readFile(new URL("../app/procurement/ProcurementWorkspaceV14.tsx", import.meta.url), "utf8");
+
+  assert.match(manager, /analysis-contexts\/create-draft/);
+  assert.match(manager, /analysis-context-files/);
+  assert.match(manager, /\/activate\//);
+  assert.match(manager, /method:\s*"PATCH"/);
+  assert.match(manager, /method:\s*"DELETE"/);
+  assert.match(manager, /ذخیره و قفل/);
+  assert.match(manager, /فعال‌سازی نسخه/);
+  assert.match(manager, /کلیدواژه‌های فعال/);
+  assert.match(manager, /پروفایل خلاصه شرکت/);
+  assert.match(wrapper, /تنظیمات تحلیل واقعی/);
 });
