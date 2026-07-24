@@ -11,10 +11,45 @@ param(
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 . (Join-Path $PSScriptRoot "PDPOne.Common.ps1")
+
+function Invoke-PDPOneDockerCompose {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string[]]$Arguments,
+        [Parameter(Mandatory = $true)][string]$FailureMessage,
+        [switch]$IgnoreFailure,
+        [switch]$Quiet
+    )
+
+    $previousPreference = $ErrorActionPreference
+    $nativeOutput = @()
+    $exitCode = -1
+    try {
+        # Docker Compose emits normal lifecycle progress on stderr. Keep that
+        # stream non-terminating under Windows PowerShell 5.1 and rely on the
+        # native process exit code instead of NativeCommandError records.
+        $ErrorActionPreference = "Continue"
+        $nativeOutput = @(& docker compose @Arguments 2>&1)
+        $exitCode = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $previousPreference
+    }
+
+    if (-not $Quiet -and $nativeOutput.Count -gt 0) {
+        $nativeText = ConvertTo-PDPOneRedactedText (($nativeOutput | ForEach-Object { [string]$_ }) -join [Environment]::NewLine)
+        if (-not [string]::IsNullOrWhiteSpace($nativeText)) { Write-Host $nativeText }
+    }
+
+    if ($exitCode -ne 0 -and -not $IgnoreFailure) {
+        throw "$FailureMessage (docker compose exit code $exitCode)."
+    }
+    return $exitCode
+}
+
 if (-not $Automatic) { throw "Rollback must be invoked by the authorized deployment workflow." }
 $ProjectRoot = Get-PDPOneProjectRoot
 Set-Location $ProjectRoot
-& docker compose --profile tunnel stop backend worker beat mcp web nginx tailscale *> $null
+Invoke-PDPOneDockerCompose -Arguments @("--profile", "tunnel", "stop", "backend", "worker", "beat", "mcp", "web", "nginx", "tailscale") -FailureMessage "Rollback service stop failed." -IgnoreFailure -Quiet | Out-Null
 $temporary = Join-Path $env:TEMP ("pdp-one-code-rollback-" + [Guid]::NewGuid().ToString("N"))
 try {
     Expand-Archive -LiteralPath $CodeArchive -DestinationPath $temporary -Force
@@ -23,10 +58,10 @@ try {
 } finally { Remove-Item -LiteralPath $temporary -Recurse -Force -ErrorAction SilentlyContinue }
 if ($RestoreDatabase) {
     & powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "Restore-PDPOneBackup.ps1") -BackupPath $BackupPath -AutomaticRollback -RestoreSettings -RestoreDatabase -RestorePrivateFiles -RestoreRedisData -RestoreTailscaleState
+    if ($LASTEXITCODE -ne 0) { throw "Rollback backup restore failed." }
 } else {
-    & docker compose --profile tunnel up --detach --no-build
+    Invoke-PDPOneDockerCompose -Arguments @("--profile", "tunnel", "up", "--detach", "--no-build") -FailureMessage "Rollback service startup failed." | Out-Null
 }
-if ($LASTEXITCODE -ne 0) { throw "Rollback service startup failed." }
 & powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "Test-PDPOne.ps1") -SkipChatGPTToolCheck
 if ($LASTEXITCODE -ne 0) { throw "Rollback completed but health verification failed." }
 Write-Host "Automatic rollback completed and the previous version is healthy." -ForegroundColor Green
