@@ -15,7 +15,9 @@ mcp = FastMCP(
         "Use read tools before write tools. Create contracts, receivables, payment receipts, and analyses only as drafts. "
         "Never claim a draft is approved or financially final. Use returned record IDs in follow-up calls. "
         "For procurement analysis, start one guarded PDP request, read its work package, save one structured AI draft per notice, "
-        "then finish the same request. Human review is always required."
+        "then finish the same request. Human review is always required. "
+        "Disk maintenance is an explicit signed action that may remove only unused Docker cache, unused images, stopped containers, "
+        "old verified backups beyond retention, and stale deployment staging. It never prunes Docker volumes."
     ),
     host="0.0.0.0",
     port=8010,
@@ -96,8 +98,24 @@ async def get_financial_summary() -> dict:
     description="Use this when the user explicitly asks to register a new contract in PDP One. This always creates a draft for human review.",
     annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, openWorldHint=False, idempotentHint=False),
 )
-async def create_contract_draft(code: str, title: str, employer: str, field: str = "", value_rials: int | None = None, due_date: str | None = None) -> dict:
-    payload = {"code": code, "title": title, "employer": employer, "field": field, "value_rials": value_rials, "due_date": due_date, "progress": 0, "status": "draft"}
+async def create_contract_draft(
+    code: str,
+    title: str,
+    employer: str,
+    field: str = "",
+    value_rials: int | None = None,
+    due_date: str | None = None,
+) -> dict:
+    payload = {
+        "code": code,
+        "title": title,
+        "employer": employer,
+        "field": field,
+        "value_rials": value_rials,
+        "due_date": due_date,
+        "progress": 0,
+        "status": "draft",
+    }
     return {"draft": await api("POST", "contracts/", json=payload), "requires_human_review": True}
 
 
@@ -105,7 +123,15 @@ async def create_contract_draft(code: str, title: str, employer: str, field: str
     description="Use this when the user explicitly asks to register a receivable or statement in PDP One. It always creates a finance draft for human review.",
     annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, openWorldHint=False, idempotentHint=False),
 )
-async def create_receivable_draft(contract_code: str, contract_title: str, employer: str, statement_title: str, amount_rials: int, due_date: str, received_rials: int = 0) -> dict:
+async def create_receivable_draft(
+    contract_code: str,
+    contract_title: str,
+    employer: str,
+    statement_title: str,
+    amount_rials: int,
+    due_date: str,
+    received_rials: int = 0,
+) -> dict:
     payload = {
         "contract_code": contract_code,
         "contract_title": contract_title,
@@ -122,7 +148,13 @@ async def create_receivable_draft(contract_code: str, contract_title: str, emplo
     description="Use this when the user explicitly asks to register money received against an existing receivable. It always creates a payment receipt draft and does not finalize accounting.",
     annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, openWorldHint=False, idempotentHint=False),
 )
-async def create_payment_receipt_draft(receivable_id: str, amount_rials: int, received_date: str, tracking_code: str = "", note: str = "") -> dict:
+async def create_payment_receipt_draft(
+    receivable_id: str,
+    amount_rials: int,
+    received_date: str,
+    tracking_code: str = "",
+    note: str = "",
+) -> dict:
     payload = {
         "receivable": receivable_id,
         "amount_rials": amount_rials,
@@ -192,10 +224,7 @@ async def save_procurement_notice_analysis(
         "matched_experience": matched_experience or [],
         "risk_notes": risk_notes or [],
         "confidence": max(0.0, min(float(confidence), 100.0)),
-        "raw_output": {
-            "engine": "ChatGPT connected app",
-            "decision_is_draft": True,
-        },
+        "raw_output": {"engine": "ChatGPT connected app", "decision_is_draft": True},
     }
     draft = await api("POST", "procurement/analysis-drafts/", json=payload)
     return {"draft": draft, "requires_human_review": True}
@@ -205,7 +234,11 @@ async def save_procurement_notice_analysis(
     description="Finish one PDP procurement-analysis request after its notice drafts have been saved. Unresolved notice IDs are marked failed; nothing is published automatically.",
     annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, openWorldHint=False, idempotentHint=False),
 )
-async def finish_procurement_analysis(request_id: str, failed_notice_ids: list[str] | None = None, summary_note: str = "") -> dict:
+async def finish_procurement_analysis(
+    request_id: str,
+    failed_notice_ids: list[str] | None = None,
+    summary_note: str = "",
+) -> dict:
     payload = {
         "failed_notice_ids": failed_notice_ids or [],
         "summary": {"note": summary_note[:1000], "engine": "ChatGPT connected app"},
@@ -229,7 +262,13 @@ async def get_recent_procurement_analysis_drafts(review_status: str = "ai_draft"
     annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, openWorldHint=False, idempotentHint=False),
 )
 async def save_analysis_draft(title: str, summary: str, source_record_ids: list[str]) -> dict:
-    payload = {"title": title, "summary": summary, "source_record_ids": source_record_ids, "model_label": "ChatGPT", "review_status": "ai_draft"}
+    payload = {
+        "title": title,
+        "summary": summary,
+        "source_record_ids": source_record_ids,
+        "model_label": "ChatGPT",
+        "review_status": "ai_draft",
+    }
     return {"report": await api("POST", "analysis-reports/", json=payload), "requires_human_review": True}
 
 
@@ -242,13 +281,34 @@ async def get_deployment_status() -> dict:
 
 
 @mcp.tool(
+    description="Run signed PDP One disk maintenance after an explicit user request. It removes only unused Docker build cache, unused images, stopped containers, old verified backups beyond retention, and stale deployment staging. It never prunes Docker volumes.",
+    annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True, openWorldHint=False, idempotentHint=False),
+)
+async def run_disk_maintenance(keep_local_final_backups: int = 2) -> dict:
+    keep = int(keep_local_final_backups)
+    if keep < 2 or keep > 10:
+        raise ValueError("keep_local_final_backups must be between 2 and 10.")
+    return enqueue("run_disk_maintenance", {"keep_local_final_backups": keep})
+
+
+@mcp.tool(
     description="Return the mandatory guarded workflow for a proposed web change. Source changes still occur only on a separate GitHub branch.",
     annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, openWorldHint=False, idempotentHint=True),
 )
 async def prepare_web_change(summary: str) -> dict:
     return {
         "summary": summary,
-        "workflow": ["branch", "tests", "security review", "preview", "explicit approval", "final verified backup", "deploy", "health", "rollback on failure"],
+        "workflow": [
+            "branch",
+            "tests",
+            "security review",
+            "preview",
+            "explicit approval",
+            "final verified backup",
+            "deploy",
+            "health",
+            "rollback on failure",
+        ],
         "production_changed": False,
         "requires_github_branch": True,
     }
@@ -260,7 +320,12 @@ async def prepare_web_change(summary: str) -> dict:
 )
 async def create_preview(commit_sha: str) -> dict:
     commit = validate_commit(commit_sha)
-    return {"commit_sha": commit, "production_changed": False, "gate": "stop-for-explicit-user-approval", "preview_created_by": "GitHub/Sites workflow"}
+    return {
+        "commit_sha": commit,
+        "production_changed": False,
+        "gate": "stop-for-explicit-user-approval",
+        "preview_created_by": "GitHub/Sites workflow",
+    }
 
 
 @mcp.tool(
@@ -271,7 +336,14 @@ async def request_deployment_approval(commit_sha: str, preview_id: str, approval
     commit = validate_commit(commit_sha)
     if approval_text.strip() not in {"تأیید است، Deploy کن", "تایید است، Deploy کن", "APPROVE DEPLOY"}:
         raise ValueError("The exact explicit deployment approval phrase was not supplied.")
-    return enqueue("approve_release", {"commit_sha": commit, "preview_id": validate_identifier(preview_id, "preview_id"), "approval_text": approval_text.strip()})
+    return enqueue(
+        "approve_release",
+        {
+            "commit_sha": commit,
+            "preview_id": validate_identifier(preview_id, "preview_id"),
+            "approval_text": approval_text.strip(),
+        },
+    )
 
 
 @mcp.tool(
@@ -279,7 +351,13 @@ async def request_deployment_approval(commit_sha: str, preview_id: str, approval
     annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, openWorldHint=False, idempotentHint=False),
 )
 async def create_final_backup(commit_sha: str, deployment_id: str) -> dict:
-    return enqueue("create_final_backup", {"commit_sha": validate_commit(commit_sha), "deployment_id": validate_identifier(deployment_id, "deployment_id")})
+    return enqueue(
+        "create_final_backup",
+        {
+            "commit_sha": validate_commit(commit_sha),
+            "deployment_id": validate_identifier(deployment_id, "deployment_id"),
+        },
+    )
 
 
 @mcp.tool(
@@ -295,7 +373,14 @@ async def verify_backup_restore(backup_id: str) -> dict:
     annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True, openWorldHint=False, idempotentHint=False),
 )
 async def deploy_approved_release(commit_sha: str, deployment_id: str, preview_id: str) -> dict:
-    return enqueue("deploy_approved_release", {"commit_sha": validate_commit(commit_sha), "deployment_id": validate_identifier(deployment_id, "deployment_id"), "preview_id": validate_identifier(preview_id, "preview_id")})
+    return enqueue(
+        "deploy_approved_release",
+        {
+            "commit_sha": validate_commit(commit_sha),
+            "deployment_id": validate_identifier(deployment_id, "deployment_id"),
+            "preview_id": validate_identifier(preview_id, "preview_id"),
+        },
+    )
 
 
 @mcp.tool(
@@ -314,7 +399,13 @@ async def check_deployment_health(deployment_id: str = "") -> dict:
 async def rollback_deployment(deployment_id: str, reason: str) -> dict:
     if not 1 <= len(reason.strip()) <= 500:
         raise ValueError("reason must be between 1 and 500 characters.")
-    return enqueue("rollback_deployment", {"deployment_id": validate_identifier(deployment_id, "deployment_id"), "reason": reason.strip()})
+    return enqueue(
+        "rollback_deployment",
+        {
+            "deployment_id": validate_identifier(deployment_id, "deployment_id"),
+            "reason": reason.strip(),
+        },
+    )
 
 
 @mcp.tool(
