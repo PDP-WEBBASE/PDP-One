@@ -3,6 +3,14 @@ server {
     server_name _;
     client_max_body_size 50m;
 
+    # Docker service IPs can change when a release recreates backend, web or MCP.
+    # Resolve service names through Docker DNS at request time instead of keeping
+    # the address that existed when nginx first started.
+    resolver 127.0.0.11 valid=5s ipv6=off;
+    set $pdp_backend_upstream backend:8000;
+    set $pdp_mcp_upstream mcp:8010;
+    set $pdp_web_upstream web:3000;
+
     location = /healthz {
         access_log off;
         add_header Content-Type text/plain;
@@ -10,7 +18,11 @@ server {
     }
 
     location /api/ {
-        proxy_pass http://backend:8000;
+        proxy_pass http://$pdp_backend_upstream;
+        proxy_http_version 1.1;
+        proxy_connect_timeout 5s;
+        proxy_send_timeout 30s;
+        proxy_read_timeout 30s;
         proxy_set_header Host $host;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $http_x_forwarded_proto;
@@ -19,9 +31,10 @@ server {
     # Trial-only capability URL. The random path is generated locally and is
     # never committed. Closing the temporary tunnel revokes external access.
     location = /mcp/${PDP_MCP_PATH_TOKEN} {
-        proxy_pass http://mcp:8010/mcp;
+        proxy_pass http://$pdp_mcp_upstream/mcp;
         proxy_http_version 1.1;
         proxy_buffering off;
+        proxy_connect_timeout 5s;
         proxy_read_timeout 300s;
         proxy_set_header Host $host;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
@@ -32,9 +45,37 @@ server {
         return 404;
     }
 
-    location / {
-        proxy_pass http://web:3000;
+    location = /pdp-build.json {
+        proxy_pass http://$pdp_web_upstream;
         proxy_http_version 1.1;
+        proxy_hide_header Cache-Control;
+        add_header Cache-Control "no-store, no-cache, must-revalidate, max-age=0" always;
+        add_header Pragma "no-cache" always;
+        add_header Expires "0" always;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    }
+
+    # Vite emits content-hashed assets. These are safe to cache indefinitely.
+    location /assets/ {
+        proxy_pass http://$pdp_web_upstream;
+        proxy_http_version 1.1;
+        proxy_hide_header Cache-Control;
+        add_header Cache-Control "public, max-age=31536000, immutable" always;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    }
+
+    # HTML and route responses must never remain cached across a deployment.
+    location / {
+        proxy_pass http://$pdp_web_upstream;
+        proxy_http_version 1.1;
+        proxy_connect_timeout 5s;
+        proxy_read_timeout 60s;
+        proxy_hide_header Cache-Control;
+        add_header Cache-Control "no-store, no-cache, must-revalidate, max-age=0" always;
+        add_header Pragma "no-cache" always;
+        add_header Expires "0" always;
         proxy_set_header Host $host;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
     }
