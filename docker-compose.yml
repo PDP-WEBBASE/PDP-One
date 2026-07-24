@@ -24,6 +24,7 @@ services:
       - redis_data:/data
 
   backend:
+    image: pdp-one-backend:local
     build:
       context: ./backend
       args:
@@ -42,10 +43,7 @@ services:
         condition: service_started
 
   worker:
-    build:
-      context: ./backend
-      args:
-        PDP_DOCKER_REGISTRY: ${PDP_DOCKER_REGISTRY:-docker.arvancloud.ir/library}
+    image: pdp-one-backend:local
     restart: unless-stopped
     env_file: .env
     command: celery -A config worker -l INFO
@@ -54,10 +52,7 @@ services:
     depends_on: [backend, redis]
 
   beat:
-    build:
-      context: ./backend
-      args:
-        PDP_DOCKER_REGISTRY: ${PDP_DOCKER_REGISTRY:-docker.arvancloud.ir/library}
+    image: pdp-one-backend:local
     restart: unless-stopped
     env_file: .env
     command: celery -A config beat -l INFO --scheduler django_celery_beat.schedulers:DatabaseScheduler
