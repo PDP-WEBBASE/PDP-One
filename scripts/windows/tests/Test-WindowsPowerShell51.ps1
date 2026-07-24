@@ -2,6 +2,7 @@
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 $root = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
+$repositoryRoot = (Resolve-Path (Join-Path $root '..\..')).Path
 . (Join-Path $root 'PDPOne.Common.ps1')
 
 function Assert-True([bool]$Condition, [string]$Message) {
@@ -37,6 +38,8 @@ try {
     $maintenanceScript = [IO.File]::ReadAllText((Join-Path $root 'Invoke-PDPOneDiskMaintenance.ps1'))
     $agentScript = [IO.File]::ReadAllText((Join-Path $root 'Deployment-Agent.ps1'))
     $deploymentScript = [IO.File]::ReadAllText((Join-Path $root 'Invoke-PDPOneDeployment.ps1'))
+    $composeText = [IO.File]::ReadAllText((Join-Path $repositoryRoot 'docker-compose.yml'))
+
     Assert-True ($updateScript -notmatch '-RestoreDatabase:\$migrationAttempted') 'Unsafe Boolean switch forwarding returned.'
     Assert-True ($updateScript -match '\$rollbackArgs \+= "-RestoreDatabase"') 'Conditional rollback switch token is missing.'
     Assert-True ($updateScript -match 'manual-update') 'Manual diagnostic fallback identifier is missing.'
@@ -54,6 +57,20 @@ try {
     Assert-True ($updateScript -notmatch '(?m)^\s*& docker compose ') 'Raw Docker Compose calls returned to the updater.'
     Assert-True ($rollbackScript -notmatch '(?m)^\s*& docker compose ') 'Raw Docker Compose calls returned to rollback.'
     Assert-True ($connectivityScript -notmatch '(?m)^\s*& docker compose ') 'Raw Docker Compose calls returned to connectivity repair.'
+
+    # Deployment builds must be isolated, sequential and completed before any
+    # production service is stopped or source file is copied into place.
+    Assert-True ($updateScript -match 'COMPOSE_PARALLEL_LIMIT = "1"') 'Sequential Compose build limit is missing.'
+    Assert-True ($updateScript -match 'foreach \(\$service in @\("backend", "mcp", "web"\)\)') 'Expected sequential release build set is missing.'
+    Assert-True ($updateScript -notmatch '@\("build", "backend", "worker", "beat", "mcp", "web"\)') 'Parallel duplicate backend build returned.'
+    Assert-True ($updateScript -match 'candidate-\$releaseSuffix') 'Commit-scoped candidate image tags are missing.'
+    Assert-True ($updateScript -match 'Candidate \$service image could not be activated') 'Candidate activation gate is missing.'
+    Assert-True ($updateScript.IndexOf('Invoke-PDPOneSequentialBuild -Service $service') -lt $updateScript.IndexOf('"stop", "backend", "worker", "beat"')) 'Production is stopped before candidate builds finish.'
+    Assert-True ($updateScript.IndexOf('"stop", "backend", "worker", "beat"') -lt $updateScript.IndexOf('Candidate $service image could not be activated')) 'Candidate image tags are activated before production is stopped.'
+    Assert-True ($composeText -match 'image: \$\{PDP_BACKEND_IMAGE:-pdp-one-backend:local\}') 'Shared backend image variable is missing.'
+    Assert-True (([regex]::Matches($composeText, 'image: \$\{PDP_BACKEND_IMAGE:-pdp-one-backend:local\}')).Count -eq 3) 'Backend, worker and beat do not share exactly one backend image.'
+    Assert-True ($composeText -match 'image: \$\{PDP_MCP_IMAGE:-pdp-one-mcp:local\}') 'MCP candidate image variable is missing.'
+    Assert-True ($composeText -match 'image: \$\{PDP_WEB_IMAGE:-pdp-one-web:local\}') 'Web candidate image variable is missing.'
 
     Assert-True ($maintenanceScript -match 'container", "prune", "--force"') 'Stopped-container cleanup is missing.'
     Assert-True ($maintenanceScript -match 'image", "prune", "--all", "--force"') 'Unused-image cleanup is missing.'
