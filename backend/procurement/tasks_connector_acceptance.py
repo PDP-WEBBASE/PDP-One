@@ -542,6 +542,8 @@ def dispatch_connector_acceptance():
     request_payload = _read_json(REQUEST_PATH)
     if not request_payload or not request_payload.get("enabled"):
         return {"dispatched": False, "reason": "no_enabled_request"}
+    if int(request_payload.get("acceptance_version", 1)) != 1:
+        return {"dispatched": False, "reason": "not_a_v1_request"}
     acceptance_id = str(request_payload.get("acceptance_id", "")).strip()
     if not acceptance_id:
         return {"dispatched": False, "reason": "missing_acceptance_id"}

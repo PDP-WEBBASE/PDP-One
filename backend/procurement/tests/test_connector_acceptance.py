@@ -3,6 +3,8 @@ from datetime import timedelta
 from pathlib import Path
 from unittest.mock import patch
 
+from unittest.mock import MagicMock
+
 from django.test import TestCase
 from django.utils import timezone
 
@@ -56,6 +58,24 @@ class ConnectorAcceptanceTests(TestCase):
         run.refresh_from_db()
         self.assertEqual(run.status, ExtractionRun.Status.RUNNING)
         self.assertEqual(closed, [])
+
+    def test_v1_dispatcher_rejects_v2_request(self):
+        from procurement.tasks_connector_acceptance import dispatch_connector_acceptance
+
+        with patch(
+            "procurement.tasks_connector_acceptance.recover_stale_extraction_runs",
+            return_value=[],
+        ), patch(
+            "procurement.tasks_connector_acceptance._read_json",
+            return_value={"enabled": True, "acceptance_version": 2},
+        ), patch(
+            "procurement.tasks_connector_acceptance.run_connector_acceptance.delay",
+            new=MagicMock(),
+        ) as delay:
+            result = dispatch_connector_acceptance.run()
+
+        self.assertEqual(result, {"dispatched": False, "reason": "not_a_v1_request"})
+        delay.assert_not_called()
 
     def test_compact_report_keeps_requested_acceptance_evidence(self):
         with tempfile.TemporaryDirectory() as temporary:
