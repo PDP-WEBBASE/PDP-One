@@ -63,12 +63,17 @@ The agent may run only allowlisted guarded operations. It must not be treated as
 
 - Verified deployment backup associated with V25: `PDP-One-final-Backup-20260725-003429`
 - Restore verification for that deployment backup: passed
+- Verified post-release backup tied to release commit `02f28984b68c0e8563f4bc6f789cf0aaeec1c2b6`: `PDP-One-final-Backup-20260725-075733`
+- Initial isolated restore verification for the post-release backup: passed
+- Independent re-verification of the post-release backup: passed
+- Release stabilization deployment ID: `release-v1.1.0-trial-stabilization-20260725`
+- Production changed while creating or verifying the post-release backup: no
 - Expected automatic archive path for eligible verified backups: `D:\BackUp PDP-0NE-14050429-01`
 - Docker volume prune is forbidden.
 - PostgreSQL, private-files, Redis and Tailscale volumes must not be deleted by cleanup operations.
 - Tailscale identity, MCP path token, `.env`, secrets and Windows DNS must not be changed by ordinary startup, deployment or cleanup.
 
-A post-release backup tied explicitly to release commit `02f28984...` must be created and isolated-restore-verified. Portable encrypted export is a separate operation and must not store its passphrase.
+The release-linked final backup is complete and independently restore-verified. Portable encrypted export is a separate interactive operation because its passphrase must be entered by the operator and must never be persisted in ChatGPT, GitHub or the deployment agent.
 
 ## 7. Active Procurement capabilities
 
@@ -124,9 +129,9 @@ Connector extraction is not considered finally accepted merely because the appli
 
 ## 11. Required next acceptance stages
 
-1. Create and verify a release-linked final backup for commit `02f28984...`.
-2. Create a portable encrypted, DPAPI-independent backup and verify hashes for its configured copies.
-3. Observe startup, public access, disk growth, backups, browser session and agent health for 24–48 operational hours.
+1. Release-linked final backup for commit `02f28984...`: completed and independently restore-verified.
+2. Create a portable encrypted, DPAPI-independent backup and verify hashes for its configured copies: requires one local operator interaction for destination and passphrase.
+3. Observe startup, public access, disk growth, backups, browser session and agent health for 24–48 operational hours: scheduled.
 4. Run controlled acceptance tests for each enabled connector.
 5. Run human-reviewed analysis acceptance on real tenders/inquiries.
 6. Implement and accept the workflow from selected opportunity through bid preparation, submission, result and contract conversion.
