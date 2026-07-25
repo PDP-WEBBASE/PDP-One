@@ -17,4 +17,5 @@ class ProcurementConfig(AppConfig):
             models_documents,
             tasks_automation,
             tasks_connector_acceptance,
+            tasks_connector_acceptance_v2,
         )
