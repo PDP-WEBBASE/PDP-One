@@ -10,6 +10,11 @@ from .views import (
     TenderViewSet,
     procurement_dashboard,
 )
+from .views_acceptance import (
+    connector_acceptance_report,
+    repair_stale_connector_runs,
+    start_connector_acceptance,
+)
 from .views_analysis import (
     AnalysisBatchViewSet,
     AnalysisRequestViewSet,
@@ -63,6 +68,17 @@ router.register("automation-settings", ProcurementAutomationSettingsViewSet, bas
 urlpatterns = [
     path("", include(router.urls)),
     path("dashboard/", procurement_dashboard, name="procurement-dashboard"),
+    path("connector-acceptance/start/", start_connector_acceptance, name="connector-acceptance-start"),
+    path(
+        "connector-acceptance/<str:suite_id>/report/",
+        connector_acceptance_report,
+        name="connector-acceptance-report",
+    ),
+    path(
+        "connector-acceptance/repair-stale/",
+        repair_stale_connector_runs,
+        name="connector-acceptance-repair-stale",
+    ),
     path("analysis/context/manifest/", analysis_context_manifest, name="analysis-context-manifest"),
     path("analysis/context/active/", active_analysis_context, name="analysis-context-active"),
     path("analysis/latest-extraction/", latest_extraction_run, name="analysis-latest-extraction"),
