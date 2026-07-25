@@ -1,4 +1,4 @@
-#requires -Version 5.1
+﻿#requires -Version 5.1
 #requires -RunAsAdministrator
 [CmdletBinding()]
 param([string]$AgentRoot = "C:\ProgramData\PDP-One\deployment-agent")
@@ -43,7 +43,7 @@ $bootstrapScripts = @(
     "Rollback-PDPOne.ps1", "Update-PDPOne.ps1", "Test-PDPOne.ps1",
     "Start-PDPOne.ps1", "Repair-PDPOneConnectivity.ps1", "Open-PDPOneLocal.ps1",
     "Register-PDPOneStartupTask.ps1", "New-PDPOneDiagnostics.ps1", "Rotate-PDPOneMcpToken.ps1",
-    "Invoke-PDPOneDiskMaintenance.ps1"
+    "Invoke-PDPOneDiskMaintenance.ps1", "Invoke-PDPOneConnectorAcceptance.ps1"
 )
 foreach ($name in $bootstrapScripts) {
     $source = Join-Path $PSScriptRoot $name

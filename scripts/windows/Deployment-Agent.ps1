@@ -203,7 +203,8 @@ function Invoke-AgentAction($Payload) {
                 (Join-Path $scripts "Invoke-PDPOneConnectorAcceptance.ps1"),
                 "-HezarehParsnamadPages", ([string]$hpPages),
                 "-SetadPages", ([string]$setadPages),
-                "-AgentRoot", $AgentRoot
+                "-AgentRoot", $AgentRoot,
+                "-ProjectRoot", $ProjectRoot
             )
             $output = @(& powershell.exe @acceptanceArgs)
             $scriptExitCode = $LASTEXITCODE

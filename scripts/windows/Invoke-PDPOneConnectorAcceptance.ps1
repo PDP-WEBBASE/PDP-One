@@ -1,4 +1,4 @@
-#requires -Version 5.1
+﻿#requires -Version 5.1
 [CmdletBinding()]
 param(
     [ValidateRange(1, 10)]
@@ -6,6 +6,8 @@ param(
 
     [ValidateRange(1, 5)]
     [int]$SetadPages = 2,
+
+    [string]$ProjectRoot = "",
 
     [string]$AgentRoot = "C:\ProgramData\PDP-One\deployment-agent"
 )
@@ -105,9 +107,13 @@ function Convert-ConnectorRows($Report, [int]$SampleLimit = 3) {
     return $rows
 }
 
-$projectRoot = Get-PDPOneProjectRoot
-$environmentPath = Assert-PDPOneConfiguration -ProjectRoot $projectRoot
-Set-Location $projectRoot
+if ([string]::IsNullOrWhiteSpace($ProjectRoot)) {
+    $ProjectRoot = Get-PDPOneProjectRoot
+} else {
+    $ProjectRoot = (Resolve-Path -LiteralPath $ProjectRoot).Path
+}
+$environmentPath = Assert-PDPOneConfiguration -ProjectRoot $ProjectRoot
+Set-Location $ProjectRoot
 
 if (-not (Test-PDPOneDockerEngine)) {
     throw "Docker is not ready. Connector acceptance was not started."
@@ -130,7 +136,7 @@ $setadJsonPath = Join-Path $reportDirectory "setad.json"
 $setadErrorPath = Join-Path $reportDirectory "setad.stderr.txt"
 $combinedPath = Join-Path $reportDirectory "PDP-ONE-CONNECTOR-ACCEPTANCE-REPORT.json"
 
-$backupPath = New-PreTestDatabaseBackup -ProjectRoot $projectRoot -EnvironmentPath $environmentPath -Timestamp $timestamp
+$backupPath = New-PreTestDatabaseBackup -ProjectRoot $ProjectRoot -EnvironmentPath $environmentPath -Timestamp $timestamp
 
 $hpExitCode = Invoke-ConnectorCommand -Arguments @(
     "compose", "exec", "-T", "backend", "python", "manage.py",
