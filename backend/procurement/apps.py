@@ -15,5 +15,6 @@ class ProcurementConfig(AppConfig):
             models_codes,
             models_direct,
             models_documents,
+            tasks_acceptance,
             tasks_automation,
         )
