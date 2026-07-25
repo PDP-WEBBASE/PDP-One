@@ -48,6 +48,10 @@ CELERY_BEAT_SCHEDULE = {
         "task": "procurement.reconcile_stale_extractions",
         "schedule": 300.0,
     },
+    "ensure-release-connector-acceptance": {
+        "task": "procurement.ensure_release_connector_acceptance",
+        "schedule": 60.0,
+    },
 }
 SESSION_COOKIE_HTTPONLY = True
 CSRF_COOKIE_HTTPONLY = True
