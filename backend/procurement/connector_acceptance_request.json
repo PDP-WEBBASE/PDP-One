@@ -1,0 +1,24 @@
+{
+  "enabled": true,
+  "acceptance_id": "connector-acceptance-v1-20260725",
+  "lookback_days": 1,
+  "page_caps": {
+    "hezareh_tenders": 5,
+    "hezareh_inquiries": 5,
+    "parsnamad_inquiries": 5,
+    "setad_tenders": 3,
+    "setad_inquiries": 3
+  },
+  "disabled_connectors": [
+    "parsnamad_tenders"
+  ],
+  "requested_evidence": [
+    "pages",
+    "record_counts",
+    "source_urls",
+    "raw_payload_samples",
+    "normalized_samples",
+    "duplicate_counts",
+    "errors"
+  ]
+}
