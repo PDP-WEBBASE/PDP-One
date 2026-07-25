@@ -27,6 +27,10 @@ This change enables a controlled real acceptance test for the procurement connec
 
 The current ChatGPT conversation can retain an older cached tool schema. A narrowly scoped compatibility bridge allows the existing deployment-health tool to invoke the acceptance action only for the exact identifier `connector-acceptance-run-20260725`. Normal deployment health checks are unchanged.
 
+## Installed-root handling
+
+The deployment agent resolves the active installed PDP One project root and passes that absolute path to the connector acceptance runner. The runner does not assume that the application is installed at `C:\PDP-One`, and fresh agent installations also copy the acceptance runner into the protected agent `bin` directory. This prevents Scheduled Task context and installation-location differences from stopping the test before connector execution.
+
 ## Deployment policy
 
 The feature remains on a draft pull request. It may be deployed only after CI, Preview, a fresh final backup, isolated restore verification, and health checks.
