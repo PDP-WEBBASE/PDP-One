@@ -45,9 +45,9 @@ def system_status(request):
     """Small authenticated diagnostic used by the MCP connection check."""
     connector_acceptance = None
     try:
-        from procurement.tasks_connector_acceptance import load_latest_connector_acceptance_report
+        from procurement.tasks_connector_acceptance_v2 import load_latest_connector_acceptance_report_v2
 
-        connector_acceptance = load_latest_connector_acceptance_report(compact=True)
+        connector_acceptance = load_latest_connector_acceptance_report_v2(compact=True)
     except Exception as exc:
         connector_acceptance = {
             "status": "unavailable",
