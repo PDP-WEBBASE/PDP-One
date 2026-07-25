@@ -44,8 +44,8 @@ CELERY_BEAT_SCHEDULE = {
         "task": "procurement.dispatch_due_extraction",
         "schedule": 300.0,
     },
-    "dispatch-guarded-connector-acceptance": {
-        "task": "procurement.dispatch_connector_acceptance",
+    "dispatch-guarded-connector-acceptance-v2": {
+        "task": "procurement.dispatch_connector_acceptance_v2",
         "schedule": 60.0,
     },
 }
