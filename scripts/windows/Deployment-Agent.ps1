@@ -1,4 +1,4 @@
-#requires -Version 5.1
+﻿#requires -Version 5.1
 [CmdletBinding()]
 param([string]$AgentRoot = "C:\ProgramData\PDP-One\deployment-agent", [switch]$Once, [int]$PollSeconds = 5)
 
@@ -160,6 +160,38 @@ function Invoke-AgentAction($Payload) {
                 externally_archived_backups = @($result.externally_archived_backups)
                 removed_agent_download_directories = @($result.removed_agent_download_directories)
                 volumes_pruned = $false
+            }
+        }
+
+        "run_connector_acceptance_test" {
+            $hpPages = [int]$params.hezareh_parsnamad_pages
+            $setadPages = [int]$params.setad_pages
+            if ($hpPages -lt 1 -or $hpPages -gt 10) { throw "Hezareh/Pars Namad page cap must be between 1 and 10." }
+            if ($setadPages -lt 1 -or $setadPages -gt 5) { throw "SETAD page cap must be between 1 and 5." }
+
+            $acceptanceArgs = @(
+                "-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
+                (Join-Path $scripts "Invoke-PDPOneConnectorAcceptance.ps1"),
+                "-HezarehParsnamadPages", ([string]$hpPages),
+                "-SetadPages", ([string]$setadPages),
+                "-AgentRoot", $AgentRoot
+            )
+            $output = @(& powershell.exe @acceptanceArgs)
+            $scriptExitCode = $LASTEXITCODE
+            if ($output.Count -eq 0) { throw "Connector acceptance did not return a report path." }
+            $reportPath = [string]$output[-1]
+            if (-not (Test-Path -LiteralPath $reportPath)) { throw "Connector acceptance report was not created." }
+            $result = Get-Content -LiteralPath $reportPath -Raw -Encoding UTF8 | ConvertFrom-Json
+            return @{
+                report_path = $reportPath
+                overall_status = [string]$result.overall_status
+                generated_at = [string]$result.generated_at
+                page_caps = $result.page_caps
+                safety = $result.safety
+                pre_test_backup = $result.pre_test_backup
+                groups = $result.groups
+                connector_results = @($result.connector_results)
+                script_exit_code = $scriptExitCode
             }
         }
         "rollback_deployment" {

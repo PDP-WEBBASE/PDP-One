@@ -291,6 +291,34 @@ async def run_disk_maintenance(keep_local_final_backups: int = 2) -> dict:
     return enqueue("run_disk_maintenance", {"keep_local_final_backups": keep})
 
 
+
+@mcp.tool(
+    description=(
+        "Run the controlled real public-list acceptance test for enabled Hezareh and Pars Namad connectors "
+        "plus both approved SETAD connectors. A pre-test PostgreSQL dump is created; detail pages, CAPTCHA "
+        "bypass, browser cookies, and AI analysis are disabled. Pars Namad tenders remain skipped when disabled."
+    ),
+    annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, openWorldHint=True, idempotentHint=False),
+)
+async def run_connector_acceptance_test(
+    hezareh_parsnamad_pages: int = 3,
+    setad_pages: int = 2,
+) -> dict:
+    hp_pages = int(hezareh_parsnamad_pages)
+    setad_page_cap = int(setad_pages)
+    if hp_pages < 1 or hp_pages > 10:
+        raise ValueError("hezareh_parsnamad_pages must be between 1 and 10.")
+    if setad_page_cap < 1 or setad_page_cap > 5:
+        raise ValueError("setad_pages must be between 1 and 5.")
+    return enqueue(
+        "run_connector_acceptance_test",
+        {
+            "hezareh_parsnamad_pages": hp_pages,
+            "setad_pages": setad_page_cap,
+        },
+    )
+
+
 @mcp.tool(
     description="Return the mandatory guarded workflow for a proposed web change. Source changes still occur only on a separate GitHub branch.",
     annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, openWorldHint=False, idempotentHint=True),
