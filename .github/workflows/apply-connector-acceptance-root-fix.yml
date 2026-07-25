@@ -1,0 +1,35 @@
+name: Apply connector acceptance project-root fix
+
+on:
+  push:
+    branches:
+      - feature/connector-acceptance-agent-20260725
+    paths:
+      - tools/apply_connector_acceptance_root_fix.py
+      - .github/workflows/apply-connector-acceptance-root-fix.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out branch
+        uses: actions/checkout@v4
+        with:
+          ref: feature/connector-acceptance-agent-20260725
+          fetch-depth: 0
+
+      - name: Apply project-root fix
+        run: python tools/apply_connector_acceptance_root_fix.py
+
+      - name: Commit product changes
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --quiet && exit 0
+          git commit -m "Pass installed project root to connector acceptance runner"
+          git push origin HEAD:feature/connector-acceptance-agent-20260725
