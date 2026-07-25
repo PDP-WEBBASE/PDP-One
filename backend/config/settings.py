@@ -20,7 +20,7 @@ MIDDLEWARE = [
     "django.contrib.messages.middleware.MessageMiddleware", "django.middleware.clickjacking.XFrameOptionsMiddleware",
 ]
 ROOT_URLCONF = "config.urls"
-TEMPLATES = [{"BACKEND": "django.template.backends.django.DjangoTemplates", "DIRS": [], "APP_DIRS": True, "OPTIONS": {"context_processors": ["django.template.context_processors.request", "django.contrib.auth.context_processors.auth", "django.contrib.messages.context_processors.messages"]}}]
+TEMPLATES = [{"BACKEND": "django.template.backends.django.DjangoTemplates", "DIRS": [], "APP_DIRS": True, "OPTIONS": {"context_processors": ["django.template.context_processors.request", "django.contrib.auth.context_processors.auth", "django.contrib.messages.context_processors"]}}]
 WSGI_APPLICATION = "config.wsgi.application"
 DATABASES = {"default": {"ENGINE": "django.db.backends.postgresql", "NAME": os.getenv("POSTGRES_DB", "pdp_one"), "USER": os.getenv("POSTGRES_USER", "pdp_one"), "PASSWORD": os.getenv("POSTGRES_PASSWORD", "change-me"), "HOST": os.getenv("POSTGRES_HOST", "db"), "PORT": os.getenv("POSTGRES_PORT", "5432")}}
 AUTH_PASSWORD_VALIDATORS = [
@@ -42,6 +42,10 @@ CELERY_RESULT_BACKEND = CELERY_BROKER_URL
 CELERY_BEAT_SCHEDULE = {
     "dispatch-due-procurement-extraction": {
         "task": "procurement.dispatch_due_extraction",
+        "schedule": 300.0,
+    },
+    "reconcile-stale-procurement-extractions": {
+        "task": "procurement.reconcile_stale_extractions",
         "schedule": 300.0,
     },
 }
