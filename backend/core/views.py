@@ -13,6 +13,7 @@ from rest_framework.viewsets import GenericViewSet
 from .models import AnalysisReport, AuditEvent, Contract, PaymentReceipt, Receivable
 from .serializers import AnalysisReportSerializer, ContractSerializer, PaymentReceiptSerializer, ReceivableSerializer
 
+
 class DraftCreateReadViewSet(mixins.CreateModelMixin, mixins.RetrieveModelMixin, mixins.ListModelMixin, GenericViewSet):
     """Create and read drafts; approval and destructive changes stay in the admin workflow."""
 
@@ -28,13 +29,93 @@ class ContractViewSet(DraftCreateReadViewSet):
         contract = serializer.save(created_by=self.request.user, status=Contract.Status.DRAFT)
         AuditEvent.objects.create(actor=self.request.user.username, action="contract.create_draft", target_type="contract", target_id=str(contract.id), payload={"code": contract.code})
 
+
 class AnalysisReportViewSet(DraftCreateReadViewSet):
     queryset = AnalysisReport.objects.all().order_by("-created_at")
     serializer_class = AnalysisReportSerializer
     search_fields = ["title", "summary"]
+
     def perform_create(self, serializer):
         report = serializer.save(requested_by=self.request.user, review_status=AnalysisReport.ReviewStatus.AI_DRAFT)
         AuditEvent.objects.create(actor=self.request.user.username, action="analysis.create_draft", target_type="analysis_report", target_id=str(report.id), payload={"source_count": len(report.source_record_ids)})
+
+
+def _release_connector_acceptance_status():
+    from procurement.models_extraction import ExtractionRun
+    from procurement.tasks_acceptance import AUTO_ACCEPTANCE_CONNECTORS, AUTO_ACCEPTANCE_SUITE_ID
+
+    runs = list(
+        ExtractionRun.objects.filter(summary__acceptance__suite_id=AUTO_ACCEPTANCE_SUITE_ID)
+        .prefetch_related("connectors__source", "errors", "items__source_notice")
+        .order_by("created_at")
+    )
+    terminal = {
+        ExtractionRun.Status.SUCCEEDED,
+        ExtractionRun.Status.SUCCEEDED_WITH_WARNINGS,
+        ExtractionRun.Status.PARTIAL,
+        ExtractionRun.Status.FAILED,
+        ExtractionRun.Status.CANCELLED,
+    }
+    summaries = []
+    for run in runs:
+        connector = run.connectors.select_related("source").first()
+        sample_item = run.items.select_related("source_notice").order_by("page_number", "position").first()
+        source_notice = sample_item.source_notice if sample_item else None
+        normalized = None
+        if source_notice is not None:
+            try:
+                notice = source_notice.notice_link.procurement_notice
+                normalized = {
+                    "id": str(notice.id),
+                    "title": notice.title,
+                    "employer": notice.employer_name,
+                    "notice_type": notice.resolved_notice_type,
+                }
+            except Exception:
+                normalized = None
+        connector_key = connector.key if connector else ""
+        summaries.append(
+            {
+                "run_id": str(run.id),
+                "connector_key": connector_key,
+                "source": connector.source.name if connector else "",
+                "notice_type": connector.notice_type if connector else "",
+                "status": run.status,
+                "terminal": run.status in terminal,
+                "pages": run.pages_processed,
+                "records_seen": run.records_seen,
+                "new": run.records_new,
+                "updated": run.records_updated,
+                "duplicates": run.records_duplicate,
+                "failed": run.records_failed,
+                "errors": run.errors.count(),
+                "source_url_sample": source_notice.source_url if source_notice else "",
+                "raw_data_present": bool(source_notice and source_notice.raw_payload),
+                "raw_data_keys": sorted((source_notice.raw_payload or {}).keys())[:20] if source_notice else [],
+                "standardized_data_present": normalized is not None,
+                "standardized_sample": normalized,
+                "connector_summary": (run.summary or {}).get("connectors", {}).get(connector_key, {}),
+            }
+        )
+
+    if not runs:
+        overall = "not_started"
+    elif any(run.status not in terminal for run in runs):
+        overall = "running"
+    elif len(runs) != len(AUTO_ACCEPTANCE_CONNECTORS):
+        overall = "incomplete"
+    elif all(run.status in {ExtractionRun.Status.SUCCEEDED, ExtractionRun.Status.SUCCEEDED_WITH_WARNINGS} for run in runs):
+        overall = "completed"
+    else:
+        overall = "needs_attention"
+
+    return {
+        "suite_id": AUTO_ACCEPTANCE_SUITE_ID,
+        "overall_status": overall,
+        "expected_connectors": list(AUTO_ACCEPTANCE_CONNECTORS),
+        "run_count": len(runs),
+        "connectors": summaries,
+    }
 
 
 @api_view(["GET"])
@@ -47,6 +128,7 @@ def system_status(request):
         "contracts": Contract.objects.count(),
         "receivables": Receivable.objects.count(),
         "analysis_drafts": AnalysisReport.objects.count(),
+        "connector_acceptance": _release_connector_acceptance_status(),
     })
 
 
@@ -84,6 +166,7 @@ class PaymentReceiptViewSet(DraftCreateReadViewSet):
             target_id=str(receipt.id),
             payload={"receivable_id": str(receipt.receivable_id), "amount_rials": str(receipt.amount_rials)},
         )
+
 
 @api_view(["GET"])
 def management_summary(request):
