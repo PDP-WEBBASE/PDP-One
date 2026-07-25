@@ -1,11 +1,11 @@
 {
-  "enabled": true,
+  "enabled": false,
   "acceptance_version": 2,
-  "acceptance_id": "connector-acceptance-v2-20260725",
+  "acceptance_id": "connector-acceptance-v2-guarded-20260725",
   "lookback_days": 1,
   "page_caps": {
-    "hezareh_tenders": 5,
-    "hezareh_inquiries": 5,
+    "hezareh_tenders": 3,
+    "hezareh_inquiries": 3,
     "parsnamad_inquiries": 5,
     "setad_tenders": 3,
     "setad_inquiries": 3
