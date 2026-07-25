@@ -1,9 +1,18 @@
 from django.test import SimpleTestCase
 
-from procurement.tasks_connector_acceptance_v2 import _compact_connector, _totals
+from procurement.tasks_connector_acceptance_v2 import (
+    _compact_connector,
+    _requested_detail_probe_limit,
+    _totals,
+)
 
 
 class ConnectorAcceptanceV2Tests(SimpleTestCase):
+    def test_requested_detail_probe_limit_can_disable_probes(self):
+        self.assertEqual(_requested_detail_probe_limit({"detail_probe_limit": 0}), 0)
+        self.assertEqual(_requested_detail_probe_limit({"detail_probe_limit": 8}), 2)
+        self.assertEqual(_requested_detail_probe_limit({}), 2)
+
     def test_compact_connector_keeps_duplicate_and_probe_evidence(self):
         errors = [
             {"category": "parse", "safe_message": f"error-{index}"}

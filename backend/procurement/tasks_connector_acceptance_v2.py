@@ -76,6 +76,11 @@ def load_latest_connector_acceptance_report_v2(*, compact=False):
     }
 
 
+def _requested_detail_probe_limit(request_payload):
+    value = int(request_payload.get("detail_probe_limit", 2))
+    return max(0, min(value, 2))
+
+
 def _detail_probe(run, connector, *, limit=2):
     if connector.key.startswith("setad_") or not connector.supports_detail:
         return []
@@ -314,7 +319,11 @@ def run_connector_acceptance_v2(acceptance_id: str, request_payload: dict):
             connector_report = _build_connector_report(run, connector)
             report["phase"] = "detail_probe"
             _save_report(report)
-            connector_report["detail_probes"] = _detail_probe(run, connector, limit=2)
+            connector_report["detail_probes"] = _detail_probe(
+                run,
+                connector,
+                limit=_requested_detail_probe_limit(request_payload),
+            )
 
             if connector_report["acceptance"] == "passed" and any(
                 probe.get("status") != "passed" for probe in connector_report["detail_probes"]
