@@ -22,6 +22,14 @@ QUEUE_ROOT = Path(os.getenv("PDP_DEPLOYMENT_QUEUE", "/deployment-agent/queue"))
 SIGNING_KEY = os.getenv("PDP_DEPLOYMENT_AGENT_SIGNING_KEY", "")
 COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
 IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+DEFAULT_TTL_SECONDS = 300
+MAX_TTL_SECONDS = 1800
+ACTION_TTL_SECONDS = {
+    # Layered health can wait behind a long deployment, Windows startup,
+    # agent restart, and public-route retries. Other signed actions keep
+    # the shorter default lifetime.
+    "check_deployment_health": 1800,
+}
 ALLOWED_ACTIONS = {
     "approve_release",
     "create_final_backup",
@@ -58,19 +66,24 @@ def validate_identifier(value: str, field: str) -> str:
     return normalized
 
 
-def enqueue(action: str, params: dict[str, Any] | None = None, ttl_seconds: int = 300) -> dict[str, Any]:
+def enqueue(
+    action: str,
+    params: dict[str, Any] | None = None,
+    ttl_seconds: int | None = None,
+) -> dict[str, Any]:
     _require_queue()
     if action not in ALLOWED_ACTIONS:
         raise ValueError("Unsupported deployment-agent action.")
-    if not 30 <= ttl_seconds <= 600:
-        raise ValueError("Queue request lifetime must be between 30 and 600 seconds.")
+    lifetime = ACTION_TTL_SECONDS.get(action, DEFAULT_TTL_SECONDS) if ttl_seconds is None else int(ttl_seconds)
+    if not 30 <= lifetime <= MAX_TTL_SECONDS:
+        raise ValueError(f"Queue request lifetime must be between 30 and {MAX_TTL_SECONDS} seconds.")
     now = _utcnow()
     request_id = str(uuid.uuid4())
     payload = {
         "request_id": request_id,
         "action": action,
         "created_at": now.isoformat(),
-        "expires_at": (now + timedelta(seconds=ttl_seconds)).isoformat(),
+        "expires_at": (now + timedelta(seconds=lifetime)).isoformat(),
         "params": params or {},
     }
     payload_bytes = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
