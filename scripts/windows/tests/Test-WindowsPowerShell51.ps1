@@ -43,6 +43,7 @@ try {
     $fastDeployment = [IO.File]::ReadAllText((Join-Path $root 'Invoke-PDPOneFastDeployment.ps1'))
     $composeText = [IO.File]::ReadAllText((Join-Path $repositoryRoot 'docker-compose.yml'))
     $phasePath = Join-Path $repositoryRoot 'release\implementation-in-progress.json'
+    $mcpServer = [IO.File]::ReadAllText((Join-Path $repositoryRoot 'services\pdp_mcp\server.py'))
 
     Assert-True ($updateScript -notmatch '-RestoreDatabase:\$migrationAttempted') 'Unsafe Boolean switch forwarding returned.'
     Assert-True ($updateScript -match '\$rollbackArgs \+= "-RestoreDatabase"') 'Conditional rollback switch token is missing.'
@@ -125,6 +126,12 @@ try {
     Assert-True ($fastDeployment -notmatch 'Test-PDPOneBackupRestore\.ps1') 'Fast deployment still runs restore verification.'
     Assert-True ($fastDeployment -notmatch 'code-before-deployment\.zip') 'Fast deployment still creates a local code snapshot.'
     Assert-True ($fastDeployment -notmatch 'Rollback-PDPOne\.ps1') 'Fast deployment still performs automatic rollback.'
+    Assert-True ($mcpServer -match '"code_snapshot_required": not fast') 'MCP contract still requires a local snapshot in fast mode.'
+    Assert-True ($mcpServer -match '"restore_verification_required": not fast') 'MCP contract does not report restore verification as disabled in fast mode.'
+    Assert-True ($mcpServer -match '"automatic_rollback_enabled": not fast') 'MCP contract still reports automatic rollback in fast mode.'
+    Assert-True ($mcpServer -match '"approval_required": not fast') 'MCP contract still reports per-deploy approval in fast mode.'
+    Assert-True ($mcpServer -match '"heavy_preview_gate_required": not fast') 'MCP contract still reports a heavy Preview gate in fast mode.'
+    Assert-True ($mcpServer -match 'redeploy_previous_commit_from_github') 'MCP contract does not report GitHub redeploy recovery.'
     Assert-True ($fastDeployment -notmatch '(?i)docker\s+(volume\s+(rm|prune)|system\s+prune[^\r\n]*--volumes)') 'Fast deployment contains a forbidden Docker volume operation.'
 
     Write-Host 'Windows PowerShell 5.1 compatibility and fast-development policy tests passed.' -ForegroundColor Green
