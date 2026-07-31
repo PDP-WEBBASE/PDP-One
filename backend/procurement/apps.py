@@ -8,7 +8,7 @@ class ProcurementConfig(AppConfig):
 
     def ready(self):
         # Keep larger domain model groups in focused modules while still
-        # registering them with Django before checks and migrations run.
+        # registering them with Django and Celery before checks run.
         from . import (  # noqa: F401
             models_analysis,
             models_automation,
@@ -16,4 +16,6 @@ class ProcurementConfig(AppConfig):
             models_direct,
             models_documents,
             tasks_automation,
+            tasks_connector_acceptance,
+            tasks_connector_acceptance_v2,
         )

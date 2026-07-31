@@ -1,0 +1,28 @@
+{
+  "enabled": true,
+  "acceptance_version": 2,
+  "acceptance_id": "connector-acceptance-v2-final-20260725",
+  "lookback_days": 1,
+  "page_caps": {
+    "hezareh_tenders": 2,
+    "hezareh_inquiries": 2,
+    "parsnamad_inquiries": 5,
+    "setad_tenders": 3,
+    "setad_inquiries": 3
+  },
+  "disabled_connectors": [
+    "parsnamad_tenders"
+  ],
+  "list_policy": "collect-all-controlled-pages-before-detail-probes",
+  "detail_probe_limit": 0,
+  "requested_evidence": [
+    "pages",
+    "record_counts",
+    "source_urls",
+    "raw_payload_samples",
+    "normalized_samples",
+    "same_source_duplicate_counts",
+    "cross_source_duplicate_links",
+    "errors"
+  ]
+}

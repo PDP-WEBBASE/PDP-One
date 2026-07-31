@@ -13,6 +13,7 @@ from rest_framework.viewsets import GenericViewSet
 from .models import AnalysisReport, AuditEvent, Contract, PaymentReceipt, Receivable
 from .serializers import AnalysisReportSerializer, ContractSerializer, PaymentReceiptSerializer, ReceivableSerializer
 
+
 class DraftCreateReadViewSet(mixins.CreateModelMixin, mixins.RetrieveModelMixin, mixins.ListModelMixin, GenericViewSet):
     """Create and read drafts; approval and destructive changes stay in the admin workflow."""
 
@@ -28,10 +29,12 @@ class ContractViewSet(DraftCreateReadViewSet):
         contract = serializer.save(created_by=self.request.user, status=Contract.Status.DRAFT)
         AuditEvent.objects.create(actor=self.request.user.username, action="contract.create_draft", target_type="contract", target_id=str(contract.id), payload={"code": contract.code})
 
+
 class AnalysisReportViewSet(DraftCreateReadViewSet):
     queryset = AnalysisReport.objects.all().order_by("-created_at")
     serializer_class = AnalysisReportSerializer
     search_fields = ["title", "summary"]
+
     def perform_create(self, serializer):
         report = serializer.save(requested_by=self.request.user, review_status=AnalysisReport.ReviewStatus.AI_DRAFT)
         AuditEvent.objects.create(actor=self.request.user.username, action="analysis.create_draft", target_type="analysis_report", target_id=str(report.id), payload={"source_count": len(report.source_record_ids)})
@@ -40,6 +43,16 @@ class AnalysisReportViewSet(DraftCreateReadViewSet):
 @api_view(["GET"])
 def system_status(request):
     """Small authenticated diagnostic used by the MCP connection check."""
+    connector_acceptance = None
+    try:
+        from procurement.tasks_connector_acceptance_v2 import load_latest_connector_acceptance_report_v2
+
+        connector_acceptance = load_latest_connector_acceptance_report_v2(compact=True)
+    except Exception as exc:
+        connector_acceptance = {
+            "status": "unavailable",
+            "safe_error": exc.__class__.__name__,
+        }
     return Response({
         "service": "PDP One",
         "database": "connected",
@@ -47,6 +60,7 @@ def system_status(request):
         "contracts": Contract.objects.count(),
         "receivables": Receivable.objects.count(),
         "analysis_drafts": AnalysisReport.objects.count(),
+        "connector_acceptance": connector_acceptance,
     })
 
 
@@ -84,6 +98,7 @@ class PaymentReceiptViewSet(DraftCreateReadViewSet):
             target_id=str(receipt.id),
             payload={"receivable_id": str(receipt.receivable_id), "amount_rials": str(receipt.amount_rials)},
         )
+
 
 @api_view(["GET"])
 def management_summary(request):
