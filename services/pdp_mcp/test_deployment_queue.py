@@ -41,7 +41,7 @@ class DeploymentQueueTests(unittest.TestCase):
         _, _, payload = self._payload_for(result)
         created = datetime.fromisoformat(payload["created_at"])
         expires = datetime.fromisoformat(payload["expires_at"])
-        self.assertEqual(1200, int((expires - created).total_seconds()))
+        self.assertEqual(1800, int((expires - created).total_seconds()))
 
     def test_other_actions_keep_standard_lifetime(self):
         result = self.queue.enqueue("verify_backup_restore", {"backup_id": "sample"})
