@@ -90,10 +90,13 @@ try {
     # While implementation is in progress the wrapper must restore fast mode on
     # every agent start. The exact completion phrase is recorded in the marker.
     Assert-True (Test-Path -LiteralPath $phasePath) 'Implementation-phase marker is missing.'
-    $phase = Get-Content -LiteralPath $phasePath -Raw -Encoding UTF8 | ConvertFrom-Json
+    $phaseText = [IO.File]::ReadAllText($phasePath, [Text.Encoding]::UTF8)
+    $phase = $phaseText | ConvertFrom-Json
     Assert-True ([string]$phase.status -eq 'in_progress') 'Implementation phase is not active.'
     Assert-True ([string]$phase.change_management_mode -eq 'development_fast') 'Implementation marker does not select development_fast.'
-    Assert-True ([string]$phase.completion_trigger_exact_text -eq 'پیاده سازی سامانه تکمیل شده است') 'Exact completion trigger changed.'
+    $expectedCompletion = New-PDPOneCodePointString @(0x067E,0x06CC,0x0627,0x062F,0x0647,0x0020,0x0633,0x0627,0x0632,0x06CC,0x0020,0x0633,0x0627,0x0645,0x0627,0x0646,0x0647,0x0020,0x062A,0x06A9,0x0645,0x06CC,0x0644,0x0020,0x0634,0x062F,0x0647,0x0020,0x0627,0x0633,0x062A)
+    $actualCompletion = ([string]$phase.completion_trigger_exact_text).Normalize([Text.NormalizationForm]::FormKC).Trim()
+    Assert-True ([string]::Equals($actualCompletion, $expectedCompletion, [StringComparison]::Ordinal)) 'Exact completion trigger changed.'
     Assert-True ($agentWrapper -match 'implementation-in-progress\.json') 'Agent wrapper does not read the implementation marker.'
     Assert-True ($agentWrapper -match 'PDP_CHANGE_MANAGEMENT_MODE') 'Agent wrapper does not set change-management mode.'
     Assert-True ($agentWrapper -match 'development_fast') 'Agent wrapper does not restore fast mode.'
