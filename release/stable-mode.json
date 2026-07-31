@@ -1,0 +1,13 @@
+{
+  "schema": "pdp-one.stable-release.v1",
+  "release_version": "v1.0.0",
+  "release_date": "2026-07-31",
+  "activate_standard_after_verified_backup": true,
+  "change_management_mode": "standard",
+  "trial_mode": false,
+  "external_backup_root": "D:\\BackUp PDP-0NE-14050429-01",
+  "require_external_backup": true,
+  "require_isolated_restore": true,
+  "require_startup_registration": true,
+  "require_public_health": true
+}
