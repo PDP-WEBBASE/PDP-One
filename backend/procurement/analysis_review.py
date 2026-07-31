@@ -12,8 +12,9 @@ def human_review_metadata(draft: NoticeAnalysisDraft) -> dict[str, Any]:
 
 
 def analysis_review_summary(queryset=None) -> dict[str, Any]:
+    source = queryset if queryset is not None else NoticeAnalysisDraft.objects.all()
     drafts = list(
-        (queryset or NoticeAnalysisDraft.objects.all()).only(
+        source.only(
             "review_status",
             "priority",
             "is_recommended",
