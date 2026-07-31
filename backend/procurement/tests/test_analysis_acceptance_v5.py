@@ -8,9 +8,14 @@ from django.urls import reverse
 from django.utils import timezone
 from rest_framework.test import APIClient
 
-from core.procurement_analysis_bridge import START_COMMAND
+from core.procurement_analysis_bridge import ACCEPTANCE_ID, FINISH_COMMAND, SAVE_COMMAND, START_COMMAND
 from procurement.models import ProcurementNotice
-from procurement.models_analysis import AnalysisBatch, AnalysisContextSnapshot, AnalysisRequest
+from procurement.models_analysis import (
+    AnalysisBatch,
+    AnalysisContextSnapshot,
+    AnalysisRequest,
+    NoticeAnalysisDraft,
+)
 
 
 class ProcurementAnalysisAcceptanceV5Tests(TestCase):
@@ -50,16 +55,19 @@ class ProcurementAnalysisAcceptanceV5Tests(TestCase):
         self.client.force_authenticate(user=self.staff)
         self.url = reverse("analysisreport-list")
 
-    def _start(self):
+    def _post(self, title, payload, source_record_ids=None):
         return self.client.post(
             self.url,
             {
-                "title": START_COMMAND,
-                "summary": json.dumps({"limit": 1}),
-                "source_record_ids": [],
+                "title": title,
+                "summary": json.dumps(payload),
+                "source_record_ids": source_record_ids or [],
             },
             format="json",
         )
+
+    def _start(self):
+        return self._post(START_COMMAND, {"limit": 1})
 
     @patch(
         "procurement.analysis_workflow_postgres.start_analysis_request",
@@ -91,3 +99,53 @@ class ProcurementAnalysisAcceptanceV5Tests(TestCase):
             ProcurementNotice.ProcessingStatus.READY_FOR_ANALYSIS,
         )
         collect_work_items.assert_called_once()
+
+    @patch(
+        "procurement.analysis_workflow.finish_analysis_request",
+        side_effect=NotSupportedError("row locking must not be used by V6"),
+    )
+    def test_finish_bypasses_row_lock_helper(self, locked_helper):
+        start_response = self._start()
+        self.assertEqual(start_response.status_code, 201)
+        request_id = start_response.data["request"]["id"]
+        batch_id = start_response.data["batch"]["id"]
+        notice_id = start_response.data["items"][0]["notice_id"]
+
+        save_response = self._post(
+            SAVE_COMMAND,
+            {
+                "acceptance_id": ACCEPTANCE_ID,
+                "request_id": request_id,
+                "batch_id": batch_id,
+                "notice_id": notice_id,
+                "is_recommended": True,
+                "score": 80,
+                "priority": "high",
+                "fit_for_pdp": "The scope matches PDP architectural consulting qualifications.",
+                "category": "architectural consulting",
+                "reason": "The notice explicitly requests design and supervision services.",
+                "recommended_action": "A human reviewer should inspect the full tender documents.",
+                "matched_experience": ["building design and supervision"],
+                "risk_notes": ["Test data only."],
+                "confidence": 90,
+            },
+            source_record_ids=[notice_id],
+        )
+        self.assertEqual(save_response.status_code, 201)
+        self.assertEqual(NoticeAnalysisDraft.objects.count(), 1)
+
+        finish_response = self._post(
+            FINISH_COMMAND,
+            {
+                "acceptance_id": ACCEPTANCE_ID,
+                "request_id": request_id,
+                "failed_notice_ids": [],
+                "summary_note": "V6 lock-free finish regression test.",
+            },
+        )
+        self.assertEqual(finish_response.status_code, 200)
+        self.assertEqual(finish_response.data["operation"], "finish")
+        self.assertEqual(finish_response.data["request"]["status"], AnalysisRequest.Status.COMPLETED)
+        self.assertEqual(finish_response.data["batch"]["completed_count"], 1)
+        self.assertEqual(finish_response.data["batch"]["failed_count"], 0)
+        locked_helper.assert_not_called()
