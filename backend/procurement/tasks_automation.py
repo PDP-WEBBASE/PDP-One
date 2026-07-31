@@ -1,4 +1,4 @@
-from datetime import time, timedelta
+from datetime import time
 
 from celery import shared_task
 from django.db import transaction
@@ -8,7 +8,6 @@ from core.models import AuditEvent
 
 from .automation_utils import calculate_next_extraction
 from .models import ProcurementConnector
-from .models_analysis import AnalysisContextSnapshot, AnalysisRequest
 from .models_automation import ProcurementAutomationSettings
 from .models_extraction import ExtractionRun
 from .tasks import run_extraction
@@ -22,10 +21,11 @@ def bootstrap_guarded_automation() -> dict:
     now = timezone.now()
     settings, _ = ProcurementAutomationSettings.objects.get_or_create(key="default")
     settings.enabled = True
-    settings.cadence = ProcurementAutomationSettings.Cadence.DAILY
+    settings.cadence = ProcurementAutomationSettings.Cadence.HOURLY
+    settings.interval_minutes = 60
     settings.daily_time = time(hour=7, minute=0)
     settings.timezone_name = "Asia/Tehran"
-    settings.analysis_delay_minutes = 15
+    settings.analysis_delay_minutes = 0
     settings.scheduled_task_enabled = True
     settings.next_extraction_at = calculate_next_extraction(settings, now=now)
     settings.last_schedule_sync_at = now
@@ -38,7 +38,7 @@ def bootstrap_guarded_automation() -> dict:
         payload={
             "enabled": True,
             "cadence": settings.cadence,
-            "daily_time": str(settings.daily_time),
+            "interval_minutes": settings.interval_minutes,
             "timezone_name": settings.timezone_name,
             "analysis_delay_minutes": settings.analysis_delay_minutes,
             "next_extraction_at": settings.next_extraction_at.isoformat() if settings.next_extraction_at else None,
@@ -111,55 +111,13 @@ def dispatch_due_extraction() -> dict:
 
 @shared_task(name="procurement.dispatch_due_analysis_requests")
 def dispatch_due_analysis_requests() -> dict:
-    settings = ProcurementAutomationSettings.objects.filter(key="default", enabled=True).first()
-    if settings is None:
-        return {"created": 0, "reason": "automation_disabled"}
-    context = AnalysisContextSnapshot.objects.filter(status=AnalysisContextSnapshot.Status.ACTIVE).order_by("-version").first()
-    if context is None:
-        return {"created": 0, "reason": "no_active_analysis_context"}
+    """Compatibility task name retained for existing Celery Beat installations.
 
-    eligible_statuses = [ExtractionRun.Status.SUCCEEDED, ExtractionRun.Status.SUCCEEDED_WITH_WARNINGS, ExtractionRun.Status.PARTIAL]
-    runs = ExtractionRun.objects.filter(
-        trigger=ExtractionRun.Trigger.SCHEDULED,
-        analyze_after_success=True,
-        status__in=eligible_statuses,
-        analysis_requests__isnull=True,
-    ).order_by("created_at")[:20]
-    created_ids = []
-    for run in runs:
-        changed = int(run.records_new or 0) + int(run.records_updated or 0)
-        if changed <= 0:
-            AnalysisRequest.objects.create(
-                trigger=AnalysisRequest.Trigger.SCHEDULED,
-                command="PDP",
-                status=AnalysisRequest.Status.NO_CHANGES,
-                extraction_run=run,
-                context_snapshot=context,
-                completed_at=timezone.now(),
-                metadata={"reason": "no_new_or_changed_records", "draft_only": True},
-            )
-            continue
-        request_record = AnalysisRequest.objects.create(
-            trigger=AnalysisRequest.Trigger.SCHEDULED,
-            command="PDP",
-            status=AnalysisRequest.Status.PENDING,
-            extraction_run=run,
-            context_snapshot=context,
-            eligible_after=timezone.now() + timedelta(minutes=max(0, settings.analysis_delay_minutes)),
-            metadata={
-                "records_new": run.records_new,
-                "records_updated": run.records_updated,
-                "records_failed": run.records_failed,
-                "draft_only": True,
-                "human_review_required": True,
-            },
-        )
-        created_ids.append(str(request_record.id))
-        AuditEvent.objects.create(
-            actor="system",
-            action="procurement.automation.analysis_request_queued",
-            target_type="analysis_request",
-            target_id=str(request_record.id),
-            payload={"extraction_run_id": str(run.id), "draft_only": True, "human_review_required": True},
-        )
-    return {"created": len(created_ids), "request_ids": created_ids, "draft_only": True, "human_review_required": True}
+    The old implementation created at most twenty one-batch AnalysisRequest rows.
+    The new implementation delegates to one persistent run that is resumed until
+    its PostgreSQL queue is empty.
+    """
+    from .tasks_analysis_runs import dispatch_scheduled_analysis_run
+
+    result = dispatch_scheduled_analysis_run()
+    return {**result, "persistent_run": True, "draft_only": True, "human_review_required": True}
