@@ -19,6 +19,12 @@ function Get-ComposeVolume([string]$LogicalName) {
     return ([string]$name).Trim()
 }
 
+function Sync-PDPOneExternalBackup([string]$SourcePath, [string]$DestinationPath) {
+    New-Item -ItemType Directory -Force -Path $DestinationPath | Out-Null
+    & robocopy.exe $SourcePath $DestinationPath /MIR /COPY:DAT /DCOPY:DAT /R:2 /W:1 /NFL /NDL /NP
+    if ($LASTEXITCODE -gt 7) { throw "External backup mirror failed." }
+}
+
 $ProjectRoot = Get-PDPOneProjectRoot
 Set-Location $ProjectRoot
 Start-PDPOneRancherDesktop -TimeoutSeconds 300
@@ -28,6 +34,18 @@ $backupId = "PDP-One-$Kind-Backup-$timestamp"
 $backupPath = Join-Path $BackupRoot $backupId
 New-Item -ItemType Directory -Force -Path $backupPath | Out-Null
 & icacls.exe $backupPath /inheritance:r /grant:r "${env:USERNAME}:(OI)(CI)F" "SYSTEM:(OI)(CI)F" "Administrators:(OI)(CI)F" *> $null
+
+$externalRoot = Get-PDPOneEnvValue -Path $envPath -Name "PDP_EXTERNAL_BACKUP_ROOT"
+$externalBackupPath = $null
+if (-not [string]::IsNullOrWhiteSpace($externalRoot)) {
+    $externalRoot = [Environment]::ExpandEnvironmentVariables($externalRoot.Trim())
+    $driveRoot = [IO.Path]::GetPathRoot($externalRoot)
+    if (-not $driveRoot -or -not (Test-Path -LiteralPath $driveRoot)) {
+        throw "The configured external backup drive is not available."
+    }
+    New-Item -ItemType Directory -Force -Path $externalRoot | Out-Null
+    $externalBackupPath = Join-Path $externalRoot $backupId
+}
 
 $volumes = [ordered]@{
     postgres_data = (Get-ComposeVolume "postgres_data")
@@ -82,7 +100,7 @@ $hashes = @{}
 foreach ($file in $files) { $hashes[$file] = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $backupPath $file)).Hash.ToLowerInvariant() }
 
 $manifest = [ordered]@{
-    schema_version = 1
+    schema_version = 2
     backup_id = $backupId
     kind = $Kind
     created_at = (Get-Date).ToUniversalTime().ToString("o")
@@ -105,8 +123,19 @@ $manifest = [ordered]@{
     production_changed = $false
     token_rotated = $false
     secrets_in_report = $false
+    external_backup_required = [bool]$externalBackupPath
+    external_backup_path = $externalBackupPath
+    external_backup_copied = $false
 }
 $reportPath = Join-Path $backupPath "backup-report.json"
 $manifest | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $reportPath -Encoding UTF8
+
+if ($externalBackupPath) {
+    Sync-PDPOneExternalBackup -SourcePath $backupPath -DestinationPath $externalBackupPath
+    $manifest.external_backup_copied = $true
+    $manifest | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $reportPath -Encoding UTF8
+    Copy-Item -LiteralPath $reportPath -Destination (Join-Path $externalBackupPath "backup-report.json") -Force
+}
+
 Write-Host "Backup created: $backupId" -ForegroundColor Green
 Write-Output $backupPath
