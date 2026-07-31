@@ -1,0 +1,35 @@
+{
+  "schema": "pdp-one.implementation-phase.v1",
+  "status": "in_progress",
+  "change_management_mode": "development_fast",
+  "trial_mode": true,
+  "completion_trigger_exact_text": "پیاده سازی سامانه تکمیل شده است",
+  "workflow": [
+    "branch",
+    "ci",
+    "deploy_exact_commit",
+    "short_health_check",
+    "merge"
+  ],
+  "disabled_until_completion": [
+    "per_deploy_approval",
+    "per_change_database_backup",
+    "per_change_restore_verification",
+    "local_code_snapshot",
+    "automatic_rollback",
+    "heavy_preview_gate",
+    "long_agent_waits"
+  ],
+  "retained": [
+    "independent_branch",
+    "ci_and_tests",
+    "migration_control",
+    "no_docker_volume_deletion",
+    "exact_commit_deploy",
+    "short_health_check",
+    "deployment_audit",
+    "previous_commit_in_github"
+  ],
+  "rollback_method": "redeploy_previous_commit_from_github",
+  "backup_policy": "Only destructive migrations or sensitive database changes require a dedicated backup."
+}
