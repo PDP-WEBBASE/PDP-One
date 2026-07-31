@@ -22,12 +22,13 @@ class ProcurementAutomationSettingsTests(TestCase):
         self.client.force_authenticate(self.admin)
         self.settings = ProcurementAutomationSettings.objects.get(key="default")
 
-    def test_automation_is_disabled_by_default_and_command_is_pdp(self):
-        self.assertFalse(self.settings.enabled)
+    def test_guarded_automation_is_enabled_once_with_pdp_draft_workflow(self):
+        self.assertTrue(self.settings.enabled)
+        self.assertEqual(self.settings.cadence, ProcurementAutomationSettings.Cadence.DAILY)
+        self.assertEqual(str(self.settings.daily_time)[:5], "07:00")
         self.assertEqual(self.settings.manual_command, "PDP")
-        result = dispatch_due_extraction()
-        self.assertFalse(result["dispatched"])
-        self.assertEqual(result["reason"], "automation_disabled")
+        self.assertEqual(self.settings.analysis_delay_minutes, 15)
+        self.assertIsNotNone(self.settings.next_extraction_at)
 
     def test_daily_schedule_requires_time(self):
         response = self.client.patch(
@@ -53,7 +54,7 @@ class ProcurementAutomationSettingsTests(TestCase):
         self.assertIsNotNone(response.data["next_extraction_at"])
 
     @patch("procurement.tasks_automation.run_extraction.delay")
-    def test_dispatch_uses_only_enabled_connectors(self, mocked_delay):
+    def test_dispatch_uses_only_enabled_connectors_and_requests_draft_analysis(self, mocked_delay):
         ProcurementConnector.objects.filter(key="parsnamad_inquiries").update(enabled=False)
         self.settings.enabled = True
         self.settings.cadence = ProcurementAutomationSettings.Cadence.HOURLY
@@ -67,6 +68,6 @@ class ProcurementAutomationSettingsTests(TestCase):
         self.assertNotIn("parsnamad_inquiries", result["connector_keys"])
         run = ExtractionRun.objects.get(pk=result["run_id"])
         self.assertEqual(run.trigger, ExtractionRun.Trigger.SCHEDULED)
-        self.assertFalse(run.analyze_after_success)
+        self.assertTrue(run.analyze_after_success)
         self.assertFalse(run.connectors.filter(key="parsnamad_inquiries").exists())
         mocked_delay.assert_called_once_with(str(run.id))
