@@ -10,7 +10,9 @@ from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework.status import HTTP_400_BAD_REQUEST
 from rest_framework.viewsets import GenericViewSet
+
 from .models import AnalysisReport, AuditEvent, Contract, PaymentReceipt, Receivable
+from .procurement_analysis_bridge import handle_procurement_analysis_command
 from .serializers import AnalysisReportSerializer, ContractSerializer, PaymentReceiptSerializer, ReceivableSerializer
 
 
@@ -34,6 +36,12 @@ class AnalysisReportViewSet(DraftCreateReadViewSet):
     queryset = AnalysisReport.objects.all().order_by("-created_at")
     serializer_class = AnalysisReportSerializer
     search_fields = ["title", "summary"]
+
+    def create(self, request, *args, **kwargs):
+        bridged_response = handle_procurement_analysis_command(request)
+        if bridged_response is not None:
+            return bridged_response
+        return super().create(request, *args, **kwargs)
 
     def perform_create(self, serializer):
         report = serializer.save(requested_by=self.request.user, review_status=AnalysisReport.ReviewStatus.AI_DRAFT)
