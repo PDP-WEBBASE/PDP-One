@@ -25,9 +25,10 @@ IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 DEFAULT_TTL_SECONDS = 300
 MAX_TTL_SECONDS = 1800
 ACTION_TTL_SECONDS = {
-    # Layered health may wait for Windows startup and public-route retries.
-    # Keep other signed actions on the shorter default lifetime.
-    "check_deployment_health": 1200,
+    # Layered health can wait behind a long deployment, Windows startup,
+    # agent restart, and public-route retries. Other signed actions keep
+    # the shorter default lifetime.
+    "check_deployment_health": 1800,
 }
 ALLOWED_ACTIONS = {
     "approve_release",
