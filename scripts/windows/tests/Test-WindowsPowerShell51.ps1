@@ -81,12 +81,30 @@ try {
     Assert-True ($maintenanceScript -match 'private_files_volume_touched = \$false') 'Private-files volume protection marker is missing.'
     Assert-True ($maintenanceScript -match 'tailscale_volume_touched = \$false') 'Tailscale-volume protection marker is missing.'
     Assert-True ($updateScript -match 'Invoke-PDPOneDiskMaintenance\.ps1') 'Post-deployment disk maintenance is not wired into the updater.'
-    Assert-True ($updateScript -match '-ProtectedBackupPath \$BackupPath') 'Current rollback backup is not protected during cleanup.'
+    Assert-True ($updateScript -match 'if \(-not \$DevelopmentFastMode\) \{ \$maintenanceArgs \+= @\("-ProtectedBackupPath", \$BackupPath\) \}') 'Standard mode does not protect the current rollback backup during cleanup.'
 
+    # Standard mode must retain all approval, verified-backup and database-rollback gates.
     Assert-True ($agentScript -match 'state\\approved-backup\.json') 'Verified backup state is not recorded by the agent.'
-    Assert-True ($agentScript -match '-VerifiedBackupPath \(\[string\]\$backupState\.backup_path\)') 'Deploy does not reuse the verified backup.'
+    Assert-True ($agentScript -match '\$verifiedBackupPath = \[string\]\$backupState\.backup_path') 'Standard deployment does not bind the verified backup path.'
+    Assert-True ($agentScript -match 'No explicit release approval is recorded') 'Standard explicit-approval gate is missing.'
+    Assert-True ($agentScript -match 'No fresh verified final backup is recorded') 'Standard final-backup gate is missing.'
     Assert-True ($deploymentScript -match '\[string\]\$VerifiedBackupPath = ""') 'Deployment does not accept a verified backup path.'
     Assert-True ($deploymentScript -match 'Verified backup commit does not match') 'Verified backup commit binding is missing.'
+
+    # Trial development-fast mode may skip per-commit approval and database backup,
+    # but it must retain exact-commit validation, code snapshot, health and audit.
+    Assert-True ($agentScript -match 'PDP_CHANGE_MANAGEMENT_MODE') 'Explicit change-management mode is not read.'
+    Assert-True ($agentScript -match 'PDP_TRIAL_MODE') 'Trial-mode fallback is missing.'
+    Assert-True ($agentScript -match 'development_fast') 'Development-fast mode marker is missing.'
+    Assert-True ($agentScript -match 'if \(-not \$developmentFast\)') 'Standard gates are not isolated from development-fast mode.'
+    Assert-True ($agentScript -match 'backup_skipped = \[bool\]\$developmentFast') 'Development-fast deployment does not report backup skipping.'
+    Assert-True ($deploymentScript -match '\[switch\]\$DevelopmentFastMode') 'Deployment fast-mode switch is missing.'
+    Assert-True ($deploymentScript -match 'preparing-code-only-rollback') 'Code-only rollback preparation is missing.'
+    Assert-True ($deploymentScript -match 'snapshotting-current-code') 'Code snapshot is missing from fast mode.'
+    Assert-True ($deploymentScript -match 'GitHub exact-commit verification') 'Exact-commit verification is missing.'
+    Assert-True ($updateScript -match '\[switch\]\$DevelopmentFastMode') 'Updater fast-mode switch is missing.'
+    Assert-True ($updateScript -match '\$migrationAttempted -and -not \$DevelopmentFastMode') 'Fast mode may still restore an unverified database backup.'
+    Assert-True ($updateScript -match 'Layered post-update health failed') 'Post-update health gate is missing.'
     Assert-True ($deploymentScript -match 'Remove-Item -LiteralPath \$downloadDirectory -Recurse -Force') 'Deployment staging cleanup is missing.'
 
     Assert-True ($agentScript -match '"run_disk_maintenance"') 'Signed immediate disk-maintenance action is missing.'
