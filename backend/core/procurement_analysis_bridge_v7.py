@@ -1,3 +1,5 @@
+from datetime import timedelta
+
 from django.db import transaction
 from django.utils import timezone
 from rest_framework import status
@@ -135,7 +137,7 @@ def _start(request, payload):
             "stage": DirectOpportunity.Stage.SELECTED,
             "responsible": request.user,
             "next_action": "بازبینی انسانی اسناد و آماده‌سازی پیشنهاد آزمایشی",
-            "next_action_due": timezone.now() + timezone.timedelta(days=1),
+            "next_action_due": timezone.now() + timedelta(days=1),
             "description": (
                 "رکورد آزمایشی پذیرش جریان انتخاب تا قرارداد؛ تصمیم تجاری نهایی نیست.\n"
                 f"AI draft: {draft.id}\nNotice: {draft.notice_id}\nReason: {draft.reason}"
@@ -208,7 +210,7 @@ def _advance(request, payload):
     before = opportunity.stage
     opportunity.stage = target_stage
     opportunity.next_action = next_action_by_stage[target_stage]
-    opportunity.next_action_due = timezone.now() + timezone.timedelta(days=1)
+    opportunity.next_action_due = timezone.now() + timedelta(days=1)
     opportunity.last_activity_at = timezone.now()
     opportunity.save(update_fields=["stage", "next_action", "next_action_due", "last_activity_at", "updated_at"])
     AuditEvent.objects.create(
@@ -278,7 +280,7 @@ def _convert(request, payload):
         return Response({"detail": "Existing trial result points to a different contract."}, status=409)
     opportunity.stage = DirectOpportunity.Stage.CONVERTED_TO_CONTRACT
     opportunity.next_action = "بازبینی انسانی قرارداد پیش‌نویس آزمایشی"
-    opportunity.next_action_due = timezone.now() + timezone.timedelta(days=1)
+    opportunity.next_action_due = timezone.now() + timedelta(days=1)
     opportunity.last_activity_at = timezone.now()
     opportunity.save(update_fields=["stage", "next_action", "next_action_due", "last_activity_at", "updated_at"])
     AuditEvent.objects.create(
@@ -320,12 +322,12 @@ def handle_procurement_analysis_command(request):
     title = str(request.data.get("title", "")).strip()
     if title not in OPPORTUNITY_COMMANDS:
         return base.handle_procurement_analysis_command(request)
-    if not base.base._allowed(request.user):
+    if not base.v2._allowed(request.user):
         return Response(
             {"detail": "Guarded opportunity acceptance commands are limited to administrators and ChatGPT service account."},
             status=status.HTTP_403_FORBIDDEN,
         )
-    payload, error = base.base._parse_payload(request)
+    payload, error = base.v2._parse_payload(request)
     if error is not None:
         return error
     if title == OPPORTUNITY_PREFLIGHT_COMMAND:
