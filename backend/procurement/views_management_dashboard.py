@@ -29,11 +29,19 @@ def unified_management_dashboard(request):
     notice_by_type = {row["resolved_notice_type"]: row["count"] for row in notices.values("resolved_notice_type").annotate(count=Count("id"))}
     contract_totals = Contract.objects.aggregate(total_value=Sum("value_rials"))
     case_contracts = Contract.objects.filter(code__startswith="CASE-")
-    latest_runs = list(
-        ExtractionRun.objects.select_related("connector")
-        .order_by("connector_id", "-started_at")
-        .values("connector__key", "status", "started_at", "finished_at", "records_new", "records_updated", "records_failed")[:30]
-    )
+    latest_runs = [
+        {
+            "id": str(run.id),
+            "connector_keys": list(run.connectors.values_list("key", flat=True)),
+            "status": run.status,
+            "started_at": run.started_at,
+            "finished_at": run.finished_at,
+            "records_new": run.records_new,
+            "records_updated": run.records_updated,
+            "records_failed": run.records_failed,
+        }
+        for run in ExtractionRun.objects.prefetch_related("connectors").order_by("-created_at")[:20]
+    ]
 
     return Response({
         "generated_at": now,
