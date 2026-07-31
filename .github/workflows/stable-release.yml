@@ -1,0 +1,86 @@
+name: PDP One Stable Release
+
+on:
+  push:
+    branches:
+      - "release-publish/**"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: pdp-one-stable-release
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout trigger branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve and validate stable version
+        id: release
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin main --depth=1
+          version="$(tr -d '\r\n ' < release/VERSION)"
+          if [[ ! "$version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Invalid stable version: $version" >&2
+            exit 1
+          fi
+          marker_version="$(python - <<'PY'
+          import json
+          print(json.load(open('release/stable-mode.json', encoding='utf-8'))['release_version'])
+          PY
+          )"
+          if [[ "$marker_version" != "$version" ]]; then
+            echo "Release marker and VERSION disagree." >&2
+            exit 1
+          fi
+          target="$(git rev-parse origin/main)"
+          git merge-base --is-ancestor "$target" "$GITHUB_SHA"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "target=$target" >> "$GITHUB_OUTPUT"
+
+      - name: Verify release does not already point elsewhere
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.release.outputs.version }}
+          TARGET: ${{ steps.release.outputs.target }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git ls-remote --exit-code --tags origin "refs/tags/$VERSION" >/tmp/tag.txt 2>/dev/null; then
+            remote_sha="$(awk '{print $1}' /tmp/tag.txt)"
+            if [[ "$remote_sha" != "$TARGET" ]]; then
+              echo "Tag $VERSION already exists at a different commit." >&2
+              exit 1
+            fi
+          fi
+
+      - name: Create or verify GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.release.outputs.version }}
+          TARGET: ${{ steps.release.outputs.target }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if gh release view "$VERSION" >/dev/null 2>&1; then
+            existing_target="$(gh release view "$VERSION" --json targetCommitish --jq .targetCommitish)"
+            if [[ "$existing_target" != "$TARGET" && "$existing_target" != "main" ]]; then
+              echo "Release $VERSION already exists with another target." >&2
+              exit 1
+            fi
+            echo "Release $VERSION already exists and is compatible."
+          else
+            gh release create "$VERSION" \
+              --target "$TARGET" \
+              --title "PDP One $VERSION" \
+              --notes-file release/RELEASE_NOTES.md \
+              --verify-tag=false
+          fi
