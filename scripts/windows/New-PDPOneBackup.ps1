@@ -29,6 +29,17 @@ $ProjectRoot = Get-PDPOneProjectRoot
 Set-Location $ProjectRoot
 Start-PDPOneRancherDesktop -TimeoutSeconds 300
 $envPath = Assert-PDPOneConfiguration -ProjectRoot $ProjectRoot
+$stableMarker = $null
+$stableMarkerPath = Join-Path $ProjectRoot "release\stable-mode.json"
+if (Test-Path -LiteralPath $stableMarkerPath) {
+    $stableMarker = Get-Content -LiteralPath $stableMarkerPath -Raw -Encoding UTF8 | ConvertFrom-Json
+}
+$stableReleaseRequested = [bool](
+    $Kind -eq "final" -and
+    $ApprovedCommit -match '^[0-9a-f]{40}$' -and
+    $null -ne $stableMarker -and
+    [bool]$stableMarker.activate_standard_after_verified_backup
+)
 $timestamp = Get-Date -Format "yyyyMMdd-HHmmss"
 $backupId = "PDP-One-$Kind-Backup-$timestamp"
 $backupPath = Join-Path $BackupRoot $backupId
@@ -36,6 +47,9 @@ New-Item -ItemType Directory -Force -Path $backupPath | Out-Null
 & icacls.exe $backupPath /inheritance:r /grant:r "${env:USERNAME}:(OI)(CI)F" "SYSTEM:(OI)(CI)F" "Administrators:(OI)(CI)F" *> $null
 
 $externalRoot = Get-PDPOneEnvValue -Path $envPath -Name "PDP_EXTERNAL_BACKUP_ROOT"
+if ([string]::IsNullOrWhiteSpace($externalRoot) -and $stableReleaseRequested) {
+    $externalRoot = [string]$stableMarker.external_backup_root
+}
 $externalBackupPath = $null
 if (-not [string]::IsNullOrWhiteSpace($externalRoot)) {
     $externalRoot = [Environment]::ExpandEnvironmentVariables($externalRoot.Trim())
@@ -45,6 +59,9 @@ if (-not [string]::IsNullOrWhiteSpace($externalRoot)) {
     }
     New-Item -ItemType Directory -Force -Path $externalRoot | Out-Null
     $externalBackupPath = Join-Path $externalRoot $backupId
+}
+if ($stableReleaseRequested -and [bool]$stableMarker.require_external_backup -and -not $externalBackupPath) {
+    throw "Stable release backup requires the approved external mirror."
 }
 
 $volumes = [ordered]@{
@@ -126,6 +143,11 @@ $manifest = [ordered]@{
     external_backup_required = [bool]$externalBackupPath
     external_backup_path = $externalBackupPath
     external_backup_copied = $false
+    stable_release_requested = $stableReleaseRequested
+    stable_release_version = $(if ($stableReleaseRequested) { [string]$stableMarker.release_version } else { $null })
+    activate_standard_after_restore = $stableReleaseRequested
+    target_change_management_mode = $(if ($stableReleaseRequested) { "standard" } else { $null })
+    target_trial_mode = $(if ($stableReleaseRequested) { $false } else { $null })
 }
 $reportPath = Join-Path $backupPath "backup-report.json"
 $manifest | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $reportPath -Encoding UTF8
