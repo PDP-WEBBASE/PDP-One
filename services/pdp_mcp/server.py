@@ -299,7 +299,7 @@ async def run_disk_maintenance(keep_local_final_backups: int = 2) -> dict:
 
 
 @mcp.tool(
-    description="Return the active change-management workflow. Trial deployments use development-fast mode; non-trial deployments use the standard guarded workflow.",
+    description="Return the active change-management workflow. While implementation is in progress, development-fast mode uses branch, CI, exact-commit deploy, short health and merge without routine approval, backup, restore verification, local snapshot or automatic rollback.",
     annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, openWorldHint=False, idempotentHint=True),
 )
 async def prepare_web_change(summary: str) -> dict:
@@ -324,15 +324,26 @@ async def prepare_web_change(summary: str) -> dict:
         ),
         "standing_deploy_authorization": fast,
         "database_backup_required": not fast,
-        "code_snapshot_required": True,
+        "code_snapshot_required": not fast,
+        "restore_verification_required": not fast,
+        "automatic_rollback_enabled": not fast,
+        "approval_required": not fast,
+        "heavy_preview_gate_required": not fast,
+        "health_profile": "short" if fast else "layered",
+        "emergency_recovery": (
+            "redeploy_previous_commit_from_github"
+            if fast
+            else "verified_backup_and_code_snapshot"
+        ),
         "production_changed": False,
         "requires_github_branch": True,
         "standard_mode_returns_when_trial_mode_is_disabled": True,
+        "standard_mode_requires_explicit_implementation_completion": True,
     }
 
 
 @mcp.tool(
-    description="Return the Preview gate requirements. It does not deploy or modify the Windows installation.",
+    description="Return an exact-commit reference. In development-fast mode this is lightweight metadata only; the heavy Preview gate is reserved for standard mode.",
     annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, openWorldHint=False, idempotentHint=True),
 )
 async def create_preview(commit_sha: str) -> dict:
@@ -345,11 +356,15 @@ async def create_preview(commit_sha: str) -> dict:
         "gate": "standing-owner-authorization" if fast else "stop-for-explicit-user-approval",
         "preview_created_by": "GitHub/Sites workflow",
         "database_backup_required": not fast,
+        "restore_verification_required": not fast,
+        "code_snapshot_required": not fast,
+        "automatic_rollback_enabled": not fast,
+        "heavy_preview_gate_required": not fast,
     }
 
 
 @mcp.tool(
-    description="Record explicit user approval for one exact previewed commit. This does not deploy; approval expires after 24 hours.",
+    description="Record explicit approval for standard-mode deployment. Development-fast deployment uses standing owner authorization and does not require this per commit.",
     annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, openWorldHint=False, idempotentHint=False),
 )
 async def request_deployment_approval(commit_sha: str, preview_id: str, approval_text: str) -> dict:
@@ -367,7 +382,7 @@ async def request_deployment_approval(commit_sha: str, preview_id: str, approval
 
 
 @mcp.tool(
-    description="Ask the local agent to create and isolate-restore-verify a final backup tied to an approved commit. No deployment occurs.",
+    description="Create and isolate-restore-verify a final backup for standard mode or a commit explicitly marked as a destructive or sensitive database change.",
     annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, openWorldHint=False, idempotentHint=False),
 )
 async def create_final_backup(commit_sha: str, deployment_id: str) -> dict:
@@ -381,7 +396,7 @@ async def create_final_backup(commit_sha: str, deployment_id: str) -> dict:
 
 
 @mcp.tool(
-    description="Ask the local agent to re-run integrity and isolated restore verification for a named backup.",
+    description="Re-run integrity and isolated restore verification for a named backup used by standard mode or a sensitive database change.",
     annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, openWorldHint=False, idempotentHint=False),
 )
 async def verify_backup_restore(backup_id: str) -> dict:
@@ -389,7 +404,7 @@ async def verify_backup_restore(backup_id: str) -> dict:
 
 
 @mcp.tool(
-    description="Deploy only an exact, previously previewed and explicitly approved commit. The agent enforces a fresh verified final backup, health checks, locking, audit, and automatic rollback.",
+    description="Deploy one exact commit. Development-fast mode uses standing authorization, no routine database backup, no restore verification, no local code snapshot and no automatic rollback; standard mode retains the full guarded workflow.",
     annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True, openWorldHint=False, idempotentHint=False),
 )
 async def deploy_approved_release(commit_sha: str, deployment_id: str, preview_id: str) -> dict:
@@ -404,7 +419,7 @@ async def deploy_approved_release(commit_sha: str, deployment_id: str, preview_i
 
 
 @mcp.tool(
-    description="Ask the local agent to run the layered post-deployment health check.",
+    description="Run post-deployment health. Development-fast mode uses a short health profile; standard mode may use the full layered profile.",
     annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, openWorldHint=False, idempotentHint=False),
 )
 async def check_deployment_health(deployment_id: str = "") -> dict:
@@ -413,7 +428,7 @@ async def check_deployment_health(deployment_id: str = "") -> dict:
 
 
 @mcp.tool(
-    description="Roll back the latest matching deployment to its verified final backup and prior code snapshot. Requires user confirmation in the client.",
+    description="Run the standard-mode backup-and-snapshot rollback when explicitly requested. Development-fast recovery redeploys the previous GitHub commit instead.",
     annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True, openWorldHint=False, idempotentHint=False),
 )
 async def rollback_deployment(deployment_id: str, reason: str) -> dict:
