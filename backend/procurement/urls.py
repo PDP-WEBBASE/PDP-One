@@ -11,6 +11,7 @@ from .views_contract_draft import contract_draft_preview, create_contract_draft_
 from .views_direct import DirectOpportunityViewSet, OpportunityContactViewSet, OpportunityFollowUpViewSet, OpportunityResultViewSet
 from .views_documents import ProcurementSubmissionDocumentViewSet
 from .views_extraction import ExtractionRunViewSet
+from .views_management_dashboard import unified_management_dashboard
 from .views_review import AIReviewDraftViewSet, analysis_review_summary_view, review_analysis_draft, select_reviewed_analysis_draft
 
 router = DefaultRouter()
@@ -36,6 +37,7 @@ router.register("automation-settings", ProcurementAutomationSettingsViewSet, bas
 urlpatterns = [
     path("", include(router.urls)),
     path("dashboard/", procurement_dashboard, name="procurement-dashboard"),
+    path("management-dashboard/", unified_management_dashboard, name="procurement-management-dashboard"),
     path("cases/follow-up/users/", follow_up_users, name="case-follow-up-users"),
     path("cases/follow-up/summary/", follow_up_summary, name="case-follow-up-summary"),
     path("cases/<uuid:case_id>/follow-up/", case_follow_up, name="case-follow-up"),
