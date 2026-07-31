@@ -1,0 +1,30 @@
+{
+  "schema": "pdp-one.deployment-profile.v1",
+  "issue": 43,
+  "change_management_mode": "development_fast",
+  "database_change": {
+    "type": "additive",
+    "destructive": false,
+    "sensitive_data_rewrite": false,
+    "requires_special_backup": false,
+    "description": "Adds persistent procurement analysis run, queue item, dataset and import tables; existing procurement, contract and finance rows are not rewritten or deleted."
+  },
+  "required_checks": [
+    "frontend_lint",
+    "frontend_build_and_tests",
+    "python_compile",
+    "migration_drift_check",
+    "backend_tests",
+    "exact_commit_deploy",
+    "short_health_check",
+    "contract_and_receivable_count_invariance"
+  ],
+  "forbidden_operations": [
+    "docker_volume_delete",
+    "automatic_ai_draft_publish",
+    "automatic_opportunity_selection",
+    "automatic_contract_creation",
+    "automatic_receivable_creation",
+    "automatic_payment_receipt_creation"
+  ]
+}
