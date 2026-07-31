@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import gzip
+import json
 import os
 import re
 import shutil
@@ -12,17 +13,20 @@ from typing import Any
 
 from django.conf import settings
 from django.db import connection, transaction
+from django.db.models import Count
 from django.utils import timezone
 
 from core.models import AuditEvent
 
 from . import analysis_run_service as legacy
+from .models import ProcurementNotice
 from .models_analysis_runs import ProcurementAnalysisRun, ProcurementAnalysisRunItem
 
 _legacy_claim_run_items = legacy.claim_run_items
 _legacy_import_result_records = legacy.import_result_records
 _legacy_cancel_run = legacy.cancel_run
 _legacy_candidate_queryset = legacy._candidate_queryset
+_legacy_export_dataset = legacy.export_dataset
 
 
 def _candidate_queryset(run: ProcurementAnalysisRun):
@@ -104,12 +108,7 @@ def claim_run_items(
 
 @transaction.atomic
 def import_result_records(*args: Any, **kwargs: Any):
-    """Provide the transaction required by select_for_update in the importer.
-
-    The existing importer records each rejected row independently and only
-    creates AI drafts. The outer transaction makes the run lock valid and
-    preserves the existing duplicate/content/context checks.
-    """
+    """Provide the transaction required by select_for_update in the importer."""
     return _legacy_import_result_records(*args, **kwargs)
 
 
@@ -216,12 +215,82 @@ def _write_sql_dump(target: Path) -> dict[str, Any]:
             Path(temporary_name).unlink(missing_ok=True)
 
 
+def _procurement_table_counts() -> dict[str, int]:
+    counts: dict[str, int] = {}
+    with connection.cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT table_name
+            FROM information_schema.tables
+            WHERE table_schema = current_schema()
+              AND table_type = 'BASE TABLE'
+              AND table_name LIKE 'procurement_%'
+            ORDER BY table_name
+            """
+        )
+        table_names = [row[0] for row in cursor.fetchall()]
+        for table_name in table_names:
+            cursor.execute(f"SELECT COUNT(*) FROM {connection.ops.quote_name(table_name)}")
+            counts[table_name] = int(cursor.fetchone()[0])
+    return counts
+
+
+def _notice_counts() -> dict[str, int]:
+    all_notices = ProcurementNotice.objects.all()
+    active = all_notices.filter(soft_deleted_at__isnull=True)
+    now = timezone.now()
+    return {
+        "total": all_notices.count(),
+        "tenders": active.filter(resolved_notice_type=ProcurementNotice.NoticeType.TENDER).count(),
+        "inquiries": active.filter(resolved_notice_type=ProcurementNotice.NoticeType.INQUIRY).count(),
+        "expired": active.filter(submission_deadline__lt=now).count(),
+        "hidden": active.filter(is_hidden=True).count(),
+        "soft_deleted": all_notices.filter(soft_deleted_at__isnull=False).count(),
+        "multi_source": active.annotate(source_count=Count("source_links")).filter(source_count__gt=1).count(),
+    }
+
+
+def export_dataset(dataset_id: str, *, actor: str = "system"):
+    dataset = _legacy_export_dataset(dataset_id, actor=actor)
+    if dataset.status != dataset.Status.READY:
+        return dataset
+
+    table_counts = _procurement_table_counts()
+    notice_counts = _notice_counts()
+    files = list(dataset.files or [])
+    manifest_record = next((item for item in files if item.get("kind") == "manifest"), None)
+    if manifest_record:
+        manifest_path = Path(str(manifest_record["path"]))
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest["table_record_counts"] = table_counts
+        manifest["notice_counts"] = notice_counts
+        manifest["total_procurement_table_rows"] = sum(table_counts.values())
+        manifest_path.write_text(
+            json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True),
+            encoding="utf-8",
+        )
+        manifest_record["size_bytes"] = manifest_path.stat().st_size
+        manifest_record["sha256"] = legacy._sha256(manifest_path)
+
+    dataset.files = files
+    dataset.hashes = {item["name"]: item["sha256"] for item in files}
+    dataset.counts = {
+        **(dataset.counts or {}),
+        "table_record_counts": table_counts,
+        "notice_counts": notice_counts,
+        "total_procurement_table_rows": sum(table_counts.values()),
+    }
+    dataset.save(update_fields=["files", "hashes", "counts", "updated_at"])
+    return dataset
+
+
 def install() -> None:
     legacy._candidate_queryset = _candidate_queryset
     legacy.claim_run_items = claim_run_items
     legacy.import_result_records = import_result_records
     legacy.cancel_run = cancel_run
     legacy._write_sql_dump = _write_sql_dump
+    legacy.export_dataset = export_dataset
 
 
 install()
