@@ -4,7 +4,7 @@ from django.contrib.auth import get_user_model
 from django.db import transaction
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
-from rest_framework import status
+from rest_framework import serializers, status
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
@@ -125,17 +125,24 @@ def case_follow_up(request, case_id):
     if missing:
         return Response({"detail": "برخی همکاران در سامانه وجود ندارند.", "missing": missing}, status=status.HTTP_400_BAD_REQUEST)
 
-    responsible_username = str(request.data.get("responsible_username", "")).strip()
-    if responsible_username:
-        try:
-            responsible = get_user_model().objects.get(username=responsible_username, is_active=True)
-        except get_user_model().DoesNotExist:
-            return Response({"detail": "مسئول انتخاب‌شده در سامانه وجود ندارد."}, status=status.HTTP_400_BAD_REQUEST)
-        case.responsible = responsible
+    if "responsible_username" in request.data:
+        responsible_username = str(request.data.get("responsible_username", "")).strip()
+        if responsible_username:
+            try:
+                case.responsible = get_user_model().objects.get(username=responsible_username, is_active=True)
+            except get_user_model().DoesNotExist:
+                return Response({"detail": "مسئول انتخاب‌شده در سامانه وجود ندارد."}, status=status.HTTP_400_BAD_REQUEST)
+        else:
+            case.responsible = None
     if "next_action" in request.data:
         case.next_action = str(request.data.get("next_action", "")).strip()[:500]
     if "next_action_due" in request.data:
-        case.next_action_due = request.data.get("next_action_due") or None
+        try:
+            case.next_action_due = serializers.DateTimeField(allow_null=True).to_internal_value(
+                request.data.get("next_action_due") or None
+            )
+        except serializers.ValidationError:
+            return Response({"detail": "قالب موعد اقدام بعدی معتبر نیست."}, status=status.HTTP_400_BAD_REQUEST)
     case.save(update_fields=["responsible", "next_action", "next_action_due", "updated_at"])
 
     AuditEvent.objects.create(
