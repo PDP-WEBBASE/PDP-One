@@ -11,6 +11,28 @@ $ProgressPreference = "SilentlyContinue"
 Set-StrictMode -Version Latest
 . (Join-Path $PSScriptRoot "PDPOne.Common.ps1")
 
+function Sync-PDPOneVerifiedExternalBackup($Report, [string]$SourcePath, [string]$ReportPath) {
+    $externalRequired = $false
+    if ($null -ne $Report.PSObject.Properties["external_backup_required"]) {
+        $externalRequired = [bool]$Report.external_backup_required
+    }
+    if (-not $externalRequired) { return }
+    $externalPath = [string]$Report.external_backup_path
+    if ([string]::IsNullOrWhiteSpace($externalPath)) { throw "External backup path is missing from the report." }
+    $driveRoot = [IO.Path]::GetPathRoot($externalPath)
+    if (-not $driveRoot -or -not (Test-Path -LiteralPath $driveRoot)) { throw "External backup drive is not available during restore verification." }
+    New-Item -ItemType Directory -Force -Path $externalPath | Out-Null
+    & robocopy.exe $SourcePath $externalPath /MIR /COPY:DAT /DCOPY:DAT /R:2 /W:1 /NFL /NDL /NP
+    if ($LASTEXITCODE -gt 7) { throw "Verified backup could not be synchronized to the external drive." }
+    foreach ($entry in $Report.file_sha256.PSObject.Properties) {
+        $externalMember = Join-Path $externalPath $entry.Name
+        if (-not (Test-Path -LiteralPath $externalMember)) { throw "External backup member $($entry.Name) is missing." }
+        $externalHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $externalMember).Hash.ToLowerInvariant()
+        if ($externalHash -ne [string]$entry.Value) { throw "External backup member $($entry.Name) failed integrity validation." }
+    }
+    Copy-Item -LiteralPath $ReportPath -Destination (Join-Path $externalPath "backup-report.json") -Force
+}
+
 $reportPath = Join-Path $BackupPath "backup-report.json"
 if (-not (Test-Path -LiteralPath $reportPath)) { throw "Backup report is missing." }
 $report = Get-Content -LiteralPath $reportPath -Raw -Encoding UTF8 | ConvertFrom-Json
@@ -56,8 +78,12 @@ try {
     if ($LASTEXITCODE -ne 0) { throw "File archive validation failed." }
     $report.restore_verified = $true
     $report | Add-Member -NotePropertyName restore_verified_at -NotePropertyValue ((Get-Date).ToUniversalTime().ToString("o")) -Force
-    $report | Add-Member -NotePropertyName restore_test -NotePropertyValue ([ordered]@{ isolated_database = $true; migrations = [int]$migrationCount; contracts = [int]$contractCount; archives = $true; protected_environment = $true; portable_environment = [bool]$PortableEnvironmentPath }) -Force
+    $report | Add-Member -NotePropertyName restore_test -NotePropertyValue ([ordered]@{ isolated_database = $true; migrations = [int]$migrationCount; contracts = [int]$contractCount; archives = $true; protected_environment = $true; portable_environment = [bool]$PortableEnvironmentPath; external_mirror = [bool]$report.external_backup_required }) -Force
+    if ($null -ne $report.PSObject.Properties["external_backup_copied"] -and [bool]$report.external_backup_required) {
+        $report.external_backup_copied = $true
+    }
     $report | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $reportPath -Encoding UTF8
+    Sync-PDPOneVerifiedExternalBackup -Report $report -SourcePath $BackupPath -ReportPath $reportPath
     Write-Host "Backup restore verification succeeded in an isolated database." -ForegroundColor Green
 } finally {
     & docker rm --force $containerName *> $null
