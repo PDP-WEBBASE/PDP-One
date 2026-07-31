@@ -81,6 +81,5 @@ jobs:
             gh release create "$VERSION" \
               --target "$TARGET" \
               --title "PDP One $VERSION" \
-              --notes-file release/RELEASE_NOTES.md \
-              --verify-tag=false
+              --notes-file release/RELEASE_NOTES.md
           fi
