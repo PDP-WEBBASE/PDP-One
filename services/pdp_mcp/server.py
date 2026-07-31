@@ -6,6 +6,8 @@ from deployment_queue import enqueue, get_queue_status, get_response, validate_c
 from mcp.server.fastmcp import FastMCP
 from mcp.types import ToolAnnotations
 
+from procurement_analysis_tools import register_procurement_analysis_tools
+
 API_URL = os.getenv("PDP_API_URL", "http://localhost:8000/api/v1").rstrip("/")
 TOKEN = os.getenv("PDP_MCP_TOKEN", "")
 
@@ -47,6 +49,9 @@ async def api(method: str, path: str, **kwargs: Any) -> Any:
             suffix = f": {detail}" if detail else "."
             raise RuntimeError(f"PDP One API request failed with HTTP {exc.response.status_code}{suffix}") from exc
         return response.json()
+
+
+register_procurement_analysis_tools(mcp, api)
 
 
 @mcp.tool(

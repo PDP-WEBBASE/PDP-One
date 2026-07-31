@@ -5,6 +5,7 @@ import hashlib
 import json
 from pathlib import Path
 
+from django.conf import settings
 from django.http import FileResponse
 from django.shortcuts import get_object_or_404
 from rest_framework import status
@@ -313,7 +314,7 @@ def import_analysis_results(request, run_id):
         else:
             results = list(request.data.get("results") or [])
             calculated_hash = hashlib.sha256(
-                json.dumps(results, ensure_ascii=False, sort_keys=True).encode("utf-8")
+                json.dumps(results, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
             ).hexdigest()
         supplied_hash = str(request.data.get("result_hash") or calculated_hash)
         if supplied_hash != calculated_hash:

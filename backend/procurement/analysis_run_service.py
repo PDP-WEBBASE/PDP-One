@@ -392,7 +392,6 @@ def _draft_payload(result: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-@transaction.atomic
 def import_result_records(
     *,
     run_id: str,
