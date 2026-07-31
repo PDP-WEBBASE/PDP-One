@@ -20,16 +20,21 @@ class GuardedAutomationTests(TestCase):
     def setUp(self):
         AuditEvent.objects.filter(action=BOOTSTRAP_ACTION).delete()
         ProcurementAutomationSettings.objects.filter(key="default").delete()
+        ProcurementConnector.objects.update(enabled=False)
+        ProcurementSource.objects.update(enabled=False)
         self.source = ProcurementSource.objects.create(
             key="automation-source",
             name="منبع زمان‌بندی",
             base_url="https://example.com",
+            enabled=True,
         )
         self.connector = ProcurementConnector.objects.create(
             source=self.source,
             key="automation-tenders",
             notice_type=ProcurementConnector.NoticeType.TENDER,
             list_url_template="https://example.com/page-{page}",
+            enabled=True,
+            status=ProcurementConnector.Status.ACTIVE,
         )
         self.context = AnalysisContextSnapshot.objects.create(
             version=81,
