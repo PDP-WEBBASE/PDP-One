@@ -106,6 +106,7 @@ class AIReviewCenterTests(APITestCase):
         self.assertEqual(summary.data["needs_revision"], 1)
 
     def test_approve_then_select_creates_one_case_and_no_contract(self):
+        contract_count_before = Contract.objects.count()
         approved = self.client.post(
             f"/api/v1/procurement/analysis/engine/drafts/{self.draft.id}/review/",
             {"decision": "approved", "note": "برای بررسی اسناد تأیید شد."},
@@ -132,7 +133,7 @@ class AIReviewCenterTests(APITestCase):
         self.assertEqual(selected_again.status_code, 200)
         self.assertFalse(selected_again.data["created"])
         self.assertEqual(ProcurementCase.objects.filter(notice=self.notice).count(), 1)
-        self.assertEqual(Contract.objects.count(), 0)
+        self.assertEqual(Contract.objects.count(), contract_count_before)
         self.assertTrue(
             AuditEvent.objects.filter(action="procurement.notice_analysis.select_for_followup").exists()
         )
