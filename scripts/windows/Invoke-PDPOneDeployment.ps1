@@ -6,7 +6,8 @@ param(
     [Parameter(Mandatory = $true)][ValidatePattern('^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$')][string]$DeploymentId,
     [Parameter(Mandatory = $true)][ValidatePattern('^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$')][string]$PreviewId,
     [Parameter(Mandatory = $true)][string]$AgentRoot,
-    [string]$VerifiedBackupPath = ""
+    [string]$VerifiedBackupPath = "",
+    [switch]$DevelopmentFastMode
 )
 
 $ErrorActionPreference = "Stop"
@@ -46,6 +47,8 @@ $attemptState = [ordered]@{
     backup_path = $null
     code_archive = $null
     production_changed = $false
+    change_management_mode = $(if ($DevelopmentFastMode) { "development_fast" } else { "standard" })
+    backup_skipped = [bool]$DevelopmentFastMode
 }
 $attemptState | ConvertTo-Json | Set-Content -LiteralPath $reportPath -Encoding UTF8
 
@@ -90,9 +93,15 @@ try {
     $sourceRoot = Get-ChildItem -LiteralPath $extractDirectory -Directory | Select-Object -First 1
     if ($null -eq $sourceRoot -or -not (Test-Path -LiteralPath (Join-Path $sourceRoot.FullName "docker-compose.yml"))) { throw "Approved source archive structure is invalid." }
 
-    $attemptState.stage = "validating-final-backup"
+    $attemptState.stage = $(if ($DevelopmentFastMode) { "preparing-code-only-rollback" } else { "validating-final-backup" })
     $attemptState | ConvertTo-Json | Set-Content -LiteralPath $reportPath -Encoding UTF8
-    if ($VerifiedBackupPath) {
+    if ($DevelopmentFastMode) {
+        $rollbackRoot = Join-Path $AgentRoot "rollback\$DeploymentId"
+        if (Test-Path -LiteralPath $rollbackRoot) { Remove-Item -LiteralPath $rollbackRoot -Recurse -Force }
+        New-Item -ItemType Directory -Force -Path $rollbackRoot | Out-Null
+        $backupPath = $rollbackRoot
+        $attemptState.backup_path = $null
+    } elseif ($VerifiedBackupPath) {
         $backupRoot = "C:\ProgramData\PDP-One\backups"
         if (-not (Test-Path -LiteralPath $backupRoot)) { throw "The verified backup root does not exist." }
         $resolvedRoot = (Resolve-Path -LiteralPath $backupRoot).Path.TrimEnd('\')
@@ -105,15 +114,15 @@ try {
         if ([string]$backupReport.approved_commit -ne $CommitSha) { throw "Verified backup commit does not match the approved deployment commit." }
         if ([string]$backupReport.deployment_id -ne $DeploymentId) { throw "Verified backup deployment identifier does not match." }
         $backupPath = $resolvedBackup
+        $attemptState.backup_path = $backupPath
     } else {
         $backupOutput = @(& powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "New-PDPOneBackup.ps1") -Kind final -DeploymentId $DeploymentId -ApprovedCommit $CommitSha)
         if ($LASTEXITCODE -ne 0) { throw "Final backup creation failed. Deployment was not started." }
         $backupPath = [string]$backupOutput[-1]
         & powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "Test-PDPOneBackupRestore.ps1") -BackupPath $backupPath | Out-Null
         if ($LASTEXITCODE -ne 0) { throw "Final backup restore verification failed. Deployment was not started." }
+        $attemptState.backup_path = $backupPath
     }
-    $attemptState.backup_path = $backupPath
-
     $attemptState.stage = "snapshotting-current-code"
     $attemptState | ConvertTo-Json | Set-Content -LiteralPath $reportPath -Encoding UTF8
     $codeStage = Join-Path $downloadDirectory "previous-code"
@@ -132,6 +141,7 @@ try {
         code_archive = $codeArchive
         started_at = $attemptState.started_at
         status = "updating"
+        change_management_mode = $(if ($DevelopmentFastMode) { "development_fast" } else { "standard" })
     }
     $statePath = Join-Path $AgentRoot "state\last-deployment.json"
     $state | ConvertTo-Json | Set-Content -LiteralPath $statePath -Encoding UTF8
@@ -139,7 +149,19 @@ try {
     $attemptState.stage = "updating-production"
     $attemptState.production_changed = $true
     $attemptState | ConvertTo-Json | Set-Content -LiteralPath $reportPath -Encoding UTF8
-    & powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "Update-PDPOne.ps1") -SourceRoot $sourceRoot.FullName -InstalledRoot $ProjectRoot -ApprovedCommit $CommitSha -DeploymentId $DeploymentId -BackupPath $backupPath -CodeArchive $codeArchive -AgentAuthorized
+    $updateArgs = @(
+        "-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
+        (Join-Path $PSScriptRoot "Update-PDPOne.ps1"),
+        "-SourceRoot", $sourceRoot.FullName,
+        "-InstalledRoot", $ProjectRoot,
+        "-ApprovedCommit", $CommitSha,
+        "-DeploymentId", $DeploymentId,
+        "-BackupPath", $backupPath,
+        "-CodeArchive", $codeArchive,
+        "-AgentAuthorized"
+    )
+    if ($DevelopmentFastMode) { $updateArgs += "-DevelopmentFastMode" }
+    & powershell.exe @updateArgs
     if ($LASTEXITCODE -ne 0) {
         $state.status = "failed-or-rolled-back"
         $state.completed_at = (Get-Date).ToUniversalTime().ToString("o")

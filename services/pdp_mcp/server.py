@@ -9,6 +9,13 @@ from mcp.types import ToolAnnotations
 API_URL = os.getenv("PDP_API_URL", "http://localhost:8000/api/v1").rstrip("/")
 TOKEN = os.getenv("PDP_MCP_TOKEN", "")
 
+
+def development_fast_mode() -> bool:
+    configured = os.getenv("PDP_CHANGE_MANAGEMENT_MODE", "").strip().lower()
+    if configured:
+        return configured == "development_fast"
+    return os.getenv("PDP_TRIAL_MODE", "false").strip().lower() in {"1", "true", "yes"}
+
 mcp = FastMCP(
     "PDP One",
     instructions=(
@@ -292,25 +299,35 @@ async def run_disk_maintenance(keep_local_final_backups: int = 2) -> dict:
 
 
 @mcp.tool(
-    description="Return the mandatory guarded workflow for a proposed web change. Source changes still occur only on a separate GitHub branch.",
+    description="Return the active change-management workflow. Trial deployments use development-fast mode; non-trial deployments use the standard guarded workflow.",
     annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, openWorldHint=False, idempotentHint=True),
 )
 async def prepare_web_change(summary: str) -> dict:
+    fast = development_fast_mode()
     return {
         "summary": summary,
-        "workflow": [
-            "branch",
-            "tests",
-            "security review",
-            "preview",
-            "explicit approval",
-            "final verified backup",
-            "deploy",
-            "health",
-            "rollback on failure",
-        ],
+        "mode": "development_fast" if fast else "standard",
+        "workflow": (
+            ["branch", "tests", "security review", "deploy", "health", "merge"]
+            if fast
+            else [
+                "branch",
+                "tests",
+                "security review",
+                "preview",
+                "explicit approval",
+                "final verified backup",
+                "deploy",
+                "health",
+                "rollback on failure",
+            ]
+        ),
+        "standing_deploy_authorization": fast,
+        "database_backup_required": not fast,
+        "code_snapshot_required": True,
         "production_changed": False,
         "requires_github_branch": True,
+        "standard_mode_returns_when_trial_mode_is_disabled": True,
     }
 
 
@@ -320,11 +337,14 @@ async def prepare_web_change(summary: str) -> dict:
 )
 async def create_preview(commit_sha: str) -> dict:
     commit = validate_commit(commit_sha)
+    fast = development_fast_mode()
     return {
         "commit_sha": commit,
         "production_changed": False,
-        "gate": "stop-for-explicit-user-approval",
+        "mode": "development_fast" if fast else "standard",
+        "gate": "standing-owner-authorization" if fast else "stop-for-explicit-user-approval",
         "preview_created_by": "GitHub/Sites workflow",
+        "database_backup_required": not fast,
     }
 
 
