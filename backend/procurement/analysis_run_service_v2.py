@@ -27,10 +27,35 @@ _legacy_import_result_records = legacy.import_result_records
 _legacy_cancel_run = legacy.cancel_run
 _legacy_candidate_queryset = legacy._candidate_queryset
 _legacy_export_dataset = legacy.export_dataset
+_legacy_refresh_run_counters = legacy.refresh_run_counters
 
 
 def _candidate_queryset(run: ProcurementAnalysisRun):
     return _legacy_candidate_queryset(run).prefetch_related("analysis_drafts")
+
+
+def refresh_run_counters(run: ProcurementAnalysisRun, *, save: bool = True) -> dict[str, int]:
+    counters = _legacy_refresh_run_counters(run, save=False)
+    completed_items = run.items.filter(draft__isnull=False).select_related("draft")
+    recommended = completed_items.filter(draft__is_recommended=True).count()
+    urgent_drafts = completed_items.filter(draft__priority="urgent").count()
+    needs_information = 0
+    for raw_output in completed_items.values_list("draft__raw_output", flat=True).iterator(chunk_size=500):
+        if (raw_output or {}).get("missing_information"):
+            needs_information += 1
+    counters.update({
+        "ai_drafts": counters.get("completed", 0),
+        "deep_analyzed": counters.get("completed", 0),
+        "recommended": recommended,
+        "not_recommended": max(0, counters.get("completed", 0) - recommended),
+        "urgent_drafts": urgent_drafts,
+        "needs_information": needs_information,
+    })
+    if save:
+        run.counters = {**(run.counters or {}), **counters}
+        run.heartbeat_at = timezone.now()
+        run.save(update_fields=["counters", "heartbeat_at", "updated_at"])
+    return counters
 
 
 @transaction.atomic
@@ -286,6 +311,7 @@ def export_dataset(dataset_id: str, *, actor: str = "system"):
 
 def install() -> None:
     legacy._candidate_queryset = _candidate_queryset
+    legacy.refresh_run_counters = refresh_run_counters
     legacy.claim_run_items = claim_run_items
     legacy.import_result_records = import_result_records
     legacy.cancel_run = cancel_run
