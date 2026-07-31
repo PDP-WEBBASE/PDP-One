@@ -61,13 +61,20 @@ def system_status(request):
             "status": "unavailable",
             "safe_error": exc.__class__.__name__,
         }
+
+    from procurement.analysis_review import analysis_review_summary
+
+    procurement_analysis = analysis_review_summary()
+    general_analysis_drafts = AnalysisReport.objects.count()
     return Response({
         "service": "PDP One",
         "database": "connected",
         "trial_mode": os.getenv("PDP_TRIAL_MODE", "false").lower() in {"1", "true", "yes"},
         "contracts": Contract.objects.count(),
         "receivables": Receivable.objects.count(),
-        "analysis_drafts": AnalysisReport.objects.count(),
+        "analysis_drafts": procurement_analysis["total"],
+        "analysis_review": procurement_analysis,
+        "general_analysis_reports": general_analysis_drafts,
         "connector_acceptance": connector_acceptance,
     })
 
