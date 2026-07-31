@@ -2,14 +2,17 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
-test("routes procurement through V15 while preserving V14", async () => {
+test("routes procurement through V16 while preserving the V15 opportunity workflow", async () => {
   const page = await readFile(new URL("../app/procurement/page.tsx", import.meta.url), "utf8");
-  const wrapper = await readFile(new URL("../app/procurement/ProcurementWorkspaceV15.tsx", import.meta.url), "utf8");
+  const v16 = await readFile(new URL("../app/procurement/ProcurementWorkspaceV16.tsx", import.meta.url), "utf8");
+  const v15 = await readFile(new URL("../app/procurement/ProcurementWorkspaceV15.tsx", import.meta.url), "utf8");
 
-  assert.match(page, /ProcurementWorkspaceV15/);
-  assert.match(wrapper, /ProcurementWorkspaceV14/);
-  assert.match(wrapper, /OpportunityWorkflowPanel/);
-  assert.match(wrapper, /مدیریت فرصت‌ها/);
+  assert.match(page, /ProcurementWorkspaceV16/);
+  assert.match(v16, /ProcurementWorkspaceV15/);
+  assert.match(v16, /AIReviewCenterPanel/);
+  assert.match(v15, /ProcurementWorkspaceV14/);
+  assert.match(v15, /OpportunityWorkflowPanel/);
+  assert.match(v15, /مدیریت فرصت‌ها/);
 });
 
 test("loads live cases and notices and saves only explicit human changes", async () => {
