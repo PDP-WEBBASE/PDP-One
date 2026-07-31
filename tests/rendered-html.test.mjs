@@ -45,15 +45,18 @@ test("renders development preview metadata", async () => {
   assert.match(await response.text(), developmentPreviewMeta);
 });
 
-test("routes procurement to V14 while preserving the live V13 workspace", async () => {
+test("routes procurement to V15 while preserving the live V14 and V13 workspaces", async () => {
   const pageSource = await readFile(new URL("../app/procurement/page.tsx", import.meta.url), "utf8");
-  const wrapperSource = await readFile(new URL("../app/procurement/ProcurementWorkspaceV14.tsx", import.meta.url), "utf8");
+  const v15Source = await readFile(new URL("../app/procurement/ProcurementWorkspaceV15.tsx", import.meta.url), "utf8");
+  const v14Source = await readFile(new URL("../app/procurement/ProcurementWorkspaceV14.tsx", import.meta.url), "utf8");
   const workspaceSource = await readFile(new URL("../app/procurement/ProcurementWorkspaceV13.tsx", import.meta.url), "utf8");
 
-  assert.match(pageSource, /ProcurementWorkspaceV14/);
-  assert.match(wrapperSource, /ProcurementWorkspaceV13/);
-  assert.match(wrapperSource, /AnalysisContextManager/);
-  assert.match(wrapperSource, /AnalysisEnginePanel/);
+  assert.match(pageSource, /ProcurementWorkspaceV15/);
+  assert.match(v15Source, /ProcurementWorkspaceV14/);
+  assert.match(v15Source, /OpportunityWorkflowPanel/);
+  assert.match(v14Source, /ProcurementWorkspaceV13/);
+  assert.match(v14Source, /AnalysisContextManager/);
+  assert.match(v14Source, /AnalysisEnginePanel/);
   assert.match(workspaceSource, /متصل به API و پایگاه‌داده واقعی سامانه/);
   assert.doesNotMatch(workspaceSource, /Preview تعاملی/);
   assert.doesNotMatch(workspaceSource, /const notices\s*:/);
