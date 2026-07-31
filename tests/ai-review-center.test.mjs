@@ -20,9 +20,10 @@ test("AI review center uses live draft and summary APIs", async () => {
 test("review decisions and selection require explicit POST actions", async () => {
   const panel = await source("../app/procurement/AIReviewCenterPanel.tsx");
 
-  assert.match(panel, /decision:\s*"approved"/);
-  assert.match(panel, /decision:\s*"rejected"/);
-  assert.match(panel, /decision:\s*"needs_revision"/);
+  assert.match(panel, /review\("approved"\)/);
+  assert.match(panel, /review\("rejected"\)/);
+  assert.match(panel, /review\("needs_revision"\)/);
+  assert.match(panel, /body:\s*JSON\.stringify\(\{\s*decision,\s*note:/);
   assert.match(panel, /method:\s*"POST"/);
   assert.match(panel, /\/review\//);
   assert.match(panel, /\/select\//);
