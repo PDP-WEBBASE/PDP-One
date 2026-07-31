@@ -2,12 +2,9 @@
 
 import { FormEvent, useEffect, useMemo, useState } from "react";
 
-type CaseItem = {
+type RawCase = {
   id: string;
   notice: string;
-  notice_title: string;
-  notice_employer_name: string;
-  notice_type_label: string;
   stage: string;
   stage_label: string;
   responsible_username: string;
@@ -17,6 +14,19 @@ type CaseItem = {
   decision_reason: string;
   submission_document_count: number;
   updated_at: string;
+};
+
+type NoticeSummary = {
+  id: string;
+  title: string;
+  employer_name: string;
+  notice_type_label: string;
+};
+
+type CaseItem = RawCase & {
+  notice_title: string;
+  notice_employer_name: string;
+  notice_type_label: string;
 };
 
 type CaseDraft = {
@@ -30,7 +40,8 @@ type CaseDraft = {
 type Collection<T> = T[] | { results?: T[]; next?: string | null };
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "/api/v1";
-const CASES_API = `${API_BASE}/procurement/cases`;
+const PROCUREMENT_API = `${API_BASE}/procurement`;
+const CASES_API = `${PROCUREMENT_API}/cases`;
 
 const stageLabels: Record<string, string> = {
   selected: "منتخب",
@@ -59,20 +70,21 @@ const nextStages: Record<string, string[]> = {
 };
 
 const terminalStages = new Set(["won", "lost", "cancelled", "do_not_participate"]);
+const fieldStyle = { display:"block", width:"100%", boxSizing:"border-box", marginTop:5, padding:9, border:"1px solid #cbd5e1", borderRadius:9 } as const;
 
 function sameOriginPath(value: string) {
   const url = new URL(value, window.location.origin);
   return `${url.pathname}${url.search}`;
 }
 
-async function fetchCases(): Promise<CaseItem[]> {
-  const items: CaseItem[] = [];
-  let next: string | null = `${CASES_API}/?ordering=-updated_at`;
+async function fetchAll<T>(path: string): Promise<T[]> {
+  const items: T[] = [];
+  let next: string | null = path;
   let pages = 0;
   while (next && pages < 20) {
     const response = await fetch(next, { credentials: "include", headers: { Accept: "application/json" } });
-    if (!response.ok) throw new Error(response.status === 401 || response.status === 403 ? "برای مدیریت پرونده‌ها وارد سامانه شوید." : "دریافت پرونده‌ها انجام نشد.");
-    const payload = await response.json() as Collection<CaseItem>;
+    if (!response.ok) throw new Error(response.status === 401 || response.status === 403 ? "برای مدیریت پرونده‌ها وارد سامانه شوید." : "دریافت اطلاعات پرونده‌ها انجام نشد.");
+    const payload = await response.json() as Collection<T>;
     if (Array.isArray(payload)) {
       items.push(...payload);
       next = null;
@@ -83,6 +95,23 @@ async function fetchCases(): Promise<CaseItem[]> {
     pages += 1;
   }
   return items;
+}
+
+async function fetchCases(): Promise<CaseItem[]> {
+  const [cases, notices] = await Promise.all([
+    fetchAll<RawCase>(`${CASES_API}/?ordering=-updated_at`),
+    fetchAll<NoticeSummary>(`${PROCUREMENT_API}/notices/?ordering=-last_seen_at`),
+  ]);
+  const noticeById = new Map(notices.map((notice) => [notice.id, notice]));
+  return cases.map((item) => {
+    const notice = noticeById.get(item.notice);
+    return {
+      ...item,
+      notice_title: notice?.title || "عنوان فراخوان ثبت نشده",
+      notice_employer_name: notice?.employer_name || "",
+      notice_type_label: notice?.notice_type_label || "فراخوان",
+    };
+  });
 }
 
 async function csrfToken() {
@@ -96,8 +125,7 @@ function localInput(value: string | null) {
   if (!value) return "";
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return "";
-  const offset = date.getTimezoneOffset();
-  return new Date(date.getTime() - offset * 60000).toISOString().slice(0, 16);
+  return new Date(date.getTime() - date.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
 }
 
 function draftFor(item: CaseItem): CaseDraft {
@@ -131,9 +159,10 @@ export default function OpportunityWorkflowPanel({ onClose }: { onClose: () => v
     try {
       const loaded = await fetchCases();
       setItems(loaded);
-      if (!selectedId && loaded.length) {
-        setSelectedId(loaded[0].id);
-        setDraft(draftFor(loaded[0]));
+      const target = loaded.find((item) => item.id === selectedId) || loaded[0];
+      if (target) {
+        setSelectedId(target.id);
+        setDraft(draftFor(target));
       }
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "دریافت پرونده‌ها انجام نشد.");
@@ -176,10 +205,11 @@ export default function OpportunityWorkflowPanel({ onClose }: { onClose: () => v
           decision_reason: draft.decision_reason.trim(),
         }),
       });
-      const payload = await response.json();
-      if (!response.ok) throw new Error(payload.detail || Object.values(payload).flat().join(" ") || "به‌روزرسانی پرونده انجام نشد.");
-      setItems((current) => current.map((item) => item.id === selected.id ? payload as CaseItem : item));
-      setDraft(draftFor(payload as CaseItem));
+      const payload = await response.json() as RawCase & { detail?: string };
+      if (!response.ok) throw new Error(payload.detail || "به‌روزرسانی پرونده انجام نشد.");
+      const updated = { ...selected, ...payload } as CaseItem;
+      setItems((current) => current.map((item) => item.id === selected.id ? updated : item));
+      setDraft(draftFor(updated));
       setMessage("پرونده با موفقیت ذخیره و در Audit ثبت شد.");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "به‌روزرسانی پرونده انجام نشد.");
@@ -200,7 +230,7 @@ export default function OpportunityWorkflowPanel({ onClose }: { onClose: () => v
         <aside style={{borderInlineEnd:"1px solid #e2e8f0",padding:14,overflow:"auto",background:"#f8fafc"}}>
           <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="جست‌وجوی عنوان، کارفرما یا مرحله" style={{width:"100%",boxSizing:"border-box",padding:"10px 12px",border:"1px solid #cbd5e1",borderRadius:10,marginBottom:10}} />
           {loading ? <p>در حال دریافت پرونده‌های واقعی...</p> : filtered.length ? filtered.map((item) => <button key={item.id} type="button" onClick={() => choose(item)} style={{width:"100%",textAlign:"right",padding:12,marginBottom:8,border:item.id===selectedId?"2px solid #0f766e":"1px solid #dbe3ec",borderRadius:12,background:"white",cursor:"pointer"}}>
-            <b style={{display:"block",marginBottom:5}}>{item.notice_title || "عنوان ثبت نشده"}</b>
+            <b style={{display:"block",marginBottom:5}}>{item.notice_title}</b>
             <span style={{display:"block",fontSize:12,color:"#475569"}}>{item.notice_employer_name || "کارفرما نامشخص"} · {item.notice_type_label}</span>
             <span style={{display:"inline-block",marginTop:7,fontSize:11,padding:"3px 7px",borderRadius:999,background:terminalStages.has(item.stage)?"#f1f5f9":"#ecfdf5",color:terminalStages.has(item.stage)?"#475569":"#047857"}}>{item.stage_label}</span>
           </button>) : <p>پرونده‌ای مطابق جست‌وجو وجود ندارد.</p>}
@@ -211,12 +241,12 @@ export default function OpportunityWorkflowPanel({ onClose }: { onClose: () => v
           {!selected || !draft ? <p>یک پرونده را انتخاب کنید.</p> : <form onSubmit={save} style={{display:"grid",gap:13}}>
             <div><small style={{color:"#64748b"}}>{selected.notice_type_label}</small><h3 style={{margin:"4px 0"}}>{selected.notice_title}</h3><p style={{margin:0,color:"#475569"}}>{selected.notice_employer_name || "کارفرما نامشخص"}</p></div>
             <div style={{display:"grid",gridTemplateColumns:"repeat(2,minmax(0,1fr))",gap:12}}>
-              <label>مرحله<select value={draft.stage} onChange={(event) => setDraft({...draft,stage:event.target.value})} style={{display:"block",width:"100%",marginTop:5,padding:9,border:"1px solid #cbd5e1",borderRadius:9}}>{availableStages.map((stage) => <option key={stage} value={stage}>{stageLabels[stage] || stage}</option>)}</select></label>
-              <label>پیشرفت درصد<input type="number" min={0} max={100} value={draft.progress} onChange={(event) => setDraft({...draft,progress:Number(event.target.value)})} style={{display:"block",width:"100%",boxSizing:"border-box",marginTop:5,padding:9,border:"1px solid #cbd5e1",borderRadius:9}} /></label>
+              <label>مرحله<select value={draft.stage} onChange={(event) => setDraft({...draft,stage:event.target.value})} style={fieldStyle}>{availableStages.map((stage) => <option key={stage} value={stage}>{stageLabels[stage] || stage}</option>)}</select></label>
+              <label>پیشرفت درصد<input type="number" min={0} max={100} value={draft.progress} onChange={(event) => setDraft({...draft,progress:Number(event.target.value)})} style={fieldStyle} /></label>
             </div>
-            <label>اقدام بعدی<input value={draft.next_action} onChange={(event) => setDraft({...draft,next_action:event.target.value})} maxLength={500} style={{display:"block",width:"100%",boxSizing:"border-box",marginTop:5,padding:9,border:"1px solid #cbd5e1",borderRadius:9}} /></label>
-            <label>موعد اقدام بعدی<input type="datetime-local" value={draft.next_action_due} onChange={(event) => setDraft({...draft,next_action_due:event.target.value})} style={{display:"block",width:"100%",boxSizing:"border-box",marginTop:5,padding:9,border:"1px solid #cbd5e1",borderRadius:9}} /><small style={{color:"#64748b"}}>موعد فعلی: {dateLabel(selected.next_action_due)}</small></label>
-            <label>دلیل تصمیم<textarea value={draft.decision_reason} onChange={(event) => setDraft({...draft,decision_reason:event.target.value})} maxLength={500} rows={4} required={draft.stage === "do_not_participate"} style={{display:"block",width:"100%",boxSizing:"border-box",marginTop:5,padding:9,border:"1px solid #cbd5e1",borderRadius:9,resize:"vertical"}} /></label>
+            <label>اقدام بعدی<input value={draft.next_action} onChange={(event) => setDraft({...draft,next_action:event.target.value})} maxLength={500} style={fieldStyle} /></label>
+            <label>موعد اقدام بعدی<input type="datetime-local" value={draft.next_action_due} onChange={(event) => setDraft({...draft,next_action_due:event.target.value})} style={fieldStyle} /><small style={{color:"#64748b"}}>موعد فعلی: {dateLabel(selected.next_action_due)}</small></label>
+            <label>دلیل تصمیم<textarea value={draft.decision_reason} onChange={(event) => setDraft({...draft,decision_reason:event.target.value})} maxLength={500} rows={4} required={draft.stage === "do_not_participate"} style={{...fieldStyle,resize:"vertical"}} /></label>
             <dl style={{display:"grid",gridTemplateColumns:"repeat(3,minmax(0,1fr))",gap:8,margin:0}}><div><dt style={{fontSize:11,color:"#64748b"}}>مسئول</dt><dd style={{margin:0}}>{selected.responsible_username || "تعیین نشده"}</dd></div><div><dt style={{fontSize:11,color:"#64748b"}}>اسناد ارسالی</dt><dd style={{margin:0}}>{selected.submission_document_count}</dd></div><div><dt style={{fontSize:11,color:"#64748b"}}>مرحله فعلی</dt><dd style={{margin:0}}>{selected.stage_label}</dd></div></dl>
             <div style={{display:"flex",justifyContent:"space-between",gap:10,flexWrap:"wrap",marginTop:4}}><button type="button" onClick={() => void load()} style={{padding:"9px 13px",border:"1px solid #cbd5e1",borderRadius:9,background:"white",cursor:"pointer"}}>بازخوانی</button><button type="submit" disabled={saving} style={{padding:"10px 16px",border:0,borderRadius:9,background:"#0f766e",color:"white",fontWeight:700,cursor:"pointer"}}>{saving ? "در حال ذخیره..." : "ذخیره تغییرات پرونده"}</button></div>
           </form>}
