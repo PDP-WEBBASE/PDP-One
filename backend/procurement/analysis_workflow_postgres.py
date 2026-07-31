@@ -10,14 +10,10 @@ from .models_analysis import AnalysisBatch, AnalysisRequest
 
 @transaction.atomic
 def start_analysis_request(analysis_request: AnalysisRequest, *, limit: int, actor: str):
-    # PostgreSQL rejects FOR UPDATE when select_related includes the nullable
-    # extraction_run relation. Lock only the request row and its non-nullable
-    # context relation; extraction_run remains available through lazy loading.
-    locked = (
-        AnalysisRequest.objects.select_for_update()
-        .select_related("context_snapshot")
-        .get(pk=analysis_request.pk)
-    )
+    # Both context_snapshot and extraction_run are nullable foreign keys.
+    # PostgreSQL rejects FOR UPDATE when either nullable relation is joined.
+    # Lock only the AnalysisRequest row; related objects are loaded lazily.
+    locked = AnalysisRequest.objects.select_for_update().get(pk=analysis_request.pk)
     existing_batch = locked.batches.order_by("sequence").first()
     if existing_batch is not None and base._metadata_ids(locked):
         return locked, existing_batch
