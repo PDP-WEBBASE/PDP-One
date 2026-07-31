@@ -15,8 +15,10 @@ test("routes procurement through V15 while preserving V14", async () => {
 test("loads live cases and notices and saves only explicit human changes", async () => {
   const panel = await readFile(new URL("../app/procurement/OpportunityWorkflowPanel.tsx", import.meta.url), "utf8");
 
-  assert.match(panel, /procurement\/cases/);
-  assert.match(panel, /procurement\/notices/);
+  assert.match(panel, /const PROCUREMENT_API = `\$\{API_BASE\}\/procurement`/);
+  assert.match(panel, /const CASES_API = `\$\{PROCUREMENT_API\}\/cases`/);
+  assert.match(panel, /fetchAll<RawCase>\(`\$\{CASES_API\}\/\?ordering=-updated_at`\)/);
+  assert.match(panel, /fetchAll<NoticeSummary>\(`\$\{PROCUREMENT_API\}\/notices\/\?ordering=-last_seen_at`\)/);
   assert.match(panel, /method:\s*"PATCH"/);
   assert.match(panel, /X-CSRFToken/);
   assert.match(panel, /next_action_due/);
