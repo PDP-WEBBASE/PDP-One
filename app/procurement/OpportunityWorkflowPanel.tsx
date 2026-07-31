@@ -171,7 +171,25 @@ export default function OpportunityWorkflowPanel({ onClose }: { onClose: () => v
     }
   }
 
-  useEffect(() => { void load(); }, []);
+  useEffect(() => {
+    let active = true;
+    fetchCases()
+      .then((loaded) => {
+        if (!active) return;
+        setItems(loaded);
+        if (loaded[0]) {
+          setSelectedId(loaded[0].id);
+          setDraft(draftFor(loaded[0]));
+        }
+      })
+      .catch((error) => {
+        if (active) setMessage(error instanceof Error ? error.message : "دریافت پرونده‌ها انجام نشد.");
+      })
+      .finally(() => {
+        if (active) setLoading(false);
+      });
+    return () => { active = false; };
+  }, []);
 
   const selected = items.find((item) => item.id === selectedId) || null;
   const filtered = useMemo(() => items.filter((item) => `${item.notice_title} ${item.notice_employer_name} ${item.stage_label}`.includes(search.trim())), [items, search]);
