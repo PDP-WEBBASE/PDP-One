@@ -84,6 +84,24 @@ try {
     }
     $report | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $reportPath -Encoding UTF8
     Sync-PDPOneVerifiedExternalBackup -Report $report -SourcePath $BackupPath -ReportPath $reportPath
+
+    $activateStandard = $false
+    if ($null -ne $report.PSObject.Properties["activate_standard_after_restore"]) {
+        $activateStandard = [bool]$report.activate_standard_after_restore
+    }
+    if ($activateStandard) {
+        $activationScript = Join-Path $PSScriptRoot "Activate-PDPOneStandardMode.ps1"
+        if (-not (Test-Path -LiteralPath $activationScript)) { throw "Stable-mode activation script is missing." }
+        $activationOutput = @(& powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File $activationScript -BackupPath $BackupPath -ApprovedCommit ([string]$report.approved_commit) -DeploymentId ([string]$report.deployment_id))
+        if ($LASTEXITCODE -ne 0) { throw "Stable-mode activation failed after restore verification." }
+        $report | Add-Member -NotePropertyName standard_mode_activated -NotePropertyValue $true -Force
+        $report | Add-Member -NotePropertyName standard_mode_activated_at -NotePropertyValue ((Get-Date).ToUniversalTime().ToString("o")) -Force
+        if ($activationOutput.Count -gt 0) {
+            $report | Add-Member -NotePropertyName stable_release_state_path -NotePropertyValue ([string]$activationOutput[-1]) -Force
+        }
+        $report | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $reportPath -Encoding UTF8
+        Sync-PDPOneVerifiedExternalBackup -Report $report -SourcePath $BackupPath -ReportPath $reportPath
+    }
     Write-Host "Backup restore verification succeeded in an isolated database." -ForegroundColor Green
 } finally {
     & docker rm --force $containerName *> $null
