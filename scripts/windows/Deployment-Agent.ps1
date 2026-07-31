@@ -16,7 +16,8 @@ $envPath = Assert-PDPOneConfiguration -ProjectRoot $projectRoot
 $phasePath = Join-Path $projectRoot "release\implementation-in-progress.json"
 
 if (Test-Path -LiteralPath $phasePath) {
-    $phase = Get-Content -LiteralPath $phasePath -Raw -Encoding UTF8 | ConvertFrom-Json
+    $phaseText = [IO.File]::ReadAllText($phasePath, [Text.Encoding]::UTF8)
+    $phase = $phaseText | ConvertFrom-Json
     if ([string]$phase.status -eq "in_progress") {
         $previousMode = [string](Get-PDPOneEnvValue -Path $envPath -Name "PDP_CHANGE_MANAGEMENT_MODE")
         $previousTrial = [string](Get-PDPOneEnvValue -Path $envPath -Name "PDP_TRIAL_MODE")
