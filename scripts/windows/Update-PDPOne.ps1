@@ -8,7 +8,8 @@ param(
     [string]$DeploymentId = "",
     [string]$BackupPath = "",
     [string]$CodeArchive = "",
-    [switch]$AgentAuthorized
+    [switch]$AgentAuthorized,
+    [switch]$DevelopmentFastMode
 )
 
 $ErrorActionPreference = "Stop"
@@ -119,8 +120,8 @@ $envPath = Assert-PDPOneConfiguration -ProjectRoot $InstalledRoot
 $tokenBefore = Get-PDPOneTokenFingerprint (Get-PDPOneEnvValue $envPath "PDP_MCP_PATH_TOKEN")
 
 if ($AgentAuthorized) {
-    if ($ApprovedCommit -notmatch '^[0-9a-f]{40}$' -or -not $DeploymentId -or -not $BackupPath -or -not $CodeArchive) {
-        throw "Agent-authorized update is missing its locked commit, deployment, backup, or rollback snapshot."
+    if ($ApprovedCommit -notmatch '^[0-9a-f]{40}$' -or -not $DeploymentId -or -not $CodeArchive -or (-not $DevelopmentFastMode -and -not $BackupPath)) {
+        throw "Agent-authorized update is missing its locked commit, deployment, or rollback snapshot."
     }
 } else {
     Write-Host "Emergency manual update: creating and restore-verifying a backup first." -ForegroundColor Yellow
@@ -137,8 +138,11 @@ if ($AgentAuthorized) {
     Remove-Item -LiteralPath $stage -Recurse -Force
 }
 
-$backupReport = Get-Content -LiteralPath (Join-Path $BackupPath "backup-report.json") -Raw | ConvertFrom-Json
-if (-not $backupReport.restore_verified) { throw "Update is blocked: the linked backup has not passed restore verification." }
+$backupReport = $null
+if (-not $DevelopmentFastMode) {
+    $backupReport = Get-Content -LiteralPath (Join-Path $BackupPath "backup-report.json") -Raw | ConvertFrom-Json
+    if (-not $backupReport.restore_verified) { throw "Update is blocked: the linked backup has not passed restore verification." }
+}
 
 $releaseSuffix = $(if ($ApprovedCommit -match '^[0-9a-f]{40}$') { $ApprovedCommit.Substring(0, 12) } else { (Get-Date).ToString("yyyyMMddHHmm") })
 $candidateImages = [ordered]@{
@@ -221,7 +225,14 @@ try {
     # the release is healthy. It never prunes Docker volumes. A maintenance
     # failure is recorded as a warning and must not roll back a healthy release.
     try {
-        $maintenanceOutput = @(& powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File (Join-Path $InstalledRoot "scripts\windows\Invoke-PDPOneDiskMaintenance.ps1") -Mode post-deployment -KeepLocalFinalBackups 2 -ProtectedBackupPath $BackupPath)
+        $maintenanceArgs = @(
+            "-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
+            (Join-Path $InstalledRoot "scripts\windows\Invoke-PDPOneDiskMaintenance.ps1"),
+            "-Mode", "post-deployment",
+            "-KeepLocalFinalBackups", "2"
+        )
+        if (-not $DevelopmentFastMode) { $maintenanceArgs += @("-ProtectedBackupPath", $BackupPath) }
+        $maintenanceOutput = @(& powershell.exe @maintenanceArgs)
         if ($LASTEXITCODE -ne 0) {
             Write-Warning "PDP One was updated successfully, but automatic disk maintenance returned a failure."
         } elseif ($maintenanceOutput.Count -gt 0) {
@@ -246,14 +257,14 @@ try {
             "-CodeArchive", $CodeArchive,
             "-Automatic"
         )
-        if ($migrationAttempted) { $rollbackArgs += "-RestoreDatabase" }
+        if ($migrationAttempted -and -not $DevelopmentFastMode) { $rollbackArgs += "-RestoreDatabase" }
         & powershell.exe @rollbackArgs
         $rollbackCode = $LASTEXITCODE
         $rollbackResult = $(if ($rollbackCode -eq 0) { "healthy" } else { "failed" })
     }
 
     $diagnosticDeploymentId = $(if ([string]::IsNullOrWhiteSpace($DeploymentId)) { "manual-update" } else { $DeploymentId })
-    $diagnosticBackupId = $(if ($null -ne $backupReport -and -not [string]::IsNullOrWhiteSpace([string]$backupReport.backup_id)) { [string]$backupReport.backup_id } else { "unknown-backup" })
+    $diagnosticBackupId = $(if ($DevelopmentFastMode) { "development-fast-no-database-backup" } elseif ($null -ne $backupReport -and -not [string]::IsNullOrWhiteSpace([string]$backupReport.backup_id)) { [string]$backupReport.backup_id } else { "unknown-backup" })
     $diagnosticArgs = @(
         "-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
         (Join-Path $PSScriptRoot "New-PDPOneDiagnostics.ps1"),

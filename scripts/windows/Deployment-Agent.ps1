@@ -10,6 +10,11 @@ Set-StrictMode -Version Latest
 $mutex = New-Object Threading.Mutex($false, "Global\PDP-One-Deployment-Agent")
 if (-not $mutex.WaitOne(0)) { exit 0 }
 $restartAfterResponse = $false
+$script:PDPOneChangeManagementMode = "standard"
+
+function Test-PDPOneDevelopmentFastMode {
+    return $script:PDPOneChangeManagementMode -eq "development_fast"
+}
 
 function Write-AgentAudit([string]$RequestId, [string]$Action, [string]$Status, [string]$Message) {
     $entry = [ordered]@{
@@ -99,25 +104,56 @@ function Invoke-AgentAction($Payload) {
         "deploy_approved_release" {
             $deploymentId = Assert-SafeIdentifier ([string]$params.deployment_id) "deployment_id"
             $previewId = Assert-SafeIdentifier ([string]$params.preview_id) "preview_id"
+            $commit = [string]$params.commit_sha
+            if ($commit -notmatch '^[0-9a-f]{40}$') { throw "Deployment commit is invalid." }
+            $developmentFast = Test-PDPOneDevelopmentFastMode
             $approvalPath = Join-Path $AgentRoot "state\approved-release.json"
-            if (-not (Test-Path -LiteralPath $approvalPath)) { throw "No explicit release approval is recorded." }
-            $approval = Get-Content -LiteralPath $approvalPath -Raw -Encoding UTF8 | ConvertFrom-Json
-            if ([DateTimeOffset]::Parse($approval.expires_at) -le [DateTimeOffset]::UtcNow) { throw "Release approval expired." }
-            if ($approval.commit_sha -ne ([string]$params.commit_sha) -or $approval.preview_id -ne $previewId) { throw "Requested deployment does not match the approved preview." }
-
             $backupStatePath = Join-Path $AgentRoot "state\approved-backup.json"
-            if (-not (Test-Path -LiteralPath $backupStatePath)) { throw "No fresh verified final backup is recorded for this deployment." }
-            $backupState = Get-Content -LiteralPath $backupStatePath -Raw -Encoding UTF8 | ConvertFrom-Json
-            if ([DateTimeOffset]::Parse($backupState.expires_at) -le [DateTimeOffset]::UtcNow) { throw "Verified final backup authorization expired." }
-            if ([string]$backupState.commit_sha -ne ([string]$params.commit_sha)) { throw "Verified final backup commit does not match the approved deployment." }
-            if ([string]$backupState.deployment_id -ne $deploymentId) { throw "Verified final backup deployment identifier does not match." }
-            if (-not [bool]$backupState.restore_verified -or -not (Test-Path -LiteralPath ([string]$backupState.backup_path))) { throw "Verified final backup is not available." }
+            $verifiedBackupPath = ""
+            $verifiedBackupId = ""
 
-            $report = & powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File (Join-Path $scripts "Invoke-PDPOneDeployment.ps1") -CommitSha ([string]$params.commit_sha) -DeploymentId $deploymentId -PreviewId $previewId -AgentRoot $AgentRoot -VerifiedBackupPath ([string]$backupState.backup_path)
+            if (-not $developmentFast) {
+                if (-not (Test-Path -LiteralPath $approvalPath)) { throw "No explicit release approval is recorded." }
+                $approval = Get-Content -LiteralPath $approvalPath -Raw -Encoding UTF8 | ConvertFrom-Json
+                if ([DateTimeOffset]::Parse($approval.expires_at) -le [DateTimeOffset]::UtcNow) { throw "Release approval expired." }
+                if ($approval.commit_sha -ne $commit -or $approval.preview_id -ne $previewId) { throw "Requested deployment does not match the approved preview." }
+
+                if (-not (Test-Path -LiteralPath $backupStatePath)) { throw "No fresh verified final backup is recorded for this deployment." }
+                $backupState = Get-Content -LiteralPath $backupStatePath -Raw -Encoding UTF8 | ConvertFrom-Json
+                if ([DateTimeOffset]::Parse($backupState.expires_at) -le [DateTimeOffset]::UtcNow) { throw "Verified final backup authorization expired." }
+                if ([string]$backupState.commit_sha -ne $commit) { throw "Verified final backup commit does not match the approved deployment." }
+                if ([string]$backupState.deployment_id -ne $deploymentId) { throw "Verified final backup deployment identifier does not match." }
+                if (-not [bool]$backupState.restore_verified -or -not (Test-Path -LiteralPath ([string]$backupState.backup_path))) { throw "Verified final backup is not available." }
+                $verifiedBackupPath = [string]$backupState.backup_path
+                $verifiedBackupId = [string]$backupState.backup_id
+            }
+
+            $deploymentArgs = @(
+                "-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
+                (Join-Path $scripts "Invoke-PDPOneDeployment.ps1"),
+                "-CommitSha", $commit,
+                "-DeploymentId", $deploymentId,
+                "-PreviewId", $previewId,
+                "-AgentRoot", $AgentRoot
+            )
+            if ($developmentFast) {
+                $deploymentArgs += "-DevelopmentFastMode"
+            } else {
+                $deploymentArgs += @("-VerifiedBackupPath", $verifiedBackupPath)
+            }
+            $report = @(& powershell.exe @deploymentArgs)
             if ($LASTEXITCODE -ne 0) { throw "Deployment failed; see the rollback result in the deployment report." }
-            Remove-Item -LiteralPath $approvalPath -Force
-            Remove-Item -LiteralPath $backupStatePath -Force
-            return @{ deployment_id = ([string]$params.deployment_id); commit_sha = ([string]$params.commit_sha); status = "healthy"; report = ($report | Select-Object -Last 1); reused_verified_backup = [string]$backupState.backup_id }
+            Remove-Item -LiteralPath $approvalPath -Force -ErrorAction SilentlyContinue
+            Remove-Item -LiteralPath $backupStatePath -Force -ErrorAction SilentlyContinue
+            return @{
+                deployment_id = $deploymentId
+                commit_sha = $commit
+                status = "healthy"
+                report = ([string]$report[-1])
+                change_management_mode = $(if ($developmentFast) { "development_fast" } else { "standard" })
+                backup_skipped = [bool]$developmentFast
+                reused_verified_backup = $verifiedBackupId
+            }
         }
         "check_deployment_health" {
             $deploymentId = Assert-SafeIdentifier ([string]$params.deployment_id) "deployment_id"
@@ -168,9 +204,18 @@ function Invoke-AgentAction($Payload) {
             if (-not (Test-Path -LiteralPath $statePath)) { throw "No deployment state is available for rollback." }
             $state = Get-Content -LiteralPath $statePath -Raw -Encoding UTF8 | ConvertFrom-Json
             if ($state.deployment_id -ne $deploymentId) { throw "Rollback deployment identifier does not match." }
-            & powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File (Join-Path $scripts "Rollback-PDPOne.ps1") -BackupPath $state.backup_path -CodeArchive $state.code_archive -Automatic -RestoreDatabase
+            $rollbackArgs = @(
+                "-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
+                (Join-Path $scripts "Rollback-PDPOne.ps1"),
+                "-BackupPath", ([string]$state.backup_path),
+                "-CodeArchive", ([string]$state.code_archive),
+                "-Automatic"
+            )
+            $mode = if ($null -ne $state.PSObject.Properties["change_management_mode"]) { [string]$state.change_management_mode } else { "standard" }
+            if ($mode -ne "development_fast") { $rollbackArgs += "-RestoreDatabase" }
+            & powershell.exe @rollbackArgs
             if ($LASTEXITCODE -ne 0) { throw "Rollback failed." }
-            return @{ deployment_id = $state.deployment_id; rollback = "healthy"; reason = (ConvertTo-PDPOneRedactedText ([string]$params.reason)) }
+            return @{ deployment_id = $state.deployment_id; rollback = "healthy"; change_management_mode = $mode; reason = (ConvertTo-PDPOneRedactedText ([string]$params.reason)) }
         }
         "rotate_mcp_token" {
             if (([string]$params.confirmation) -cne "ROTATE MCP TOKEN") { throw "Rotation confirmation is invalid." }
@@ -190,6 +235,15 @@ try {
     :AgentLoop do {
         $ProjectRoot = Get-PDPOneProjectRoot
         $envPath = Assert-PDPOneConfiguration -ProjectRoot $ProjectRoot
+        $configuredChangeMode = [string](Get-PDPOneEnvValue $envPath "PDP_CHANGE_MANAGEMENT_MODE")
+        $trialModeValue = [string](Get-PDPOneEnvValue $envPath "PDP_TRIAL_MODE")
+        if ([string]::IsNullOrWhiteSpace($configuredChangeMode)) {
+            $script:PDPOneChangeManagementMode = $(if ($trialModeValue.ToLowerInvariant() -in @("1", "true", "yes")) { "development_fast" } else { "standard" })
+        } elseif ($configuredChangeMode -in @("development_fast", "standard")) {
+            $script:PDPOneChangeManagementMode = $configuredChangeMode
+        } else {
+            throw "PDP_CHANGE_MANAGEMENT_MODE must be development_fast or standard."
+        }
         $signingKey = Get-PDPOneEnvValue $envPath "PDP_DEPLOYMENT_AGENT_SIGNING_KEY"
         if ([string]::IsNullOrWhiteSpace($signingKey) -or $signingKey.Length -lt 32) { throw "Deployment-agent signing key is missing." }
         Set-Location $ProjectRoot
