@@ -2,10 +2,9 @@
 #requires -RunAsAdministrator
 [CmdletBinding()]
 param(
-    [ValidateSet("startup", "predeploy", "scheduled", "emergency")][string]$Mode = "scheduled",
+    [ValidateSet("startup", "predeploy", "postdeploy", "scheduled", "emergency")][string]$Mode = "scheduled",
     [int]$CleanupThresholdGB = 10,
     [int]$TargetFreeGB = 15,
-    [int]$MinimumDeployFreeGB = 8,
     [int]$CriticalFreeGB = 3,
     [int]$KeepLocalFinalBackups = 2,
     [string]$ProjectRoot = "",
@@ -36,6 +35,8 @@ function Get-PDPOneDirectoryBytes([string]$Path) {
 
 function Invoke-PDPOneSafeNative([string]$Command, [string[]]$Arguments, [switch]$IgnoreFailure) {
     $previous = $ErrorActionPreference
+    $output = @()
+    $code = -1
     try {
         $ErrorActionPreference = "Continue"
         $output = @(& $Command @Arguments 2>&1)
@@ -57,6 +58,18 @@ function Remove-PDPOneOldDirectoryChildren([string]$Path, [datetime]$OlderThan, 
         ForEach-Object {
             try {
                 Remove-Item -LiteralPath $_.FullName -Recurse -Force -ErrorAction Stop
+                $Removed.Value += $_.FullName
+            } catch { }
+        }
+}
+
+function Remove-PDPOneOldFiles([string]$Path, [datetime]$OlderThan, [ref]$Removed) {
+    if (-not (Test-Path -LiteralPath $Path)) { return }
+    Get-ChildItem -LiteralPath $Path -File -Force -ErrorAction SilentlyContinue |
+        Where-Object { $_.LastWriteTime -lt $OlderThan } |
+        ForEach-Object {
+            try {
+                Remove-Item -LiteralPath $_.FullName -Force -ErrorAction Stop
                 $Removed.Value += $_.FullName
             } catch { }
         }
@@ -122,7 +135,6 @@ function Invoke-PDPOneBackupRetention([ref]$Archived, [ref]$Removed) {
     if ($externalAvailable) { New-Item -ItemType Directory -Force -Path $ExternalBackupRoot | Out-Null }
 
     foreach ($item in $verified) {
-        if ((Get-PDPOneFreeBytes) -ge ([int64]$TargetFreeGB * 1GB)) { break }
         $source = $item.Directory.FullName.TrimEnd('\')
         if ($keep.ContainsKey($source.ToLowerInvariant())) { continue }
         if (-not $externalAvailable) { break }
@@ -139,9 +151,17 @@ function Invoke-PDPOneBackupRetention([ref]$Archived, [ref]$Removed) {
 }
 
 function Get-PDPOneRancherVhdFiles {
-    $root = Join-Path $env:LOCALAPPDATA "rancher-desktop"
-    if (-not (Test-Path -LiteralPath $root)) { return @() }
-    return @(Get-ChildItem -LiteralPath $root -Filter *.vhdx -File -Recurse -Force -ErrorAction SilentlyContinue)
+    $roots = @(
+        (Join-Path $env:LOCALAPPDATA "rancher-desktop"),
+        (Join-Path $env:LOCALAPPDATA "Rancher Desktop")
+    ) | Select-Object -Unique
+    $files = @()
+    foreach ($root in $roots) {
+        if (Test-Path -LiteralPath $root) {
+            $files += @(Get-ChildItem -LiteralPath $root -Filter *.vhdx -File -Recurse -Force -ErrorAction SilentlyContinue)
+        }
+    }
+    return @($files | Sort-Object FullName -Unique)
 }
 
 function Invoke-PDPOneVhdCompact([string]$Path) {
@@ -156,7 +176,7 @@ function Invoke-PDPOneVhdCompact([string]$Path) {
             "compact vdisk",
             "exit"
         ) | Set-Content -LiteralPath $scriptPath -Encoding ASCII
-        $result = Invoke-PDPOneSafeNative -Command "diskpart.exe" -Arguments @("/s", $scriptPath)
+        Invoke-PDPOneSafeNative -Command "diskpart.exe" -Arguments @("/s", $scriptPath) | Out-Null
         return "diskpart"
     } finally {
         Remove-Item -LiteralPath $scriptPath -Force -ErrorAction SilentlyContinue
@@ -170,6 +190,7 @@ function Invoke-PDPOneRancherCompaction([ref]$Compacted) {
     $servicesWereRunning = $false
     if (Test-PDPOneDockerEngine) {
         try {
+            Set-Location $ProjectRoot
             $running = @(& docker compose --profile tunnel ps --status running -q 2>$null)
             $servicesWereRunning = $running.Count -gt 0
             foreach ($distro in @("rancher-desktop-data", "rancher-desktop")) {
@@ -216,41 +237,56 @@ $archivedBackups = @()
 $removedBackups = @()
 $compactedVhds = @()
 $dockerActions = @()
+$warnings = @()
 $beforeFree = Get-PDPOneFreeBytes
 $cleanupThreshold = [int64]$CleanupThresholdGB * 1GB
 $targetFree = [int64]$TargetFreeGB * 1GB
 $criticalFree = [int64]$CriticalFreeGB * 1GB
-$mustClean = $Mode -eq "emergency" -or $Mode -eq "scheduled" -or $beforeFree -lt $cleanupThreshold
+$mustClean = $Mode -in @("predeploy", "postdeploy", "scheduled", "emergency") -or $beforeFree -lt $cleanupThreshold
 
 try {
     if ($mustClean) {
-        Remove-PDPOneOldDirectoryChildren -Path (Join-Path $AgentRoot "downloads") -OlderThan (Get-Date).AddHours(-6) -Removed ([ref]$removedHostPaths)
-        Remove-PDPOneOldDirectoryChildren -Path (Join-Path $AgentRoot "staging") -OlderThan (Get-Date).AddHours(-6) -Removed ([ref]$removedHostPaths)
-        Remove-PDPOneOldDirectoryChildren -Path (Join-Path $ProjectRoot "work\reports") -OlderThan (Get-Date).AddDays(-30) -Removed ([ref]$removedHostPaths)
-        Remove-PDPOneOldDirectoryChildren -Path $maintenanceRoot -OlderThan (Get-Date).AddDays(-30) -Removed ([ref]$removedHostPaths)
+        $agentAge = if ($Mode -eq "postdeploy") { (Get-Date).AddMinutes(-5) } elseif ($Mode -in @("predeploy", "emergency")) { (Get-Date).AddMinutes(-20) } else { (Get-Date).AddHours(-6) }
+        Remove-PDPOneOldDirectoryChildren -Path (Join-Path $AgentRoot "downloads") -OlderThan $agentAge -Removed ([ref]$removedHostPaths)
+        Remove-PDPOneOldDirectoryChildren -Path (Join-Path $AgentRoot "staging") -OlderThan $agentAge -Removed ([ref]$removedHostPaths)
+        Remove-PDPOneOldFiles -Path (Join-Path $AgentRoot "reports") -OlderThan (Get-Date).AddDays(-14) -Removed ([ref]$removedHostPaths)
+        Remove-PDPOneOldDirectoryChildren -Path (Join-Path $ProjectRoot "work\reports") -OlderThan (Get-Date).AddDays(-14) -Removed ([ref]$removedHostPaths)
+        Remove-PDPOneOldFiles -Path $maintenanceRoot -OlderThan (Get-Date).AddDays(-14) -Removed ([ref]$removedHostPaths)
 
-        Start-PDPOneRancherDesktop -TimeoutSeconds 300
-        $builderArgs = if ($Mode -eq "emergency") { @("builder", "prune", "--all", "--force") } else { @("builder", "prune", "--all", "--force", "--filter", "until=24h") }
-        $imageArgs = if ($Mode -eq "emergency") { @("image", "prune", "--all", "--force") } else { @("image", "prune", "--all", "--force", "--filter", "until=168h") }
-        $dockerActions += (Invoke-PDPOneSafeNative -Command "docker" -Arguments @("container", "prune", "--force") -IgnoreFailure)
-        $dockerActions += (Invoke-PDPOneSafeNative -Command "docker" -Arguments $imageArgs -IgnoreFailure)
-        $dockerActions += (Invoke-PDPOneSafeNative -Command "docker" -Arguments $builderArgs -IgnoreFailure)
-        $dockerActions += (Invoke-PDPOneSafeNative -Command "docker" -Arguments @("network", "prune", "--force") -IgnoreFailure)
+        try {
+            Start-PDPOneRancherDesktop -TimeoutSeconds 300
+            $aggressive = $Mode -in @("predeploy", "postdeploy", "emergency")
+            $builderArgs = if ($aggressive) { @("builder", "prune", "--all", "--force") } else { @("builder", "prune", "--all", "--force", "--filter", "until=24h") }
+            $imageArgs = if ($aggressive) { @("image", "prune", "--all", "--force") } else { @("image", "prune", "--all", "--force", "--filter", "until=168h") }
+            $dockerActions += (Invoke-PDPOneSafeNative -Command "docker" -Arguments @("container", "prune", "--force") -IgnoreFailure)
+            $dockerActions += (Invoke-PDPOneSafeNative -Command "docker" -Arguments $imageArgs -IgnoreFailure)
+            $dockerActions += (Invoke-PDPOneSafeNative -Command "docker" -Arguments $builderArgs -IgnoreFailure)
+            $dockerActions += (Invoke-PDPOneSafeNative -Command "docker" -Arguments @("network", "prune", "--force") -IgnoreFailure)
+        } catch {
+            $warnings += ConvertTo-PDPOneRedactedText $_.Exception.Message
+        }
 
-        Invoke-PDPOneBackupRetention -Archived ([ref]$archivedBackups) -Removed ([ref]$removedBackups)
+        try {
+            Invoke-PDPOneBackupRetention -Archived ([ref]$archivedBackups) -Removed ([ref]$removedBackups)
+        } catch {
+            $warnings += ConvertTo-PDPOneRedactedText $_.Exception.Message
+        }
 
         $afterPrune = Get-PDPOneFreeBytes
-        if (($Mode -eq "emergency" -or $Mode -eq "scheduled") -and $afterPrune -lt $targetFree) {
-            Invoke-PDPOneRancherCompaction -Compacted ([ref]$compactedVhds)
+        if ($Mode -in @("scheduled", "emergency") -and $afterPrune -lt $criticalFree) {
+            try {
+                Invoke-PDPOneRancherCompaction -Compacted ([ref]$compactedVhds)
+            } catch {
+                $warnings += ConvertTo-PDPOneRedactedText $_.Exception.Message
+            }
         }
     }
 
     $afterFree = Get-PDPOneFreeBytes
-    $minimumRequired = if ($Mode -eq "predeploy") { [int64]$MinimumDeployFreeGB * 1GB } else { $criticalFree }
-    $status = if ($afterFree -ge $targetFree) { "healthy" } elseif ($afterFree -ge $minimumRequired) { "degraded" } else { "blocked" }
+    $status = if ($afterFree -ge $targetFree) { "healthy" } elseif ($afterFree -ge $criticalFree) { "degraded" } else { "critical" }
 
     $report = [ordered]@{
-        schema = "pdp-one.disk-guard.v1"
+        schema = "pdp-one.disk-guard.v2"
         mode = $Mode
         completed_at = [DateTime]::UtcNow.ToString("o")
         c_free_bytes_before = $beforeFree
@@ -258,13 +294,16 @@ try {
         c_free_bytes_delta = $afterFree - $beforeFree
         cleanup_threshold_gb = $CleanupThresholdGB
         target_free_gb = $TargetFreeGB
-        minimum_deploy_free_gb = $MinimumDeployFreeGB
         status = $status
+        capacity_gate_enforced = $false
+        deployment_allowed = $true
+        actual_write_failure_stops_deployment = $true
         removed_host_paths = $removedHostPaths
         archived_verified_backups = $archivedBackups
         removed_local_verified_backups = $removedBackups
         compacted_rancher_vhds = $compactedVhds
         docker_action_count = $dockerActions.Count
+        warnings = $warnings
         volumes_pruned = $false
         database_volume_touched = $false
         private_files_volume_touched = $false
@@ -273,9 +312,27 @@ try {
     $report | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $reportPath -Encoding UTF8
     Write-Output $reportPath
 
-    if ($status -eq "blocked") {
-        throw "PDP One disk guard blocked $Mode because free C: space is below the safe minimum. Run emergency disk guard before continuing."
+    if ($status -eq "critical") {
+        Write-Warning "C: free space is critical, but the disk guard is advisory. PDP One will continue until Windows or Docker reports an actual write failure."
     }
+} catch {
+    $fallback = [ordered]@{
+        schema = "pdp-one.disk-guard.v2"
+        mode = $Mode
+        completed_at = [DateTime]::UtcNow.ToString("o")
+        status = "guard_error"
+        capacity_gate_enforced = $false
+        deployment_allowed = $true
+        error = ConvertTo-PDPOneRedactedText $_.Exception.Message
+        volumes_pruned = $false
+        database_volume_touched = $false
+        private_files_volume_touched = $false
+        tailscale_volume_touched = $false
+    }
+    try { $fallback | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $reportPath -Encoding UTF8 } catch { }
+    Write-Warning "Disk guard could not complete, but it will not block startup or deployment."
+    Write-Output $reportPath
+    if ($Mode -eq "emergency") { exit 1 }
 } finally {
     $mutex.ReleaseMutex()
     $mutex.Dispose()
