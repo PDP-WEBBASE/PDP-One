@@ -22,6 +22,7 @@ $report = [ordered]@{
     completed_at = $null
     status = "failed"
     docker = "pending"
+    rancher_policy_report = $null
     local_health = "pending"
     local_api_health = "pending"
     public_health = "pending"
@@ -39,7 +40,7 @@ try {
     $ProjectRoot = Get-PDPOneProjectRoot
     Set-Location $ProjectRoot
     try {
-        $diskGuardOutput = @(& powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "Invoke-PDPOneDiskGuard.ps1") -Mode startup -ProjectRoot $ProjectRoot)
+        $diskGuardOutput = @(& powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "Invoke-PDPOneDiskGuard.ps1") -Mode startup -ProjectRoot $ProjectRoot -BuildCacheBudgetGB 2)
         if ($diskGuardOutput.Count -gt 0) { $report.disk_guard_report = [string]$diskGuardOutput[-1] }
         if ($LASTEXITCODE -ne 0) {
             $report.disk_guard_warning = "Disk guard returned a non-zero code. Startup continued because capacity checks are advisory."
@@ -49,7 +50,12 @@ try {
     }
 
     Start-PDPOneRancherDesktop -TimeoutSeconds $DockerTimeoutSeconds
+    $policyOutput = @(& powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "Ensure-PDPOneRancherPolicy.ps1") -DockerTimeoutSeconds $DockerTimeoutSeconds)
+    if ($LASTEXITCODE -ne 0) { throw "The Rancher policy could not be applied." }
+    if ($policyOutput.Count -gt 0) { $report.rancher_policy_report = [string]$policyOutput[-1] }
+    Start-PDPOneRancherDesktop -TimeoutSeconds $DockerTimeoutSeconds
     $report.docker = "ready"
+
     $null = Assert-PDPOneConfiguration -ProjectRoot $ProjectRoot
     if (-not (Test-PDPOneTokenContinuity -ProjectRoot $ProjectRoot)) {
         throw "The MCP path token changed outside the approved rotation workflow. Startup was stopped."
@@ -60,7 +66,7 @@ try {
     if ($LASTEXITCODE -ne 0) { throw "Docker Compose configuration is invalid." }
 
     Write-Host "Starting existing PDP One services without build, pull, migration, or token rotation ..." -ForegroundColor Cyan
-    & docker compose --profile tunnel up --detach --no-build
+    & docker compose --profile tunnel up --detach --no-build --pull never
     if ($LASTEXITCODE -ne 0) { throw "PDP One services failed to start." }
 
     if (-not (Wait-PDPOneUrl -Url "http://127.0.0.1:8080/healthz" -TimeoutSeconds $HealthTimeoutSeconds)) {
@@ -71,7 +77,7 @@ try {
     $localSessionUrl = "http://127.0.0.1:8080/api/v1/auth/session/"
     if (-not (Wait-PDPOneUrl -Url $localSessionUrl -TimeoutSeconds 45)) {
         Write-Host "The nginx shell is healthy but the backend API route is not. Recreating nginx and Tailscale once ..." -ForegroundColor Yellow
-        & docker compose --profile tunnel up --detach --no-build --force-recreate nginx tailscale
+        & docker compose --profile tunnel up --detach --no-build --pull never --force-recreate nginx tailscale
         if ($LASTEXITCODE -ne 0) { throw "The nginx/Tailscale API-route repair could not be started." }
         if (-not (Wait-PDPOneUrl -Url $localSessionUrl -TimeoutSeconds 90)) {
             throw "PDP One local session API did not become ready after nginx/Tailscale repair."
@@ -102,7 +108,7 @@ try {
     $reportDir = Join-Path $ProjectRoot "work\reports"
     Write-PDPOneJsonFile -Path (Join-Path $reportDir "startup-latest.json") -Value $report
     Write-PDPOneJsonFile -Path (Join-Path $ProjectRoot "PDP-ONE-LAST-STARTUP-REPORT.json") -Value $report
-    Write-Host "PDP One web shell, session API, public route, data and Docker volumes are healthy." -ForegroundColor Green
+    Write-Host "PDP One web shell, session API, public route, data and Docker volumes are healthy. Kubernetes is disabled." -ForegroundColor Green
     if ($report.disk_guard_warning) {
         Write-Host "Disk cleanup reported a warning, but startup was allowed to continue." -ForegroundColor Yellow
     }
