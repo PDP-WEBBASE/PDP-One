@@ -15,18 +15,26 @@ Set-StrictMode -Version Latest
 
 $projectRoot = Get-PDPOneProjectRoot
 $guardScript = Join-Path $PSScriptRoot "Invoke-PDPOneDiskGuard.ps1"
+$policyScript = Join-Path $PSScriptRoot "Ensure-PDPOneRancherPolicy.ps1"
 $innerScript = Join-Path $PSScriptRoot "Invoke-PDPOneRegistryFastDeployment.ps1"
 $downloadRoot = Join-Path $AgentRoot ("downloads\" + $DeploymentId)
 $deploymentOutput = @()
 $deploymentExitCode = 1
 $predeployGuardReport = ""
 $postdeployGuardReport = ""
+$rancherPolicyReport = ""
 
 if (-not (Test-Path -LiteralPath $innerScript)) {
     throw "Registry-backed fast deployment implementation was not found."
 }
 
 try {
+    if (Test-Path -LiteralPath $policyScript) {
+        $policyOutput = @(& powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File $policyScript -DockerTimeoutSeconds 300)
+        if ($LASTEXITCODE -ne 0) { throw "The Rancher Kubernetes-off policy could not be applied." }
+        if ($policyOutput.Count -gt 0) { $rancherPolicyReport = [string]$policyOutput[-1] }
+    }
+
     if (Test-Path -LiteralPath $guardScript) {
         try {
             $guardOutput = @(& powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File $guardScript -Mode predeploy -ProjectRoot $projectRoot -BuildCacheBudgetGB 2)
@@ -62,6 +70,7 @@ $deploymentReport = if ($deploymentOutput.Count -gt 0) { [string]$deploymentOutp
 if ($deploymentReport -and (Test-Path -LiteralPath $deploymentReport)) {
     try {
         $report = Get-Content -LiteralPath $deploymentReport -Raw -Encoding UTF8 | ConvertFrom-Json
+        $report | Add-Member -NotePropertyName rancher_policy_report -NotePropertyValue $rancherPolicyReport -Force
         $report | Add-Member -NotePropertyName predeploy_disk_guard_report -NotePropertyValue $predeployGuardReport -Force
         $report | Add-Member -NotePropertyName postdeploy_disk_guard_report -NotePropertyValue $postdeployGuardReport -Force
         $report | Add-Member -NotePropertyName obsolete_artifacts_cleaned_immediately -NotePropertyValue $true -Force
@@ -70,6 +79,7 @@ if ($deploymentReport -and (Test-Path -LiteralPath $deploymentReport)) {
         $report | Add-Member -NotePropertyName local_image_build_performed -NotePropertyValue $false -Force
         $report | Add-Member -NotePropertyName image_source -NotePropertyValue "github_container_registry" -Force
         $report | Add-Member -NotePropertyName retained_image_policy -NotePropertyValue "active_commit_and_previous_commit" -Force
+        $report | Add-Member -NotePropertyName kubernetes_enabled -NotePropertyValue $false -Force
         $report | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $deploymentReport -Encoding UTF8
     } catch { }
 }
