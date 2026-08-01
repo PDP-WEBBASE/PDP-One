@@ -9,6 +9,21 @@
     "requires_special_backup": false,
     "description": "Adds persistent procurement analysis run, queue item, dataset and import tables; existing procurement, contract and finance rows are not rewritten or deleted."
   },
+  "connected_app": {
+    "official_tools_registered": true,
+    "cached_schema_compatibility_bridge": true,
+    "bridge_tool": "save_analysis_draft",
+    "bridge_scope": [
+      "start_full_pending",
+      "start_incremental",
+      "status_and_history",
+      "claim",
+      "dataset_prepare_and_status",
+      "draft_only_import_and_status",
+      "pause_and_resume"
+    ],
+    "automatic_contract_or_finance_actions": false
+  },
   "required_checks": [
     "frontend_lint",
     "frontend_build_and_tests",
