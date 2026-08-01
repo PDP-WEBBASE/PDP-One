@@ -4,7 +4,8 @@
 param(
     [string]$ProjectRoot = "",
     [string]$StartupTaskName = "PDP One Stable Startup",
-    [string]$OpenWebTaskName = "PDP One Open Local Web"
+    [string]$OpenWebTaskName = "PDP One Open Local Web",
+    [string]$McpWatchdogTaskName = "PDP One MCP Self Heal"
 )
 
 $ErrorActionPreference = "Stop"
@@ -15,8 +16,10 @@ if (-not $ProjectRoot) { $ProjectRoot = Get-PDPOneProjectRoot }
 $ProjectRoot = (Resolve-Path -LiteralPath $ProjectRoot).Path
 $startScript = Join-Path $ProjectRoot "scripts\windows\Start-PDPOne.ps1"
 $openScript = Join-Path $ProjectRoot "scripts\windows\Open-PDPOneLocal.ps1"
+$mcpWatchdogScript = Join-Path $ProjectRoot "scripts\windows\Ensure-PDPOneMcpHealthy.ps1"
 if (-not (Test-Path -LiteralPath $startScript)) { throw "Stable startup script was not found." }
 if (-not (Test-Path -LiteralPath $openScript)) { throw "Local web opener script was not found." }
+if (-not (Test-Path -LiteralPath $mcpWatchdogScript)) { throw "MCP self-heal script was not found." }
 
 $startupArguments = "-NoLogo -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$startScript`""
 $startupAction = New-ScheduledTaskAction -Execute "powershell.exe" -Argument $startupArguments
@@ -32,4 +35,11 @@ $openTrigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
 $openSettings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Minutes 8) -MultipleInstances IgnoreNew -StartWhenAvailable
 Register-ScheduledTask -TaskName $OpenWebTaskName -Action $openAction -Trigger $openTrigger -Principal $principal -Settings $openSettings -Description "Waits for PDP One local health after logon and opens the local web page without changing Windows DNS." -Force | Out-Null
 
-Write-Host "Scheduled Tasks '$StartupTaskName' and '$OpenWebTaskName' are installed." -ForegroundColor Green
+$mcpArguments = "-NoLogo -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$mcpWatchdogScript`" -ProjectRoot `"$ProjectRoot`""
+$mcpAction = New-ScheduledTaskAction -Execute "powershell.exe" -Argument $mcpArguments
+$mcpLogonTrigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
+$mcpPeriodicTrigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(2) -RepetitionInterval (New-TimeSpan -Minutes 5) -RepetitionDuration (New-TimeSpan -Days 3650)
+$mcpSettings = New-ScheduledTaskSettingsSet -RestartCount 6 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit (New-TimeSpan -Minutes 6) -MultipleInstances IgnoreNew -StartWhenAvailable
+Register-ScheduledTask -TaskName $McpWatchdogTaskName -Action $mcpAction -Trigger @($mcpLogonTrigger, $mcpPeriodicTrigger) -Principal $principal -Settings $mcpSettings -Description "Checks the PDP One MCP container every five minutes. If it is missing or restarting, it repairs the MCP Docker image, verifies imports, recreates only MCP, preserves tokens and never touches Docker volumes or PostgreSQL data." -Force | Out-Null
+
+Write-Host "Scheduled Tasks '$StartupTaskName', '$OpenWebTaskName' and '$McpWatchdogTaskName' are installed." -ForegroundColor Green
