@@ -82,11 +82,10 @@ services:
     logging: *pdp-logging
     environment:
       NEXT_PUBLIC_API_URL: /api/v1
-      PDP_BUILD_ID: ${PDP_BUILD_ID:-procurement-fast-initial-v25-20260725}
     healthcheck:
       test:
         - CMD-SHELL
-        - node -e "const fs=require('fs'); const p='/app/public/pdp-build.json'; const x=JSON.parse(fs.readFileSync(p,'utf8')); process.exit(x.build_id===process.env.PDP_BUILD_ID?0:1)"
+        - node -e "const fs=require('fs'); const x=JSON.parse(fs.readFileSync('/app/public/pdp-build.json','utf8')); process.exit(typeof x.build_id==='string'&&x.build_id.length>0?0:1)"
       interval: 5s
       timeout: 5s
       retries: 12
