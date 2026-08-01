@@ -43,3 +43,26 @@ test("persistent result import remains draft-only and does not call contract or 
   assert.doesNotMatch(tools, /receivables\//);
   assert.doesNotMatch(tools, /payment-receipts\//);
 });
+
+
+test("cached ChatGPT app schema has a safe persistent-analysis compatibility bridge", async () => {
+  const server = await readFile(new URL("../services/pdp_mcp/server.py", import.meta.url), "utf8");
+  for (const command of [
+    "__PDPONE_ANALYSIS_START_FULL__",
+    "__PDPONE_ANALYSIS_START_INCREMENTAL__",
+    "__PDPONE_ANALYSIS_STATUS__",
+    "__PDPONE_ANALYSIS_HISTORY__",
+    "__PDPONE_ANALYSIS_CLAIM__",
+    "__PDPONE_ANALYSIS_DATASET_PREPARE__",
+    "__PDPONE_ANALYSIS_DATASET_STATUS__",
+    "__PDPONE_ANALYSIS_IMPORT__",
+    "__PDPONE_ANALYSIS_IMPORT_STATUS__",
+    "__PDPONE_ANALYSIS_PAUSE__",
+    "__PDPONE_ANALYSIS_RESUME__",
+  ]) {
+    assert.match(server, new RegExp(command));
+  }
+  assert.match(server, /compatibility_bridge/);
+  assert.match(server, /draft_only/);
+  assert.doesNotMatch(server.slice(server.indexOf("if title.startswith"), server.indexOf("payload = {", server.indexOf("if title.startswith") + 1)), /contracts\//);
+});
