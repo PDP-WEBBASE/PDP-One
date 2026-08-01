@@ -24,18 +24,32 @@
     ],
     "automatic_contract_or_finance_actions": false
   },
+  "disk_guard": {
+    "cleanup_threshold_gb": 10,
+    "target_free_gb": 15,
+    "minimum_deploy_free_gb": 8,
+    "daily_task_time": "03:15",
+    "container_log_max_size": "10m",
+    "container_log_max_files": 3,
+    "keep_local_verified_final_backups": 2,
+    "archive_old_verified_backups_to_external_drive": true,
+    "compact_rancher_wsl_vhdx_when_needed": true,
+    "docker_volume_prune_allowed": false
+  },
   "required_checks": [
     "frontend_lint",
     "frontend_build_and_tests",
     "python_compile",
     "migration_drift_check",
     "backend_tests",
+    "disk_guard_contract",
     "exact_commit_deploy",
     "short_health_check",
     "contract_and_receivable_count_invariance"
   ],
   "forbidden_operations": [
     "docker_volume_delete",
+    "docker_volume_prune",
     "automatic_ai_draft_publish",
     "automatic_opportunity_selection",
     "automatic_contract_creation",
