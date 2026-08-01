@@ -18,18 +18,22 @@ test("fast deployment is not blocked by a fixed free-space threshold", async () 
   assert.match(managed, /obsolete_artifacts_cleaned_immediately/);
 });
 
-test("obsolete Rancher artifacts are pruned without touching volumes", async () => {
+test("obsolete Rancher artifacts are pruned while active and previous images and all volumes are retained", async () => {
   const guard = await read("scripts/windows/Invoke-PDPOneDiskGuard.ps1");
   const compose = await read("docker-compose.yml");
 
-  assert.match(guard, /builder", "prune", "--all", "--force/);
-  assert.match(guard, /image", "prune", "--all", "--force/);
+  assert.match(guard, /builder", "prune", "--all", "--force", "--keep-storage"/);
+  assert.match(guard, /active_commit_and_previous_commit/);
+  assert.match(guard, /image", "rm", \$reference/);
+  assert.match(guard, /image", "prune", "--force"/);
+  assert.doesNotMatch(guard, /image", "prune", "--all"/);
   assert.match(guard, /container", "prune", "--force/);
   assert.match(guard, /network", "prune", "--force/);
   assert.doesNotMatch(guard, /volume", "prune/);
   assert.doesNotMatch(guard, /docker\s+volume\s+prune/i);
   assert.match(guard, /KeepLocalFinalBackups = 2/);
   assert.match(guard, /D:\\BackUp PDP-0NE-14050429-01/);
+  assert.match(compose, /driver: local/);
   assert.match(compose, /max-size: "10m"/);
   assert.match(compose, /max-file: "3"/);
 });
