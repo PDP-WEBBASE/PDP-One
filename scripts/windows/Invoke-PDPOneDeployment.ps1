@@ -14,6 +14,9 @@ $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
 Set-StrictMode -Version Latest
 
+# The managed wrapper delegates the exact-commit core to Invoke-PDPOneFastDeployment.ps1.
+# It runs Invoke-PDPOneDiskGuard.ps1 with -Mode predeploy and -Mode postdeploy,
+# but capacity is advisory and does not impose a fixed free-space deployment gate.
 if ($DevelopmentFastMode) {
     $scriptPath = Join-Path $PSScriptRoot "Invoke-PDPOneManagedFastDeployment.ps1"
     $arguments = @(
