@@ -1,0 +1,282 @@
+#requires -Version 5.1
+#requires -RunAsAdministrator
+[CmdletBinding()]
+param(
+    [ValidateSet("startup", "predeploy", "scheduled", "emergency")][string]$Mode = "scheduled",
+    [int]$CleanupThresholdGB = 10,
+    [int]$TargetFreeGB = 15,
+    [int]$MinimumDeployFreeGB = 8,
+    [int]$CriticalFreeGB = 3,
+    [int]$KeepLocalFinalBackups = 2,
+    [string]$ProjectRoot = "",
+    [string]$AgentRoot = "C:\ProgramData\PDP-One\deployment-agent",
+    [string]$BackupRoot = "C:\ProgramData\PDP-One\backups",
+    [string]$ExternalBackupRoot = "D:\BackUp PDP-0NE-14050429-01"
+)
+
+$ErrorActionPreference = "Stop"
+$ProgressPreference = "SilentlyContinue"
+Set-StrictMode -Version Latest
+. (Join-Path $PSScriptRoot "PDPOne.Common.ps1")
+
+$mutex = New-Object Threading.Mutex($false, "Global\PDP-One-Disk-Guard")
+if (-not $mutex.WaitOne(0)) { exit 0 }
+
+function Get-PDPOneFreeBytes {
+    $drive = Get-PSDrive -Name C -ErrorAction Stop
+    return [int64]$drive.Free
+}
+
+function Get-PDPOneDirectoryBytes([string]$Path) {
+    if (-not (Test-Path -LiteralPath $Path)) { return [int64]0 }
+    $value = (Get-ChildItem -LiteralPath $Path -File -Recurse -Force -ErrorAction SilentlyContinue | Measure-Object Length -Sum).Sum
+    if ($null -eq $value) { return [int64]0 }
+    return [int64]$value
+}
+
+function Invoke-PDPOneSafeNative([string]$Command, [string[]]$Arguments, [switch]$IgnoreFailure) {
+    $previous = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = "Continue"
+        $output = @(& $Command @Arguments 2>&1)
+        $code = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $previous
+    }
+    if ($code -ne 0 -and -not $IgnoreFailure) {
+        $message = ConvertTo-PDPOneRedactedText (($output | ForEach-Object { [string]$_ }) -join [Environment]::NewLine)
+        throw "$Command failed with exit code $code. $message"
+    }
+    return [pscustomobject]@{ ExitCode = $code; Output = @($output) }
+}
+
+function Remove-PDPOneOldDirectoryChildren([string]$Path, [datetime]$OlderThan, [ref]$Removed) {
+    if (-not (Test-Path -LiteralPath $Path)) { return }
+    Get-ChildItem -LiteralPath $Path -Directory -Force -ErrorAction SilentlyContinue |
+        Where-Object { $_.LastWriteTime -lt $OlderThan } |
+        ForEach-Object {
+            try {
+                Remove-Item -LiteralPath $_.FullName -Recurse -Force -ErrorAction Stop
+                $Removed.Value += $_.FullName
+            } catch { }
+        }
+}
+
+function Get-PDPOneVerifiedBackupReport([string]$Path) {
+    $reportPath = Join-Path $Path "backup-report.json"
+    if (-not (Test-Path -LiteralPath $reportPath)) { return $null }
+    try {
+        $report = Get-Content -LiteralPath $reportPath -Raw -Encoding UTF8 | ConvertFrom-Json
+        if (-not [bool]$report.restore_verified) { return $null }
+        return $report
+    } catch { return $null }
+}
+
+function Test-PDPOneArchivedBackup([string]$Source, [string]$Destination, $Report) {
+    if ($null -ne $Report.file_sha256) {
+        foreach ($property in $Report.file_sha256.PSObject.Properties) {
+            $target = Join-Path $Destination $property.Name
+            if (-not (Test-Path -LiteralPath $target)) { return $false }
+            $actual = (Get-FileHash -LiteralPath $target -Algorithm SHA256).Hash.ToLowerInvariant()
+            if ($actual -ne ([string]$property.Value).ToLowerInvariant()) { return $false }
+        }
+        return $true
+    }
+    return (Get-PDPOneDirectoryBytes $Source) -eq (Get-PDPOneDirectoryBytes $Destination)
+}
+
+function Invoke-PDPOneBackupRetention([ref]$Archived, [ref]$Removed) {
+    if (-not (Test-Path -LiteralPath $BackupRoot)) { return }
+    if ($KeepLocalFinalBackups -lt 2) { throw "At least two verified final backups must remain local." }
+
+    $protected = ""
+    $lastDeployment = Join-Path $AgentRoot "state\last-deployment.json"
+    if (Test-Path -LiteralPath $lastDeployment) {
+        try {
+            $state = Get-Content -LiteralPath $lastDeployment -Raw -Encoding UTF8 | ConvertFrom-Json
+            if ($state.backup_path -and (Test-Path -LiteralPath ([string]$state.backup_path))) {
+                $protected = (Resolve-Path -LiteralPath ([string]$state.backup_path)).Path.TrimEnd('\')
+            }
+        } catch { }
+    }
+
+    $verified = @()
+    Get-ChildItem -LiteralPath $BackupRoot -Directory -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -match '^PDP-One-final-Backup-\d{8}-\d{6}$' } |
+        Sort-Object Name -Descending |
+        ForEach-Object {
+            $backupReport = Get-PDPOneVerifiedBackupReport $_.FullName
+            if ($null -ne $backupReport) {
+                $verified += [pscustomobject]@{ Directory = $_; Report = $backupReport }
+            }
+        }
+
+    $keep = @{}
+    foreach ($item in @($verified | Select-Object -First $KeepLocalFinalBackups)) {
+        $keep[$item.Directory.FullName.TrimEnd('\').ToLowerInvariant()] = $true
+    }
+    if ($protected) { $keep[$protected.ToLowerInvariant()] = $true }
+
+    $driveRoot = Split-Path -Qualifier $ExternalBackupRoot
+    $externalAvailable = $driveRoot -and (Test-Path -LiteralPath $driveRoot)
+    if ($externalAvailable) { New-Item -ItemType Directory -Force -Path $ExternalBackupRoot | Out-Null }
+
+    foreach ($item in $verified) {
+        if ((Get-PDPOneFreeBytes) -ge ([int64]$TargetFreeGB * 1GB)) { break }
+        $source = $item.Directory.FullName.TrimEnd('\')
+        if ($keep.ContainsKey($source.ToLowerInvariant())) { continue }
+        if (-not $externalAvailable) { break }
+
+        $destination = Join-Path $ExternalBackupRoot $item.Directory.Name
+        New-Item -ItemType Directory -Force -Path $destination | Out-Null
+        & robocopy.exe $source $destination /E /COPY:DAT /DCOPY:DAT /R:2 /W:1 /NFL /NDL /NP | Out-Null
+        if ($LASTEXITCODE -gt 7) { continue }
+        if (-not (Test-PDPOneArchivedBackup -Source $source -Destination $destination -Report $item.Report)) { continue }
+        Remove-Item -LiteralPath $source -Recurse -Force
+        $Archived.Value += $destination
+        $Removed.Value += $source
+    }
+}
+
+function Get-PDPOneRancherVhdFiles {
+    $root = Join-Path $env:LOCALAPPDATA "rancher-desktop"
+    if (-not (Test-Path -LiteralPath $root)) { return @() }
+    return @(Get-ChildItem -LiteralPath $root -Filter *.vhdx -File -Recurse -Force -ErrorAction SilentlyContinue)
+}
+
+function Invoke-PDPOneVhdCompact([string]$Path) {
+    if (Get-Command Optimize-VHD -ErrorAction SilentlyContinue) {
+        Optimize-VHD -Path $Path -Mode Full -ErrorAction Stop
+        return "Optimize-VHD"
+    }
+    $scriptPath = Join-Path $env:TEMP ("pdp-one-diskpart-" + [Guid]::NewGuid().ToString('N') + ".txt")
+    try {
+        @(
+            "select vdisk file=`"$Path`"",
+            "compact vdisk",
+            "exit"
+        ) | Set-Content -LiteralPath $scriptPath -Encoding ASCII
+        $result = Invoke-PDPOneSafeNative -Command "diskpart.exe" -Arguments @("/s", $scriptPath)
+        return "diskpart"
+    } finally {
+        Remove-Item -LiteralPath $scriptPath -Force -ErrorAction SilentlyContinue
+    }
+}
+
+function Invoke-PDPOneRancherCompaction([ref]$Compacted) {
+    $vhdFiles = @(Get-PDPOneRancherVhdFiles)
+    if ($vhdFiles.Count -eq 0) { return }
+
+    $servicesWereRunning = $false
+    if (Test-PDPOneDockerEngine) {
+        try {
+            $running = @(& docker compose --profile tunnel ps --status running -q 2>$null)
+            $servicesWereRunning = $running.Count -gt 0
+            foreach ($distro in @("rancher-desktop-data", "rancher-desktop")) {
+                & wsl.exe -d $distro -u root -- sh -lc "fstrim -av >/dev/null 2>&1 || true" 2>$null | Out-Null
+            }
+        } catch { }
+    }
+
+    $rdctl = Get-Command rdctl.exe -ErrorAction SilentlyContinue
+    if ($rdctl) { try { & $rdctl.Source shutdown *> $null } catch { } }
+    try { & wsl.exe --shutdown *> $null } catch { }
+    Start-Sleep -Seconds 5
+
+    foreach ($file in $vhdFiles) {
+        try {
+            $beforeLength = [int64]$file.Length
+            $method = Invoke-PDPOneVhdCompact -Path $file.FullName
+            $file.Refresh()
+            $Compacted.Value += [pscustomobject]@{
+                path = $file.FullName
+                method = $method
+                bytes_before = $beforeLength
+                bytes_after = [int64]$file.Length
+            }
+        } catch { }
+    }
+
+    if ($servicesWereRunning -or $Mode -eq "emergency") {
+        Start-PDPOneRancherDesktop -TimeoutSeconds 300
+        Set-Location $ProjectRoot
+        & docker compose --profile tunnel up --detach --no-build
+        if ($LASTEXITCODE -ne 0) { throw "PDP One services could not restart after VHD compaction." }
+    }
+}
+
+if (-not $ProjectRoot) { $ProjectRoot = Get-PDPOneProjectRoot }
+$ProjectRoot = (Resolve-Path -LiteralPath $ProjectRoot).Path
+$maintenanceRoot = "C:\ProgramData\PDP-One\maintenance"
+New-Item -ItemType Directory -Force -Path $maintenanceRoot | Out-Null
+$reportPath = Join-Path $maintenanceRoot ("disk-guard-" + (Get-Date -Format "yyyyMMdd-HHmmss") + ".json")
+
+$removedHostPaths = @()
+$archivedBackups = @()
+$removedBackups = @()
+$compactedVhds = @()
+$dockerActions = @()
+$beforeFree = Get-PDPOneFreeBytes
+$cleanupThreshold = [int64]$CleanupThresholdGB * 1GB
+$targetFree = [int64]$TargetFreeGB * 1GB
+$criticalFree = [int64]$CriticalFreeGB * 1GB
+$mustClean = $Mode -eq "emergency" -or $Mode -eq "scheduled" -or $beforeFree -lt $cleanupThreshold
+
+try {
+    if ($mustClean) {
+        Remove-PDPOneOldDirectoryChildren -Path (Join-Path $AgentRoot "downloads") -OlderThan (Get-Date).AddHours(-6) -Removed ([ref]$removedHostPaths)
+        Remove-PDPOneOldDirectoryChildren -Path (Join-Path $AgentRoot "staging") -OlderThan (Get-Date).AddHours(-6) -Removed ([ref]$removedHostPaths)
+        Remove-PDPOneOldDirectoryChildren -Path (Join-Path $ProjectRoot "work\reports") -OlderThan (Get-Date).AddDays(-30) -Removed ([ref]$removedHostPaths)
+        Remove-PDPOneOldDirectoryChildren -Path $maintenanceRoot -OlderThan (Get-Date).AddDays(-30) -Removed ([ref]$removedHostPaths)
+
+        Start-PDPOneRancherDesktop -TimeoutSeconds 300
+        $builderArgs = if ($Mode -eq "emergency") { @("builder", "prune", "--all", "--force") } else { @("builder", "prune", "--all", "--force", "--filter", "until=24h") }
+        $imageArgs = if ($Mode -eq "emergency") { @("image", "prune", "--all", "--force") } else { @("image", "prune", "--all", "--force", "--filter", "until=168h") }
+        $dockerActions += (Invoke-PDPOneSafeNative -Command "docker" -Arguments @("container", "prune", "--force") -IgnoreFailure)
+        $dockerActions += (Invoke-PDPOneSafeNative -Command "docker" -Arguments $imageArgs -IgnoreFailure)
+        $dockerActions += (Invoke-PDPOneSafeNative -Command "docker" -Arguments $builderArgs -IgnoreFailure)
+        $dockerActions += (Invoke-PDPOneSafeNative -Command "docker" -Arguments @("network", "prune", "--force") -IgnoreFailure)
+
+        Invoke-PDPOneBackupRetention -Archived ([ref]$archivedBackups) -Removed ([ref]$removedBackups)
+
+        $afterPrune = Get-PDPOneFreeBytes
+        if (($Mode -eq "emergency" -or $Mode -eq "scheduled") -and $afterPrune -lt $targetFree) {
+            Invoke-PDPOneRancherCompaction -Compacted ([ref]$compactedVhds)
+        }
+    }
+
+    $afterFree = Get-PDPOneFreeBytes
+    $minimumRequired = if ($Mode -eq "predeploy") { [int64]$MinimumDeployFreeGB * 1GB } else { $criticalFree }
+    $status = if ($afterFree -ge $targetFree) { "healthy" } elseif ($afterFree -ge $minimumRequired) { "degraded" } else { "blocked" }
+
+    $report = [ordered]@{
+        schema = "pdp-one.disk-guard.v1"
+        mode = $Mode
+        completed_at = [DateTime]::UtcNow.ToString("o")
+        c_free_bytes_before = $beforeFree
+        c_free_bytes_after = $afterFree
+        c_free_bytes_delta = $afterFree - $beforeFree
+        cleanup_threshold_gb = $CleanupThresholdGB
+        target_free_gb = $TargetFreeGB
+        minimum_deploy_free_gb = $MinimumDeployFreeGB
+        status = $status
+        removed_host_paths = $removedHostPaths
+        archived_verified_backups = $archivedBackups
+        removed_local_verified_backups = $removedBackups
+        compacted_rancher_vhds = $compactedVhds
+        docker_action_count = $dockerActions.Count
+        volumes_pruned = $false
+        database_volume_touched = $false
+        private_files_volume_touched = $false
+        tailscale_volume_touched = $false
+    }
+    $report | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $reportPath -Encoding UTF8
+    Write-Output $reportPath
+
+    if ($status -eq "blocked") {
+        throw "PDP One disk guard blocked $Mode because free C: space is below the safe minimum. Run emergency disk guard before continuing."
+    }
+} finally {
+    $mutex.ReleaseMutex()
+    $mutex.Dispose()
+}
