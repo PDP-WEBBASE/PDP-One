@@ -241,19 +241,27 @@ def _write_sql_dump(target: Path) -> dict[str, Any]:
 
 
 def _procurement_table_counts() -> dict[str, int]:
+    """Count procurement tables on PostgreSQL and the SQLite test backend."""
     counts: dict[str, int] = {}
     with connection.cursor() as cursor:
-        cursor.execute(
-            """
-            SELECT table_name
-            FROM information_schema.tables
-            WHERE table_schema = current_schema()
-              AND table_type = 'BASE TABLE'
-              AND table_name LIKE 'procurement_%'
-            ORDER BY table_name
-            """
-        )
-        table_names = [row[0] for row in cursor.fetchall()]
+        if connection.vendor == "postgresql":
+            cursor.execute(
+                """
+                SELECT table_name
+                FROM information_schema.tables
+                WHERE table_schema = current_schema()
+                  AND table_type = 'BASE TABLE'
+                  AND table_name LIKE 'procurement_%'
+                ORDER BY table_name
+                """
+            )
+            table_names = [row[0] for row in cursor.fetchall()]
+        else:
+            table_names = sorted(
+                table_name
+                for table_name in connection.introspection.table_names(cursor)
+                if table_name.startswith("procurement_")
+            )
         for table_name in table_names:
             cursor.execute(f"SELECT COUNT(*) FROM {connection.ops.quote_name(table_name)}")
             counts[table_name] = int(cursor.fetchone()[0])

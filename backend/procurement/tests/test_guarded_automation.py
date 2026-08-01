@@ -1,11 +1,14 @@
 from datetime import timedelta
+from unittest.mock import patch
 
 from django.test import TestCase
 from django.utils import timezone
 
 from core.models import AuditEvent
+from procurement.analysis_run_service import initialize_run
 from procurement.models import ProcurementConnector, ProcurementSource
 from procurement.models_analysis import AnalysisContextSnapshot, AnalysisRequest
+from procurement.models_analysis_runs import ProcurementAnalysisRun
 from procurement.models_automation import ProcurementAutomationSettings
 from procurement.models_extraction import ExtractionRun
 from procurement.tasks_automation import (
@@ -49,7 +52,9 @@ class GuardedAutomationTests(TestCase):
         self.assertTrue(first["changed"])
         settings = ProcurementAutomationSettings.objects.get(key="default")
         self.assertTrue(settings.enabled)
-        self.assertEqual(settings.analysis_delay_minutes, 15)
+        self.assertEqual(settings.cadence, ProcurementAutomationSettings.Cadence.HOURLY)
+        self.assertEqual(settings.interval_minutes, 60)
+        self.assertEqual(settings.analysis_delay_minutes, 0)
         settings.enabled = False
         settings.save(update_fields=["enabled", "updated_at"])
 
@@ -73,38 +78,36 @@ class GuardedAutomationTests(TestCase):
         self.assertTrue(run.analyze_after_success)
         self.assertEqual(list(run.connectors.values_list("key", flat=True)), [self.connector.key])
 
-    def test_analysis_request_is_created_once_only_for_changed_records(self):
+    @patch("procurement.tasks_analysis_runs.initialize_analysis_run_task.delay")
+    def test_scheduled_dispatch_creates_one_persistent_run_and_then_continues_it(self, mocked_delay):
         bootstrap_guarded_automation()
-        run = ExtractionRun.objects.create(
-            trigger=ExtractionRun.Trigger.SCHEDULED,
-            status=ExtractionRun.Status.SUCCEEDED,
-            analyze_after_success=True,
-            records_new=2,
-            records_updated=1,
-        )
-        run.connectors.add(self.connector)
 
         first = dispatch_due_analysis_requests.run()
         second = dispatch_due_analysis_requests.run()
-        self.assertEqual(first["created"], 1)
-        self.assertEqual(second["created"], 0)
-        request_record = AnalysisRequest.objects.get(extraction_run=run)
-        self.assertEqual(request_record.trigger, AnalysisRequest.Trigger.SCHEDULED)
-        self.assertEqual(request_record.status, AnalysisRequest.Status.PENDING)
-        self.assertTrue(request_record.metadata["draft_only"])
-        self.assertTrue(request_record.metadata["human_review_required"])
 
-    def test_no_changes_are_closed_without_analysis_work(self):
+        self.assertEqual(first["created"], 1)
+        self.assertTrue(first["persistent_run"])
+        self.assertTrue(first["draft_only"])
+        self.assertEqual(second["created"], 0)
+        self.assertTrue(second["continued"])
+        self.assertEqual(first["run_id"], second["run_id"])
+        run = ProcurementAnalysisRun.objects.get(pk=first["run_id"])
+        self.assertEqual(run.trigger, ProcurementAnalysisRun.Trigger.SCHEDULED)
+        self.assertEqual(run.run_type, ProcurementAnalysisRun.RunType.INCREMENTAL)
+        self.assertTrue(run.metadata["draft_only"])
+        self.assertTrue(run.metadata["human_review_required"])
+        mocked_delay.assert_called_once_with(str(run.id))
+
+    @patch("procurement.tasks_analysis_runs.initialize_analysis_run_task.delay")
+    def test_empty_persistent_run_finishes_as_no_changes(self, mocked_delay):
         bootstrap_guarded_automation()
-        run = ExtractionRun.objects.create(
-            trigger=ExtractionRun.Trigger.SCHEDULED,
-            status=ExtractionRun.Status.SUCCEEDED,
-            analyze_after_success=True,
-            records_new=0,
-            records_updated=0,
-        )
-        run.connectors.add(self.connector)
         result = dispatch_due_analysis_requests.run()
-        self.assertEqual(result["created"], 0)
-        request_record = AnalysisRequest.objects.get(extraction_run=run)
-        self.assertEqual(request_record.status, AnalysisRequest.Status.NO_CHANGES)
+        run = ProcurementAnalysisRun.objects.get(pk=result["run_id"])
+
+        initialize_run(str(run.id), actor="test")
+        run.refresh_from_db()
+
+        self.assertEqual(run.status, ProcurementAnalysisRun.Status.NO_CHANGES)
+        self.assertEqual(run.counters["total"], 0)
+        self.assertEqual(run.analysis_request.status, AnalysisRequest.Status.NO_CHANGES)
+        mocked_delay.assert_called_once_with(str(run.id))

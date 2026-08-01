@@ -22,12 +22,13 @@ class ProcurementAutomationSettingsTests(TestCase):
         self.client.force_authenticate(self.admin)
         self.settings = ProcurementAutomationSettings.objects.get(key="default")
 
-    def test_guarded_automation_is_enabled_once_with_pdp_draft_workflow(self):
+    def test_guarded_automation_is_enabled_once_with_persistent_hourly_workflow(self):
         self.assertTrue(self.settings.enabled)
-        self.assertEqual(self.settings.cadence, ProcurementAutomationSettings.Cadence.DAILY)
+        self.assertEqual(self.settings.cadence, ProcurementAutomationSettings.Cadence.HOURLY)
+        self.assertEqual(self.settings.interval_minutes, 60)
         self.assertEqual(str(self.settings.daily_time)[:5], "07:00")
         self.assertEqual(self.settings.manual_command, "PDP")
-        self.assertEqual(self.settings.analysis_delay_minutes, 15)
+        self.assertEqual(self.settings.analysis_delay_minutes, 0)
         self.assertIsNotNone(self.settings.next_extraction_at)
 
     def test_daily_schedule_requires_time(self):
@@ -45,7 +46,7 @@ class ProcurementAutomationSettingsTests(TestCase):
                 "enabled": True,
                 "cadence": "hourly",
                 "interval_minutes": 60,
-                "analysis_delay_minutes": 60,
+                "analysis_delay_minutes": 0,
             },
             format="json",
         )

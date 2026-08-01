@@ -120,4 +120,10 @@ def dispatch_due_analysis_requests() -> dict:
     from .tasks_analysis_runs import dispatch_scheduled_analysis_run
 
     result = dispatch_scheduled_analysis_run()
-    return {**result, "persistent_run": True, "draft_only": True, "human_review_required": True}
+    return {
+        **result,
+        "created": int(bool(result.get("dispatched"))),
+        "persistent_run": True,
+        "draft_only": True,
+        "human_review_required": True,
+    }
