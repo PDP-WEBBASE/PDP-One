@@ -27,13 +27,21 @@
   "disk_guard": {
     "cleanup_threshold_gb": 10,
     "target_free_gb": 15,
-    "minimum_deploy_free_gb": 8,
+    "fixed_capacity_gate_enforced": false,
+    "deployment_attempted_until_actual_windows_or_docker_write_failure": true,
+    "cleanup_before_deploy": true,
+    "cleanup_immediately_after_deploy": true,
+    "remove_agent_download_and_staging_when_no_longer_needed": true,
+    "remove_unused_build_cache_immediately": true,
+    "remove_unused_images_immediately": true,
+    "remove_stopped_containers_immediately": true,
+    "remove_unused_networks_immediately": true,
     "daily_task_time": "03:15",
     "container_log_max_size": "10m",
     "container_log_max_files": 3,
     "keep_local_verified_final_backups": 2,
     "archive_old_verified_backups_to_external_drive": true,
-    "compact_rancher_wsl_vhdx_when_needed": true,
+    "compact_rancher_wsl_vhdx_only_in_critical_scheduled_or_emergency_mode": true,
     "docker_volume_prune_allowed": false
   },
   "required_checks": [
