@@ -5,7 +5,8 @@ param(
     [string]$ProjectRoot = "",
     [string]$StartupTaskName = "PDP One Stable Startup",
     [string]$OpenWebTaskName = "PDP One Open Local Web",
-    [string]$McpWatchdogTaskName = "PDP One MCP Self Heal"
+    [string]$McpWatchdogTaskName = "PDP One MCP Self Heal",
+    [string]$DiskGuardTaskName = "PDP One Disk Guard"
 )
 
 $ErrorActionPreference = "Stop"
@@ -17,9 +18,11 @@ $ProjectRoot = (Resolve-Path -LiteralPath $ProjectRoot).Path
 $startScript = Join-Path $ProjectRoot "scripts\windows\Start-PDPOne.ps1"
 $openScript = Join-Path $ProjectRoot "scripts\windows\Open-PDPOneLocal.ps1"
 $mcpWatchdogScript = Join-Path $ProjectRoot "scripts\windows\Ensure-PDPOneMcpHealthy.ps1"
+$diskGuardScript = Join-Path $ProjectRoot "scripts\windows\Invoke-PDPOneDiskGuard.ps1"
 if (-not (Test-Path -LiteralPath $startScript)) { throw "Stable startup script was not found." }
 if (-not (Test-Path -LiteralPath $openScript)) { throw "Local web opener script was not found." }
 if (-not (Test-Path -LiteralPath $mcpWatchdogScript)) { throw "MCP self-heal script was not found." }
+if (-not (Test-Path -LiteralPath $diskGuardScript)) { throw "Disk guard script was not found." }
 
 $startupArguments = "-NoLogo -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$startScript`""
 $startupAction = New-ScheduledTaskAction -Execute "powershell.exe" -Argument $startupArguments
@@ -42,4 +45,10 @@ $mcpPeriodicTrigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(2
 $mcpSettings = New-ScheduledTaskSettingsSet -RestartCount 6 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit (New-TimeSpan -Minutes 6) -MultipleInstances IgnoreNew -StartWhenAvailable
 Register-ScheduledTask -TaskName $McpWatchdogTaskName -Action $mcpAction -Trigger @($mcpLogonTrigger, $mcpPeriodicTrigger) -Principal $principal -Settings $mcpSettings -Description "Checks the PDP One MCP container every five minutes. If it is missing or restarting, it repairs the MCP Docker image, verifies imports, recreates only MCP, preserves tokens and never touches Docker volumes or PostgreSQL data." -Force | Out-Null
 
-Write-Host "Scheduled Tasks '$StartupTaskName', '$OpenWebTaskName' and '$McpWatchdogTaskName' are installed." -ForegroundColor Green
+$diskGuardArguments = "-NoLogo -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$diskGuardScript`" -Mode scheduled -ProjectRoot `"$ProjectRoot`""
+$diskGuardAction = New-ScheduledTaskAction -Execute "powershell.exe" -Argument $diskGuardArguments
+$diskGuardDailyTrigger = New-ScheduledTaskTrigger -Daily -At 3:15am
+$diskGuardSettings = New-ScheduledTaskSettingsSet -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 5) -ExecutionTimeLimit (New-TimeSpan -Minutes 45) -MultipleInstances IgnoreNew -StartWhenAvailable
+Register-ScheduledTask -TaskName $DiskGuardTaskName -Action $diskGuardAction -Trigger $diskGuardDailyTrigger -Principal $principal -Settings $diskGuardSettings -Description "Maintains safe C drive capacity for PDP One. It prunes only unused build cache, images, stopped containers and networks, archives old restore-verified backups, compacts Rancher WSL VHDX only when needed, and never prunes Docker volumes." -Force | Out-Null
+
+Write-Host "Scheduled Tasks '$StartupTaskName', '$OpenWebTaskName', '$McpWatchdogTaskName' and '$DiskGuardTaskName' are installed." -ForegroundColor Green

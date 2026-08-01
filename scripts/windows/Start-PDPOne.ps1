@@ -31,11 +31,15 @@ $report = [ordered]@{
     local_dns_degraded = $false
     token_continuity = "pending"
     diagnostics = $null
+    disk_guard_report = $null
 }
 
 try {
     $ProjectRoot = Get-PDPOneProjectRoot
     Set-Location $ProjectRoot
+    $diskGuardOutput = @(& powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "Invoke-PDPOneDiskGuard.ps1") -Mode startup -ProjectRoot $ProjectRoot)
+    if ($LASTEXITCODE -ne 0) { throw "PDP One disk guard blocked startup because C: free space is unsafe." }
+    if ($diskGuardOutput.Count -gt 0) { $report.disk_guard_report = [string]$diskGuardOutput[-1] }
     Start-PDPOneRancherDesktop -TimeoutSeconds $DockerTimeoutSeconds
     $report.docker = "ready"
     $null = Assert-PDPOneConfiguration -ProjectRoot $ProjectRoot
