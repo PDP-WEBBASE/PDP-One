@@ -15,7 +15,7 @@ Set-StrictMode -Version Latest
 
 $projectRoot = Get-PDPOneProjectRoot
 $guardScript = Join-Path $PSScriptRoot "Invoke-PDPOneDiskGuard.ps1"
-$innerScript = Join-Path $PSScriptRoot "Invoke-PDPOneFastDeployment.ps1"
+$innerScript = Join-Path $PSScriptRoot "Invoke-PDPOneRegistryFastDeployment.ps1"
 $downloadRoot = Join-Path $AgentRoot ("downloads\" + $DeploymentId)
 $deploymentOutput = @()
 $deploymentExitCode = 1
@@ -23,16 +23,16 @@ $predeployGuardReport = ""
 $postdeployGuardReport = ""
 
 if (-not (Test-Path -LiteralPath $innerScript)) {
-    throw "Fast deployment implementation was not found."
+    throw "Registry-backed fast deployment implementation was not found."
 }
 
 try {
     if (Test-Path -LiteralPath $guardScript) {
         try {
-            $guardOutput = @(& powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File $guardScript -Mode predeploy -ProjectRoot $projectRoot)
+            $guardOutput = @(& powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File $guardScript -Mode predeploy -ProjectRoot $projectRoot -BuildCacheBudgetGB 2)
             if ($guardOutput.Count -gt 0) { $predeployGuardReport = [string]$guardOutput[-1] }
         } catch {
-            Write-Warning "Pre-deployment cleanup could not finish. Deployment will still be attempted until Docker reports an actual write failure."
+            Write-Warning "Pre-deployment cleanup could not finish. Registry deployment will still be attempted until Docker reports an actual write failure."
         }
     }
 
@@ -45,7 +45,7 @@ try {
 
     if (Test-Path -LiteralPath $guardScript) {
         try {
-            $guardOutput = @(& powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File $guardScript -Mode postdeploy -ProjectRoot $projectRoot)
+            $guardOutput = @(& powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File $guardScript -Mode postdeploy -ProjectRoot $projectRoot -BuildCacheBudgetGB 2)
             if ($guardOutput.Count -gt 0) { $postdeployGuardReport = [string]$guardOutput[-1] }
         } catch {
             Write-Warning "Post-deployment cleanup did not finish. The deployment result is preserved and the daily disk task will retry cleanup."
@@ -67,6 +67,9 @@ if ($deploymentReport -and (Test-Path -LiteralPath $deploymentReport)) {
         $report | Add-Member -NotePropertyName obsolete_artifacts_cleaned_immediately -NotePropertyValue $true -Force
         $report | Add-Member -NotePropertyName capacity_gate_enforced -NotePropertyValue $false -Force
         $report | Add-Member -NotePropertyName deployment_attempted_until_actual_write_failure -NotePropertyValue $true -Force
+        $report | Add-Member -NotePropertyName local_image_build_performed -NotePropertyValue $false -Force
+        $report | Add-Member -NotePropertyName image_source -NotePropertyValue "github_container_registry" -Force
+        $report | Add-Member -NotePropertyName retained_image_policy -NotePropertyValue "active_commit_and_previous_commit" -Force
         $report | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $deploymentReport -Encoding UTF8
     } catch { }
 }
