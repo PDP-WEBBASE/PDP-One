@@ -78,8 +78,13 @@ class GuardedAutomationTests(TestCase):
         self.assertTrue(run.analyze_after_success)
         self.assertEqual(list(run.connectors.values_list("key", flat=True)), [self.connector.key])
 
+    @patch("procurement.tasks_analysis_runs.continue_analysis_run_task.delay")
     @patch("procurement.tasks_analysis_runs.initialize_analysis_run_task.delay")
-    def test_scheduled_dispatch_creates_one_persistent_run_and_then_continues_it(self, mocked_delay):
+    def test_scheduled_dispatch_creates_one_persistent_run_and_then_continues_it(
+        self,
+        mocked_initialize,
+        mocked_continue,
+    ):
         bootstrap_guarded_automation()
 
         first = dispatch_due_analysis_requests.run()
@@ -96,10 +101,11 @@ class GuardedAutomationTests(TestCase):
         self.assertEqual(run.run_type, ProcurementAnalysisRun.RunType.INCREMENTAL)
         self.assertTrue(run.metadata["draft_only"])
         self.assertTrue(run.metadata["human_review_required"])
-        mocked_delay.assert_called_once_with(str(run.id))
+        mocked_initialize.assert_called_once_with(str(run.id))
+        mocked_continue.assert_called_once_with(str(run.id))
 
     @patch("procurement.tasks_analysis_runs.initialize_analysis_run_task.delay")
-    def test_empty_persistent_run_finishes_as_no_changes(self, mocked_delay):
+    def test_empty_persistent_run_finishes_as_no_changes(self, mocked_initialize):
         bootstrap_guarded_automation()
         result = dispatch_due_analysis_requests.run()
         run = ProcurementAnalysisRun.objects.get(pk=result["run_id"])
@@ -110,4 +116,4 @@ class GuardedAutomationTests(TestCase):
         self.assertEqual(run.status, ProcurementAnalysisRun.Status.NO_CHANGES)
         self.assertEqual(run.counters["total"], 0)
         self.assertEqual(run.analysis_request.status, AnalysisRequest.Status.NO_CHANGES)
-        mocked_delay.assert_called_once_with(str(run.id))
+        mocked_initialize.assert_called_once_with(str(run.id))
