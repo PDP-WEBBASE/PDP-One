@@ -16,8 +16,8 @@ test("PDP One builds immutable images in GitHub and never builds on the laptop",
   assert.match(workflow, /cache-to:\s*type=gha/);
   assert.match(managed, /Invoke-PDPOneRegistryFastDeployment\.ps1/);
   assert.match(registryDeploy, /local_image_build_performed = \$false/);
-  assert.match(registryDeploy, /docker", "pull"/);
-  assert.doesNotMatch(registryDeploy, /docker".*"compose".*"build"/s);
+  assert.match(registryDeploy, /-Command "docker" -Arguments @\("pull", \$image\)/);
+  assert.doesNotMatch(registryDeploy, /-Command "docker" -Arguments @\("compose", "build"/);
   assert.doesNotMatch(compose, /^\s+build:/m);
 });
 
