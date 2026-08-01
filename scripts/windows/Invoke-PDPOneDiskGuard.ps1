@@ -6,6 +6,7 @@ param(
     [int]$CleanupThresholdGB = 10,
     [int]$TargetFreeGB = 15,
     [int]$CriticalFreeGB = 3,
+    [int]$BuildCacheBudgetGB = 2,
     [int]$KeepLocalFinalBackups = 2,
     [string]$ProjectRoot = "",
     [string]$AgentRoot = "C:\ProgramData\PDP-One\deployment-agent",
@@ -22,8 +23,7 @@ $mutex = New-Object Threading.Mutex($false, "Global\PDP-One-Disk-Guard")
 if (-not $mutex.WaitOne(0)) { exit 0 }
 
 function Get-PDPOneFreeBytes {
-    $drive = Get-PSDrive -Name C -ErrorAction Stop
-    return [int64]$drive.Free
+    return [int64](Get-PSDrive -Name C -ErrorAction Stop).Free
 }
 
 function Get-PDPOneDirectoryBytes([string]$Path) {
@@ -150,6 +150,44 @@ function Invoke-PDPOneBackupRetention([ref]$Archived, [ref]$Removed) {
     }
 }
 
+function Get-PDPOneRetainedImageReferences {
+    $keep = @{}
+    $statePath = Join-Path $AgentRoot "state\last-deployment.json"
+    if (-not (Test-Path -LiteralPath $statePath)) { return $keep }
+
+    try {
+        $state = Get-Content -LiteralPath $statePath -Raw -Encoding UTF8 | ConvertFrom-Json
+        foreach ($commit in @([string]$state.approved_commit, [string]$state.previous_commit)) {
+            if ($commit -notmatch '^[0-9a-f]{40}$') { continue }
+            foreach ($service in @("backend", "mcp", "web")) {
+                $keep[("ghcr.io/pdp-webbase/pdp-one-{0}:{1}" -f $service, $commit).ToLowerInvariant()] = $true
+            }
+        }
+    } catch { }
+    return $keep
+}
+
+function Invoke-PDPOneImageRetention([ref]$RemovedImages, [ref]$DockerActions) {
+    $keep = Get-PDPOneRetainedImageReferences
+    $references = @(& docker image ls --format "{{.Repository}}:{{.Tag}}" 2>$null)
+
+    foreach ($raw in $references) {
+        $reference = ([string]$raw).Trim()
+        if (-not $reference -or $reference.EndsWith(":<none>")) { continue }
+        $lower = $reference.ToLowerInvariant()
+        $isRegistryImage = $lower -match '^ghcr\.io/pdp-webbase/pdp-one-(backend|mcp|web):[0-9a-f]{40}$'
+        $isLegacyImage = $lower -match '^pdp-one-(backend|mcp|web):(candidate-[0-9a-f]+|local)$'
+        if (-not $isRegistryImage -and -not $isLegacyImage) { continue }
+        if ($keep.ContainsKey($lower)) { continue }
+
+        $result = Invoke-PDPOneSafeNative -Command "docker" -Arguments @("image", "rm", $reference) -IgnoreFailure
+        $DockerActions.Value += $result
+        if ($result.ExitCode -eq 0) { $RemovedImages.Value += $reference }
+    }
+
+    $DockerActions.Value += (Invoke-PDPOneSafeNative -Command "docker" -Arguments @("image", "prune", "--force") -IgnoreFailure)
+}
+
 function Get-PDPOneRancherVhdFiles {
     $roots = @(
         (Join-Path $env:LOCALAPPDATA "rancher-desktop"),
@@ -221,7 +259,7 @@ function Invoke-PDPOneRancherCompaction([ref]$Compacted) {
     if ($servicesWereRunning -or $Mode -eq "emergency") {
         Start-PDPOneRancherDesktop -TimeoutSeconds 300
         Set-Location $ProjectRoot
-        & docker compose --profile tunnel up --detach --no-build
+        & docker compose --profile tunnel up --detach --no-build --pull never
         if ($LASTEXITCODE -ne 0) { throw "PDP One services could not restart after VHD compaction." }
     }
 }
@@ -233,6 +271,7 @@ New-Item -ItemType Directory -Force -Path $maintenanceRoot | Out-Null
 $reportPath = Join-Path $maintenanceRoot ("disk-guard-" + (Get-Date -Format "yyyyMMdd-HHmmss") + ".json")
 
 $removedHostPaths = @()
+$removedImages = @()
 $archivedBackups = @()
 $removedBackups = @()
 $compactedVhds = @()
@@ -242,11 +281,12 @@ $beforeFree = Get-PDPOneFreeBytes
 $cleanupThreshold = [int64]$CleanupThresholdGB * 1GB
 $targetFree = [int64]$TargetFreeGB * 1GB
 $criticalFree = [int64]$CriticalFreeGB * 1GB
+$cacheBudget = [Math]::Max(1, $BuildCacheBudgetGB).ToString() + "GB"
 $mustClean = $Mode -in @("predeploy", "postdeploy", "scheduled", "emergency") -or $beforeFree -lt $cleanupThreshold
 
 try {
     if ($mustClean) {
-        $agentAge = if ($Mode -eq "postdeploy") { (Get-Date).AddMinutes(-5) } elseif ($Mode -in @("predeploy", "emergency")) { (Get-Date).AddMinutes(-20) } else { (Get-Date).AddHours(-6) }
+        $agentAge = if ($Mode -eq "postdeploy") { (Get-Date).AddMinutes(-1) } elseif ($Mode -in @("predeploy", "emergency")) { (Get-Date).AddMinutes(-20) } else { (Get-Date).AddHours(-6) }
         Remove-PDPOneOldDirectoryChildren -Path (Join-Path $AgentRoot "downloads") -OlderThan $agentAge -Removed ([ref]$removedHostPaths)
         Remove-PDPOneOldDirectoryChildren -Path (Join-Path $AgentRoot "staging") -OlderThan $agentAge -Removed ([ref]$removedHostPaths)
         Remove-PDPOneOldFiles -Path (Join-Path $AgentRoot "reports") -OlderThan (Get-Date).AddDays(-14) -Removed ([ref]$removedHostPaths)
@@ -255,12 +295,9 @@ try {
 
         try {
             Start-PDPOneRancherDesktop -TimeoutSeconds 300
-            $aggressive = $Mode -in @("predeploy", "postdeploy", "emergency")
-            $builderArgs = if ($aggressive) { @("builder", "prune", "--all", "--force") } else { @("builder", "prune", "--all", "--force", "--filter", "until=24h") }
-            $imageArgs = if ($aggressive) { @("image", "prune", "--all", "--force") } else { @("image", "prune", "--all", "--force", "--filter", "until=168h") }
             $dockerActions += (Invoke-PDPOneSafeNative -Command "docker" -Arguments @("container", "prune", "--force") -IgnoreFailure)
-            $dockerActions += (Invoke-PDPOneSafeNative -Command "docker" -Arguments $imageArgs -IgnoreFailure)
-            $dockerActions += (Invoke-PDPOneSafeNative -Command "docker" -Arguments $builderArgs -IgnoreFailure)
+            Invoke-PDPOneImageRetention -RemovedImages ([ref]$removedImages) -DockerActions ([ref]$dockerActions)
+            $dockerActions += (Invoke-PDPOneSafeNative -Command "docker" -Arguments @("builder", "prune", "--all", "--force", "--keep-storage", $cacheBudget) -IgnoreFailure)
             $dockerActions += (Invoke-PDPOneSafeNative -Command "docker" -Arguments @("network", "prune", "--force") -IgnoreFailure)
         } catch {
             $warnings += ConvertTo-PDPOneRedactedText $_.Exception.Message
@@ -286,7 +323,7 @@ try {
     $status = if ($afterFree -ge $targetFree) { "healthy" } elseif ($afterFree -ge $criticalFree) { "degraded" } else { "critical" }
 
     $report = [ordered]@{
-        schema = "pdp-one.disk-guard.v2"
+        schema = "pdp-one.disk-guard.v3"
         mode = $Mode
         completed_at = [DateTime]::UtcNow.ToString("o")
         c_free_bytes_before = $beforeFree
@@ -294,11 +331,14 @@ try {
         c_free_bytes_delta = $afterFree - $beforeFree
         cleanup_threshold_gb = $CleanupThresholdGB
         target_free_gb = $TargetFreeGB
+        build_cache_budget_gb = $BuildCacheBudgetGB
+        image_retention = "active_commit_and_previous_commit"
         status = $status
         capacity_gate_enforced = $false
         deployment_allowed = $true
         actual_write_failure_stops_deployment = $true
         removed_host_paths = $removedHostPaths
+        removed_obsolete_images = $removedImages
         archived_verified_backups = $archivedBackups
         removed_local_verified_backups = $removedBackups
         compacted_rancher_vhds = $compactedVhds
@@ -317,10 +357,11 @@ try {
     }
 } catch {
     $fallback = [ordered]@{
-        schema = "pdp-one.disk-guard.v2"
+        schema = "pdp-one.disk-guard.v3"
         mode = $Mode
         completed_at = [DateTime]::UtcNow.ToString("o")
         status = "guard_error"
+        build_cache_budget_gb = $BuildCacheBudgetGB
         capacity_gate_enforced = $false
         deployment_allowed = $true
         error = ConvertTo-PDPOneRedactedText $_.Exception.Message
