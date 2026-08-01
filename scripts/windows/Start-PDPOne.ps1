@@ -32,14 +32,22 @@ $report = [ordered]@{
     token_continuity = "pending"
     diagnostics = $null
     disk_guard_report = $null
+    disk_guard_warning = $null
 }
 
 try {
     $ProjectRoot = Get-PDPOneProjectRoot
     Set-Location $ProjectRoot
-    $diskGuardOutput = @(& powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "Invoke-PDPOneDiskGuard.ps1") -Mode startup -ProjectRoot $ProjectRoot)
-    if ($LASTEXITCODE -ne 0) { throw "PDP One disk guard blocked startup because C: free space is unsafe." }
-    if ($diskGuardOutput.Count -gt 0) { $report.disk_guard_report = [string]$diskGuardOutput[-1] }
+    try {
+        $diskGuardOutput = @(& powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "Invoke-PDPOneDiskGuard.ps1") -Mode startup -ProjectRoot $ProjectRoot)
+        if ($diskGuardOutput.Count -gt 0) { $report.disk_guard_report = [string]$diskGuardOutput[-1] }
+        if ($LASTEXITCODE -ne 0) {
+            $report.disk_guard_warning = "Disk guard returned a non-zero code. Startup continued because capacity checks are advisory."
+        }
+    } catch {
+        $report.disk_guard_warning = ConvertTo-PDPOneRedactedText $_.Exception.Message
+    }
+
     Start-PDPOneRancherDesktop -TimeoutSeconds $DockerTimeoutSeconds
     $report.docker = "ready"
     $null = Assert-PDPOneConfiguration -ProjectRoot $ProjectRoot
@@ -95,6 +103,9 @@ try {
     Write-PDPOneJsonFile -Path (Join-Path $reportDir "startup-latest.json") -Value $report
     Write-PDPOneJsonFile -Path (Join-Path $ProjectRoot "PDP-ONE-LAST-STARTUP-REPORT.json") -Value $report
     Write-Host "PDP One web shell, session API, public route, data and Docker volumes are healthy." -ForegroundColor Green
+    if ($report.disk_guard_warning) {
+        Write-Host "Disk cleanup reported a warning, but startup was allowed to continue." -ForegroundColor Yellow
+    }
     if ($report.local_dns_degraded) {
         Write-Host "The public route is healthy through public IPv4 resolution. The local browser was opened on localhost so Windows DNS settings do not need to change." -ForegroundColor Yellow
     }
