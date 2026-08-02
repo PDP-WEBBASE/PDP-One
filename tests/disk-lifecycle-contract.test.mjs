@@ -18,12 +18,13 @@ test("fast deployment is not blocked by a fixed free-space threshold", async () 
   assert.match(managed, /obsolete_artifacts_cleaned_immediately/);
 });
 
-test("obsolete Rancher artifacts are pruned while active and previous images and all volumes are retained", async () => {
+test("obsolete Rancher artifacts are pruned while active, previous, and in-flight images and all volumes are retained", async () => {
   const guard = await read("scripts/windows/Invoke-PDPOneDiskGuard.ps1");
   const compose = await read("docker-compose.yml");
 
   assert.match(guard, /builder", "prune", "--all", "--force", "--keep-storage"/);
-  assert.match(guard, /active_commit_and_previous_commit/);
+  assert.match(guard, /active_previous_and_inflight_commit/);
+  assert.match(guard, /Get-PDPOneInFlightCommit/);
   assert.match(guard, /image", "rm", \$reference/);
   assert.match(guard, /image", "prune", "--force"/);
   assert.doesNotMatch(guard, /image", "prune", "--all"/);
