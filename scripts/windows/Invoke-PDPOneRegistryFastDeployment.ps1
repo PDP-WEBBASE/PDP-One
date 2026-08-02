@@ -95,6 +95,30 @@ function Assert-PDPOneImageRevision([string]$Image, [string]$ExpectedCommit) {
     }
 }
 
+function Remove-PDPOneStaleImagePins {
+    $names = @(& docker ps --all --filter "name=pdp-one-deploy-pin-" --format "{{.Names}}" 2>$null)
+    foreach ($rawName in $names) {
+        $name = ([string]$rawName).Trim()
+        if (-not $name) { continue }
+        Invoke-PDPOneNative -Command "docker" -Arguments @("rm", "--force", $name) -FailureMessage "Stale deployment image pin could not be removed." -IgnoreFailure -Quiet | Out-Null
+    }
+}
+
+function New-PDPOneImagePin([string]$Service, [string]$Image, [string]$ExpectedCommit) {
+    $pinName = "pdp-one-deploy-pin-{0}-{1}" -f $Service, $ExpectedCommit.Substring(0, 12)
+    Invoke-PDPOneNative -Command "docker" -Arguments @("rm", "--force", $pinName) -FailureMessage "Existing image pin could not be replaced." -IgnoreFailure -Quiet | Out-Null
+    Invoke-PDPOneNative -Command "docker" -Arguments @("run", "--detach", "--name", $pinName, "--entrypoint", "/bin/sh", $Image, "-c", "while true; do sleep 3600; done") -FailureMessage "Immutable $Service image could not be pinned during deployment." -Quiet | Out-Null
+    $script:pinContainers += $pinName
+    return $pinName
+}
+
+function Remove-PDPOneImagePins {
+    foreach ($pinName in @($script:pinContainers)) {
+        Invoke-PDPOneNative -Command "docker" -Arguments @("rm", "--force", $pinName) -FailureMessage "Deployment image pin could not be removed." -IgnoreFailure -Quiet | Out-Null
+    }
+    $script:pinContainers = @()
+}
+
 $projectRoot = Get-PDPOneProjectRoot
 $envPath = Assert-PDPOneConfiguration -ProjectRoot $projectRoot
 $reportsRoot = Join-Path $AgentRoot "reports"
@@ -146,6 +170,9 @@ $report = [ordered]@{
     health_profile = "short"
     active_images = $currentImages
     retained_previous_images = $previousImages
+    deployment_image_pins = @()
+    image_pins_removed_after_state_commit = $false
+    image_pins_left_for_recovery = @()
     error = $null
     recovery_instruction = "Redeploy previous_commit from GitHub Container Registry if the active commit is unhealthy."
 }
@@ -156,6 +183,7 @@ $pointer = [IntPtr]::Zero
 $plainToken = $null
 $sourceEnvPath = $null
 $loggedIntoRegistry = $false
+$script:pinContainers = @()
 $previousEnvironment = @{
     PDP_BACKEND_IMAGE = $env:PDP_BACKEND_IMAGE
     PDP_MCP_IMAGE = $env:PDP_MCP_IMAGE
@@ -167,6 +195,8 @@ try {
     Start-PDPOneRancherDesktop -TimeoutSeconds 300
     if (-not (Test-PDPOneDockerEngine)) { throw "Docker Engine is not ready." }
     if (-not (Test-Path -LiteralPath $secretPath)) { throw "The protected GitHub credential is missing." }
+
+    Remove-PDPOneStaleImagePins
 
     $secureToken = (Get-Content -LiteralPath $secretPath -Raw).Trim() | ConvertTo-SecureString
     $pointer = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secureToken)
@@ -188,7 +218,7 @@ try {
     }
     if ([string]$commit.sha -ne $CommitSha) { throw "GitHub did not return the requested exact commit." }
 
-    $report.stage = "pulling-immutable-images"
+    $report.stage = "pulling-and-pinning-immutable-images"
     $report | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $reportPath -Encoding UTF8
 
     $plainToken | & docker login $registry --username "PDP-WEBBASE" --password-stdin | Out-Null
@@ -203,6 +233,9 @@ try {
             Invoke-PDPOneNative -Command "docker" -Arguments @("pull", $image) -FailureMessage "Image pull failed for $service." | Out-Null
         } | Out-Null
         Assert-PDPOneImageRevision -Image $image -ExpectedCommit $CommitSha
+        $pinName = New-PDPOneImagePin -Service $service -Image $image -ExpectedCommit $CommitSha
+        $report.deployment_image_pins += [ordered]@{ service = $service; image = $image; container = $pinName }
+        $report | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $reportPath -Encoding UTF8
     }
 
     $report.stage = "acquiring-exact-source"
@@ -299,6 +332,9 @@ try {
         code_archive = $null
     } | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $lastStatePath -Encoding UTF8
 
+    Remove-PDPOneImagePins
+    $report.image_pins_removed_after_state_commit = $true
+
     $binRoot = Join-Path $AgentRoot "bin"
     New-Item -ItemType Directory -Force -Path $binRoot | Out-Null
     Copy-Item -Path (Join-Path $projectRoot "scripts\windows\*.ps1") -Destination $binRoot -Force
@@ -314,6 +350,7 @@ try {
     $report.status = "failed"
     $report.completed_at = [DateTime]::UtcNow.ToString("o")
     $report.error = ConvertTo-PDPOneRedactedText $_.Exception.Message
+    $report.image_pins_left_for_recovery = @($script:pinContainers)
     $report | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $reportPath -Encoding UTF8
 
     if ($report.production_changed) {
