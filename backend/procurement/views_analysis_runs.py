@@ -3,6 +3,7 @@ from __future__ import annotations
 import gzip
 import hashlib
 import json
+import logging
 from pathlib import Path
 
 from django.conf import settings
@@ -41,6 +42,8 @@ from .serializers_analysis_runs import (
     ProcurementAnalysisRunSerializer,
 )
 from .tasks_analysis_runs import export_analysis_dataset_task, initialize_analysis_run_task
+
+logger = logging.getLogger(__name__)
 
 
 def _allowed(user) -> bool:
@@ -331,6 +334,15 @@ def import_analysis_results(request, run_id):
             )
     except (json.JSONDecodeError, TypeError, ValueError) as exc:
         return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+    except Exception as exc:  # pragma: no cover - production diagnostic guard
+        logger.exception("Procurement analysis result import failed for run %s", run_id)
+        return Response(
+            {
+                "detail": f"{type(exc).__name__}: {str(exc)[:300]}",
+                "error_code": "procurement_import_internal_error",
+            },
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
     return Response({"import": ProcurementAnalysisImportSerializer(import_record).data}, status=status.HTTP_201_CREATED)
 
 
