@@ -22,6 +22,16 @@ test("PDP One builds immutable images in GitHub and never builds on the laptop",
 });
 
 
+test("OCI revision labels are parsed without a quoted Go-template key on Windows PowerShell", async () => {
+  const registryDeploy = await readFile(new URL("../scripts/windows/Invoke-PDPOneRegistryFastDeployment.ps1", import.meta.url), "utf8");
+
+  assert.match(registryDeploy, /--format '\{\{json \.Config\.Labels\}\}'/);
+  assert.match(registryDeploy, /ConvertFrom-Json/);
+  assert.match(registryDeploy, /PSObject\.Properties\['org\.opencontainers\.image\.revision'\]/);
+  assert.doesNotMatch(registryDeploy, /index \.Config\.Labels/);
+});
+
+
 test("PDP One caps cache, rotates logs, retains two image generations, and disables Kubernetes", async () => {
   const guard = await readFile(new URL("../scripts/windows/Invoke-PDPOneDiskGuard.ps1", import.meta.url), "utf8");
   const compose = await readFile(new URL("../docker-compose.yml", import.meta.url), "utf8");
