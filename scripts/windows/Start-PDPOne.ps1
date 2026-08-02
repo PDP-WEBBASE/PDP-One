@@ -13,6 +13,43 @@ $ProgressPreference = "SilentlyContinue"
 Set-StrictMode -Version Latest
 . (Join-Path $PSScriptRoot "PDPOne.Common.ps1")
 
+function Test-PDPOneDeploymentInProgress {
+    $markerPath = "C:\ProgramData\PDP-One\deployment-agent\state\deployment-in-progress.json"
+    if (-not (Test-Path -LiteralPath $markerPath)) { return $false }
+
+    try {
+        $marker = Get-Content -LiteralPath $markerPath -Raw -Encoding UTF8 | ConvertFrom-Json
+        $processId = 0
+        [void][int]::TryParse([string]$marker.process_id, [ref]$processId)
+        if ($processId -gt 0 -and $null -ne (Get-Process -Id $processId -ErrorAction SilentlyContinue)) {
+            return $true
+        }
+
+        $started = [datetime]::MinValue
+        if ([datetime]::TryParse([string]$marker.started_at, [ref]$started)) {
+            if ($started.ToUniversalTime() -gt [DateTime]::UtcNow.AddHours(-2)) {
+                Remove-Item -LiteralPath $markerPath -Force -ErrorAction SilentlyContinue
+                return $false
+            }
+        }
+
+        Remove-Item -LiteralPath $markerPath -Force -ErrorAction SilentlyContinue
+        return $false
+    } catch {
+        $file = Get-Item -LiteralPath $markerPath -ErrorAction SilentlyContinue
+        if ($null -ne $file -and $file.LastWriteTimeUtc -lt [DateTime]::UtcNow.AddHours(-2)) {
+            Remove-Item -LiteralPath $markerPath -Force -ErrorAction SilentlyContinue
+            return $false
+        }
+        return $true
+    }
+}
+
+if (Test-PDPOneDeploymentInProgress) {
+    Write-Host "A coordinated PDP One deployment is active. Stable Startup will retry on its next scheduled run." -ForegroundColor Yellow
+    exit 0
+}
+
 $mutex = New-Object Threading.Mutex($false, "Global\PDP-One-Stable-Startup")
 if (-not $mutex.WaitOne(0)) { exit 0 }
 $ProjectRoot = $null
