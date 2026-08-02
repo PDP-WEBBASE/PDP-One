@@ -78,8 +78,18 @@ function Set-PDPOneProcessEnvironment([string]$Name, $Value) {
 }
 
 function Assert-PDPOneImageRevision([string]$Image, [string]$ExpectedCommit) {
-    $revision = [string](& docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' $Image 2>$null | Select-Object -First 1)
+    $labelsJson = [string](& docker image inspect --format '{{json .Config.Labels}}' $Image 2>$null | Select-Object -First 1)
     if ($LASTEXITCODE -ne 0) { throw "Image inspection failed for $Image." }
+    if ([string]::IsNullOrWhiteSpace($labelsJson)) { throw "Image labels are missing for $Image." }
+
+    try {
+        $labels = $labelsJson | ConvertFrom-Json
+    } catch {
+        throw "Image labels could not be parsed for $Image."
+    }
+
+    $revisionProperty = $labels.PSObject.Properties['org.opencontainers.image.revision']
+    $revision = if ($null -ne $revisionProperty) { [string]$revisionProperty.Value } else { "" }
     if ($revision.Trim() -ne $ExpectedCommit) {
         throw "Image $Image does not declare the expected immutable commit revision."
     }
