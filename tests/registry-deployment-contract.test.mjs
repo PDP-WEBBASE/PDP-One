@@ -32,7 +32,7 @@ test("OCI revision labels are parsed without a quoted Go-template key on Windows
 });
 
 
-test("PDP One caps cache, rotates logs, retains two image generations, and disables Kubernetes", async () => {
+test("PDP One caps cache, rotates logs, retains active, previous, and in-flight images, and disables Kubernetes", async () => {
   const guard = await readFile(new URL("../scripts/windows/Invoke-PDPOneDiskGuard.ps1", import.meta.url), "utf8");
   const compose = await readFile(new URL("../docker-compose.yml", import.meta.url), "utf8");
   const policy = await readFile(new URL("../scripts/windows/Ensure-PDPOneRancherPolicy.ps1", import.meta.url), "utf8");
@@ -40,7 +40,8 @@ test("PDP One caps cache, rotates logs, retains two image generations, and disab
 
   assert.match(guard, /BuildCacheBudgetGB = 2/);
   assert.match(guard, /--keep-storage/);
-  assert.match(guard, /active_commit_and_previous_commit/);
+  assert.match(guard, /active_previous_and_inflight_commit/);
+  assert.match(guard, /Get-PDPOneInFlightCommit/);
   assert.doesNotMatch(guard, /image", "prune", "--all"/);
   assert.doesNotMatch(guard, /volume\s+prune/i);
   assert.match(compose, /driver: local/);
