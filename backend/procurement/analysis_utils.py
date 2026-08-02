@@ -14,10 +14,18 @@ def get_active_context() -> AnalysisContextSnapshot | None:
 
 
 def notice_basis_payload(notice: ProcurementNotice) -> dict:
-    source_hashes = sorted(
-        notice.source_links.select_related("source_notice")
-        .values_list("source_notice__content_hash", flat=True)
-    )
+    prefetched = getattr(notice, "_prefetched_objects_cache", {}).get("source_links")
+    if prefetched is not None:
+        source_hashes = sorted(
+            link.source_notice.content_hash
+            for link in prefetched
+            if getattr(link, "source_notice", None) is not None
+        )
+    else:
+        source_hashes = sorted(
+            notice.source_links.select_related("source_notice")
+            .values_list("source_notice__content_hash", flat=True)
+        )
     return {
         "id": str(notice.id),
         "type": notice.resolved_notice_type,

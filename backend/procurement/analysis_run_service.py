@@ -379,9 +379,13 @@ def claim_run_items(run_id: str, *, worker_id: str, limit: int = 500, lease_seco
         item.claimed_at = now
         item.claim_expires_at = expires
         item.attempts += 1
-        item.save(update_fields=[
-            "claim_token", "status", "claimed_by", "claimed_at", "claim_expires_at", "attempts", "updated_at"
-        ])
+        item.updated_at = now
+    if selected:
+        ProcurementAnalysisRunItem.objects.bulk_update(
+            selected,
+            ["claim_token", "status", "claimed_by", "claimed_at", "claim_expires_at", "attempts", "updated_at"],
+            batch_size=500,
+        )
     if selected:
         run.status = ProcurementAnalysisRun.Status.WAITING_FOR_RESULTS
         run.heartbeat_at = now
@@ -415,7 +419,8 @@ COMPACT_CLAIM_SCHEMA = {
         "a": "estimated_amount_rials",
         "g": "guarantee_amount_rials",
         "q": "qualification_text",
-        "sh": "source_hashes",
+        "gg": "goods_group",
+        "sg": "service_group",
     },
     "result": {
         "i": "run_item_id",
@@ -445,11 +450,21 @@ COMPACT_CLAIM_SCHEMA = {
 
 
 def _compact_basis(notice: ProcurementNotice) -> dict[str, Any]:
-    source_hashes = sorted(
-        link.source_notice.content_hash
+    source_payloads = [
+        link.source_notice.raw_payload or {}
         for link in notice.source_links.all()
         if getattr(link, "source_notice", None) is not None
-    )
+    ]
+    goods_group = next((
+        str(payload.get("list", {}).get("goods_group", ""))
+        for payload in source_payloads
+        if payload.get("list", {}).get("goods_group")
+    ), "")
+    service_group = next((
+        str(payload.get("list", {}).get("service_group", ""))
+        for payload in source_payloads
+        if payload.get("list", {}).get("service_group")
+    ), "")
     mapped = {
         "y": notice.resolved_notice_type,
         "t": notice.title,
@@ -466,7 +481,8 @@ def _compact_basis(notice: ProcurementNotice) -> dict[str, Any]:
         "a": str(notice.estimated_amount_rials) if notice.estimated_amount_rials is not None else None,
         "g": str(notice.guarantee_amount_rials) if notice.guarantee_amount_rials is not None else None,
         "q": notice.qualification_text,
-        "sh": source_hashes,
+        "gg": goods_group,
+        "sg": service_group,
     }
     return {key: value for key, value in mapped.items() if value not in (None, "", [], {})}
 
@@ -610,10 +626,27 @@ def import_result_records(
     import_record.status = ProcurementAnalysisImport.Status.IMPORTING
     import_record.save(update_fields=["status", "updated_at"])
 
-    for index, result in enumerate(results, start=1):
+    normalized_results = [_normalize_result(result) for result in results]
+    requested_item_ids = [
+        str(result.get("run_item_id") or "")
+        for result in normalized_results
+        if result.get("run_item_id")
+    ]
+    item_map = {
+        str(item.id): item
+        for item in run.items.select_related("notice").prefetch_related(
+            "notice__source_links__source_notice",
+            "notice__analysis_drafts",
+        ).filter(pk__in=requested_item_ids)
+    }
+    pending_item_updates: dict[str, ProcurementAnalysisRunItem] = {}
+    pending_notice_updates: dict[str, ProcurementNotice] = {}
+
+    for index, result in enumerate(normalized_results, start=1):
         try:
-            result = _normalize_result(result)
-            item = run.items.select_related("notice").get(pk=result.get("run_item_id"))
+            item = item_map.get(str(result.get("run_item_id") or ""))
+            if item is None:
+                raise ProcurementAnalysisRunItem.DoesNotExist("run_item_not_found")
             if str(result.get("claim_token", "")) != str(item.claim_token or ""):
                 counts["rejected"] += 1
                 errors.append({"index": str(index), "error": "claim_token_mismatch"})
@@ -633,24 +666,31 @@ def import_result_records(
             current_hash = notice_basis_hash(item.notice)
             if current_hash != item.notice_content_hash:
                 counts["invalid_hash"] += 1
-                item.status = ProcurementAnalysisRunItem.Status.RETRY
-                item.last_error = "notice_changed_after_claim"
-                item.claim_token = None
-                item.save(update_fields=["status", "last_error", "claim_token", "updated_at"])
+                if not dry_run:
+                    item.status = ProcurementAnalysisRunItem.Status.RETRY
+                    item.last_error = "notice_changed_after_claim"
+                    item.claim_token = None
+                    item.claim_expires_at = None
+                    item.updated_at = timezone.now()
+                    pending_item_updates[str(item.id)] = item
                 continue
 
-            existing = NoticeAnalysisDraft.objects.filter(
-                notice=item.notice,
-                context_snapshot=run.context_snapshot,
-                notice_content_hash=item.notice_content_hash,
-            ).first()
+            existing = next((
+                draft
+                for draft in item.notice.analysis_drafts.all()
+                if draft.context_snapshot_id == run.context_snapshot_id
+                and draft.notice_content_hash == item.notice_content_hash
+            ), None)
             if existing:
                 counts["duplicate"] += 1
                 if not dry_run:
                     item.draft = existing
                     item.status = ProcurementAnalysisRunItem.Status.COMPLETED
                     item.completed_at = timezone.now()
-                    item.save(update_fields=["draft", "status", "completed_at", "updated_at"])
+                    item.claim_token = None
+                    item.claim_expires_at = None
+                    item.updated_at = timezone.now()
+                    pending_item_updates[str(item.id)] = item
                 continue
             if dry_run:
                 counts["imported"] += 1
@@ -661,6 +701,7 @@ def import_result_records(
             raw_output = {
                 "engine": "PDP One bulk ChatGPT analysis",
                 "format": "pdp-one.compact-result.v1",
+                "review_status": "ai_draft",
                 "decision_is_draft": True,
                 "requires_human_review": True,
                 "review_queue": "detailed" if create_draft else "compact",
@@ -685,9 +726,6 @@ def import_result_records(
                 "missing_information": result.get("missing_information") or [],
                 "result_metadata": result.get("result_metadata") or {},
             }
-            update_fields = [
-                "status", "result_metadata", "completed_at", "claim_token", "claim_expires_at", "updated_at"
-            ]
             if create_draft:
                 draft = NoticeAnalysisDraft.objects.create(
                     notice=item.notice,
@@ -701,22 +739,41 @@ def import_result_records(
                     **fields,
                 )
                 item.draft = draft
-                update_fields.insert(0, "draft")
                 counts["drafts_created"] += 1
             else:
                 counts["compact_results"] += 1
+            now = timezone.now()
             item.status = ProcurementAnalysisRunItem.Status.COMPLETED
             item.result_metadata = raw_output
-            item.completed_at = timezone.now()
+            item.completed_at = now
             item.claim_token = None
             item.claim_expires_at = None
-            item.save(update_fields=update_fields)
+            item.last_error = ""
+            item.updated_at = now
+            pending_item_updates[str(item.id)] = item
             item.notice.processing_status = ProcurementNotice.ProcessingStatus.ANALYZED
-            item.notice.save(update_fields=["processing_status", "updated_at"])
+            item.notice.updated_at = now
+            pending_notice_updates[str(item.notice_id)] = item.notice
             counts["imported"] += 1
         except (ProcurementAnalysisRunItem.DoesNotExist, ValueError, TypeError, IntegrityError) as exc:
             counts["error"] += 1
             errors.append({"index": str(index), "error": str(exc)[:300]})
+
+    if not dry_run and pending_item_updates:
+        ProcurementAnalysisRunItem.objects.bulk_update(
+            list(pending_item_updates.values()),
+            [
+                "draft", "status", "result_metadata", "completed_at", "claim_token",
+                "claim_expires_at", "last_error", "updated_at",
+            ],
+            batch_size=500,
+        )
+    if not dry_run and pending_notice_updates:
+        ProcurementNotice.objects.bulk_update(
+            list(pending_notice_updates.values()),
+            ["processing_status", "updated_at"],
+            batch_size=500,
+        )
 
     import_record.counts = counts
     import_record.checkpoint = {"processed": len(results), "at": timezone.now().isoformat()}

@@ -61,6 +61,7 @@ class BulkChatGPTAnalysisTests(APITransactionTestCase):
         self.assertEqual(response.data["count"], 2)
         self.assertNotIn("context_hash", response.data["items"][0])
         self.assertNotIn("d", response.data["items"][0]["b"])
+        self.assertNotIn("sh", response.data["items"][0]["b"])
         self.assertLess(response.data["payload_chars"], 10000)
 
     def test_compact_results_store_all_outcomes_but_create_draft_only_for_material_items(self):
