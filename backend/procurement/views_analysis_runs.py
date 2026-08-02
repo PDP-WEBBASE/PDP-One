@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 
 from django.conf import settings
+from django.db import transaction
 from django.http import FileResponse
 from django.shortcuts import get_object_or_404
 from rest_framework import status
@@ -319,14 +320,15 @@ def import_analysis_results(request, run_id):
         supplied_hash = str(request.data.get("result_hash") or calculated_hash)
         if supplied_hash != calculated_hash:
             return Response({"detail": "Result Hash با محتوای ورودی تطابق ندارد."}, status=status.HTTP_400_BAD_REQUEST)
-        import_record = import_result_records(
-            run_id=str(run_id),
-            results=results,
-            actor=_actor(request),
-            dataset_id=str(request.data.get("dataset_id") or "") or None,
-            result_hash=calculated_hash,
-            dry_run=str(request.data.get("dry_run", "false")).lower() in {"1", "true", "yes"},
-        )
+        with transaction.atomic():
+            import_record = import_result_records(
+                run_id=str(run_id),
+                results=results,
+                actor=_actor(request),
+                dataset_id=str(request.data.get("dataset_id") or "") or None,
+                result_hash=calculated_hash,
+                dry_run=str(request.data.get("dry_run", "false")).lower() in {"1", "true", "yes"},
+            )
     except (json.JSONDecodeError, TypeError, ValueError) as exc:
         return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
     return Response({"import": ProcurementAnalysisImportSerializer(import_record).data}, status=status.HTTP_201_CREATED)
