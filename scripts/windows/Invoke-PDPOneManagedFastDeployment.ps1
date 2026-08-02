@@ -23,7 +23,7 @@ $coordinationMarker = Join-Path $stateRoot "deployment-in-progress.json"
 $coordinationToken = [Guid]::NewGuid().ToString("N")
 $coordinationMutex = New-Object Threading.Mutex($false, "Global\PDP-One-Deployment-Coordinator")
 $coordinationMutexHeld = $false
-$taskStates = @()
+$script:taskStates = @()
 $deploymentOutput = @()
 $deploymentExitCode = 1
 $predeployGuardReport = ""
@@ -44,7 +44,7 @@ function Suspend-PDPOneCompetingTasks {
         if ($null -eq $task) { continue }
 
         $wasEnabled = ([string]$task.State -ne "Disabled")
-        $taskStates += [pscustomobject]@{
+        $script:taskStates += [pscustomobject]@{
             Name = $taskName
             WasEnabled = $wasEnabled
         }
@@ -57,7 +57,7 @@ function Suspend-PDPOneCompetingTasks {
 }
 
 function Restore-PDPOneCompetingTasks {
-    foreach ($taskState in $taskStates) {
+    foreach ($taskState in $script:taskStates) {
         if (-not [bool]$taskState.WasEnabled) { continue }
         try {
             Enable-ScheduledTask -TaskName ([string]$taskState.Name) -ErrorAction Stop | Out-Null
@@ -73,6 +73,7 @@ function Remove-PDPOneCoordinationMarker {
         $marker = Get-Content -LiteralPath $coordinationMarker -Raw -Encoding UTF8 | ConvertFrom-Json
         if ([string]$marker.coordination_token -ne $coordinationToken) { return }
     } catch {
+        Remove-Item -LiteralPath $coordinationMarker -Force -ErrorAction SilentlyContinue
         return
     }
     Remove-Item -LiteralPath $coordinationMarker -Force -ErrorAction SilentlyContinue
@@ -154,7 +155,7 @@ if ($deploymentReport -and (Test-Path -LiteralPath $deploymentReport)) {
         $report | Add-Member -NotePropertyName predeploy_disk_guard_report -NotePropertyValue $predeployGuardReport -Force
         $report | Add-Member -NotePropertyName postdeploy_disk_guard_report -NotePropertyValue $postdeployGuardReport -Force
         $report | Add-Member -NotePropertyName deployment_coordination_lock -NotePropertyValue $true -Force
-        $report | Add-Member -NotePropertyName competing_tasks_suspended -NotePropertyValue @($taskStates | ForEach-Object { $_.Name }) -Force
+        $report | Add-Member -NotePropertyName competing_tasks_suspended -NotePropertyValue @($script:taskStates | ForEach-Object { $_.Name }) -Force
         $report | Add-Member -NotePropertyName obsolete_artifacts_cleaned_immediately -NotePropertyValue $true -Force
         $report | Add-Member -NotePropertyName capacity_gate_enforced -NotePropertyValue $false -Force
         $report | Add-Member -NotePropertyName deployment_attempted_until_actual_write_failure -NotePropertyValue $true -Force
