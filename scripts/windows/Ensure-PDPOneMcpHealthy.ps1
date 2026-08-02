@@ -25,6 +25,30 @@ function Get-InstallationRoot {
     throw "PDP One installation root was not found."
 }
 
+function Test-PDPOneDeploymentInProgress {
+    $markerPath = "C:\ProgramData\PDP-One\deployment-agent\state\deployment-in-progress.json"
+    if (-not (Test-Path -LiteralPath $markerPath)) { return $false }
+
+    try {
+        $marker = Get-Content -LiteralPath $markerPath -Raw -Encoding UTF8 | ConvertFrom-Json
+        $processId = 0
+        [void][int]::TryParse([string]$marker.process_id, [ref]$processId)
+        if ($processId -gt 0 -and $null -ne (Get-Process -Id $processId -ErrorAction SilentlyContinue)) {
+            return $true
+        }
+
+        Remove-Item -LiteralPath $markerPath -Force -ErrorAction SilentlyContinue
+        return $false
+    } catch {
+        $file = Get-Item -LiteralPath $markerPath -ErrorAction SilentlyContinue
+        if ($null -ne $file -and $file.LastWriteTimeUtc -lt [DateTime]::UtcNow.AddHours(-2)) {
+            Remove-Item -LiteralPath $markerPath -Force -ErrorAction SilentlyContinue
+            return $false
+        }
+        return $true
+    }
+}
+
 function Test-DockerReady {
     cmd.exe /d /c "docker info >nul 2>&1"
     return $LASTEXITCODE -eq 0
@@ -40,28 +64,7 @@ function Get-McpState {
     return [pscustomobject]@{ Id = $containerId; Status = $status; RestartCount = $restartCount }
 }
 
-function Repair-McpDockerfile {
-    param([string]$Root)
-    $dockerfile = Join-Path $Root "services\pdp_mcp\Dockerfile"
-    $analysisTools = Join-Path $Root "services\pdp_mcp\procurement_analysis_tools.py"
-    if (-not (Test-Path -LiteralPath $dockerfile)) { throw "MCP Dockerfile was not found." }
-    if (-not (Test-Path -LiteralPath $analysisTools)) { return $false }
-
-    $content = [IO.File]::ReadAllText($dockerfile)
-    if ($content -match "(?m)^COPY .*procurement_analysis_tools\.py") { return $false }
-
-    $copyLine = [regex]::Match($content, "(?m)^COPY\s+server\.py\s+server_procurement\.py\s+.*deployment_queue\.py\s+\.?/?\s*$")
-    if (-not $copyLine.Success) {
-        throw "MCP Dockerfile does not contain the expected Python COPY line."
-    }
-    $replacement = $copyLine.Value
-    if ($replacement -notmatch "procurement_analysis_tools\.py") {
-        $replacement = $replacement -replace "\s+automation_tools\.py", " procurement_analysis_tools.py automation_tools.py"
-    }
-    $content = $content.Remove($copyLine.Index, $copyLine.Length).Insert($copyLine.Index, $replacement)
-    [IO.File]::WriteAllText($dockerfile, $content, [Text.UTF8Encoding]::new($false))
-    return $true
-}
+if (Test-PDPOneDeploymentInProgress) { exit 0 }
 
 $root = Get-InstallationRoot -RequestedRoot $ProjectRoot
 if (-not (Test-DockerReady)) { exit 0 }
@@ -79,7 +82,9 @@ $report = [ordered]@{
     started_at = [DateTime]::UtcNow.ToString("o")
     initial_status = $state.Status
     initial_restart_count = $state.RestartCount
-    dockerfile_patched = $false
+    image_source = "configured_immutable_image"
+    local_image_build_performed = $false
+    source_files_modified = $false
     import_check = "pending"
     final_status = "failed"
     completed_at = $null
@@ -88,23 +93,24 @@ $report = [ordered]@{
 }
 
 try {
-    $report.dockerfile_patched = [bool](Repair-McpDockerfile -Root $root)
+    if (Test-PDPOneDeploymentInProgress) { exit 0 }
 
     & docker compose config --quiet
     if ($LASTEXITCODE -ne 0) { throw "Docker Compose configuration is invalid." }
 
-    & docker compose build mcp
-    if ($LASTEXITCODE -ne 0) { throw "MCP image build failed." }
-
     & docker compose run --rm --no-deps --entrypoint python mcp -c "import server_procurement"
-    if ($LASTEXITCODE -ne 0) { throw "MCP image import verification failed." }
+    if ($LASTEXITCODE -ne 0) { throw "Configured MCP image import verification failed." }
     $report.import_check = "passed"
 
-    & docker compose --profile tunnel up --detach --no-deps --force-recreate mcp
+    if (Test-PDPOneDeploymentInProgress) { exit 0 }
+
+    & docker compose --profile tunnel up --detach --no-deps --no-build --pull never --force-recreate mcp
     if ($LASTEXITCODE -ne 0) { throw "MCP container recreation failed." }
 
     $deadline = (Get-Date).AddMinutes(2)
     do {
+        if (Test-PDPOneDeploymentInProgress) { exit 0 }
+
         $current = Get-McpState
         if ($current.Status -eq "running") {
             Start-Sleep -Seconds ([Math]::Max(5, $StableSeconds))
