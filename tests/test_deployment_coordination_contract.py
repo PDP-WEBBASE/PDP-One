@@ -70,4 +70,4 @@ def test_coordination_never_prunes_volumes() -> None:
     ).lower()
 
     assert "docker volume prune" not in combined
-    assert "volume", "Persistent volume protection contract must remain explicit"
+    assert "volume prune" not in combined
