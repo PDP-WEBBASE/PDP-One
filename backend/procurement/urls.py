@@ -5,6 +5,23 @@ from .views import InquiryViewSet, ProcurementCaseViewSet, ProcurementConnectorV
 from .views_analysis import AnalysisBatchViewSet, AnalysisRequestViewSet, active_analysis_context, analysis_context_manifest, analysis_queue, latest_extraction_run, notice_analysis_context
 from .views_analysis_engine import analysis_engine_work, finish_analysis_engine, start_analysis_engine
 from .views_analysis_management import ManagedAnalysisContextAttachmentViewSet, ManagedAnalysisContextSnapshotViewSet
+from .views_analysis_runs import (
+    analysis_dataset_status,
+    analysis_import_status,
+    analysis_run_history,
+    analysis_run_queue_summary,
+    analysis_run_status,
+    cancel_analysis_run,
+    claim_analysis_work,
+    current_analysis_run,
+    download_analysis_dataset,
+    import_analysis_results,
+    pause_analysis_run,
+    prepare_analysis_dataset,
+    resume_analysis_run,
+    start_full_pending_analysis,
+    start_incremental_analysis,
+)
 from .views_automation import ProcurementAutomationSettingsViewSet
 from .views_case_followup import case_follow_up, follow_up_summary, follow_up_users
 from .views_contract_draft import contract_draft_preview, create_contract_draft_from_case
@@ -54,4 +71,19 @@ urlpatterns = [
     path("analysis/engine/requests/<uuid:request_id>/finish/", finish_analysis_engine, name="analysis-engine-finish"),
     path("analysis/engine/drafts/<uuid:draft_id>/review/", review_analysis_draft, name="analysis-engine-review"),
     path("analysis/engine/drafts/<uuid:draft_id>/select/", select_reviewed_analysis_draft, name="analysis-engine-select"),
+    path("analysis/runs/queue-summary/", analysis_run_queue_summary, name="analysis-run-queue-summary"),
+    path("analysis/runs/current/", current_analysis_run, name="analysis-run-current"),
+    path("analysis/runs/history/", analysis_run_history, name="analysis-run-history"),
+    path("analysis/runs/full-pending/start/", start_full_pending_analysis, name="analysis-run-full-start"),
+    path("analysis/runs/incremental/start/", start_incremental_analysis, name="analysis-run-incremental-start"),
+    path("analysis/runs/<uuid:run_id>/", analysis_run_status, name="analysis-run-status"),
+    path("analysis/runs/<uuid:run_id>/pause/", pause_analysis_run, name="analysis-run-pause"),
+    path("analysis/runs/<uuid:run_id>/resume/", resume_analysis_run, name="analysis-run-resume"),
+    path("analysis/runs/<uuid:run_id>/cancel/", cancel_analysis_run, name="analysis-run-cancel"),
+    path("analysis/runs/<uuid:run_id>/claim/", claim_analysis_work, name="analysis-run-claim"),
+    path("analysis/runs/<uuid:run_id>/datasets/prepare/", prepare_analysis_dataset, name="analysis-dataset-prepare"),
+    path("analysis/runs/<uuid:run_id>/results/import/", import_analysis_results, name="analysis-results-import"),
+    path("analysis/datasets/<uuid:dataset_id>/", analysis_dataset_status, name="analysis-dataset-status"),
+    path("analysis/datasets/<uuid:dataset_id>/download/<str:filename>/", download_analysis_dataset, name="analysis-dataset-download"),
+    path("analysis/imports/<uuid:import_id>/", analysis_import_status, name="analysis-import-status"),
 ]

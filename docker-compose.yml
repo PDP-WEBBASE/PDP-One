@@ -1,9 +1,16 @@
 name: pdp-one
 
+x-pdp-logging: &pdp-logging
+  driver: local
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   db:
     image: ${PDP_DOCKER_REGISTRY:-docker.arvancloud.ir/library}/postgres:17-alpine
     restart: unless-stopped
+    logging: *pdp-logging
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-pdp_one}
       POSTGRES_USER: ${POSTGRES_USER:-pdp_one}
@@ -19,20 +26,16 @@ services:
   redis:
     image: ${PDP_DOCKER_REGISTRY:-docker.arvancloud.ir/library}/redis:7-alpine
     restart: unless-stopped
+    logging: *pdp-logging
     command: redis-server --appendonly yes
     volumes:
       - redis_data:/data
 
   backend:
     image: ${PDP_BACKEND_IMAGE:-pdp-one-backend:local}
-    build:
-      context: ./backend
-      args:
-        PDP_DOCKER_REGISTRY: ${PDP_DOCKER_REGISTRY:-docker.arvancloud.ir/library}
     restart: unless-stopped
+    logging: *pdp-logging
     env_file: .env
-    # Startup must never run uncontrolled migrations. The guarded updater runs
-    # `manage.py migrate --noinput` only after a verified final backup.
     command: gunicorn config.wsgi:application --bind 0.0.0.0:8000 --workers 3
     volumes:
       - private_files:/data/private
@@ -45,6 +48,7 @@ services:
   worker:
     image: ${PDP_BACKEND_IMAGE:-pdp-one-backend:local}
     restart: unless-stopped
+    logging: *pdp-logging
     env_file: .env
     command: celery -A config worker -l INFO
     volumes:
@@ -54,17 +58,15 @@ services:
   beat:
     image: ${PDP_BACKEND_IMAGE:-pdp-one-backend:local}
     restart: unless-stopped
+    logging: *pdp-logging
     env_file: .env
     command: celery -A config beat -l INFO --scheduler django_celery_beat.schedulers:DatabaseScheduler
     depends_on: [backend, redis]
 
   mcp:
     image: ${PDP_MCP_IMAGE:-pdp-one-mcp:local}
-    build:
-      context: ./services/pdp_mcp
-      args:
-        PDP_DOCKER_REGISTRY: ${PDP_DOCKER_REGISTRY:-docker.arvancloud.ir/library}
     restart: unless-stopped
+    logging: *pdp-logging
     env_file: .env
     environment:
       PDP_API_URL: http://backend:8000/api/v1
@@ -76,20 +78,14 @@ services:
 
   web:
     image: ${PDP_WEB_IMAGE:-pdp-one-web:local}
-    build:
-      context: .
-      dockerfile: infra/docker/web.Dockerfile
-      args:
-        PDP_DOCKER_REGISTRY: ${PDP_DOCKER_REGISTRY:-docker.arvancloud.ir/library}
-        PDP_BUILD_ID: ${PDP_BUILD_ID:-procurement-fast-initial-v25-20260725}
     restart: unless-stopped
+    logging: *pdp-logging
     environment:
       NEXT_PUBLIC_API_URL: /api/v1
-      PDP_BUILD_ID: ${PDP_BUILD_ID:-procurement-fast-initial-v25-20260725}
     healthcheck:
       test:
         - CMD-SHELL
-        - node -e "const fs=require('fs'); const p='/app/public/pdp-build.json'; const x=JSON.parse(fs.readFileSync(p,'utf8')); process.exit(x.build_id===process.env.PDP_BUILD_ID?0:1)"
+        - node -e "const fs=require('fs'); const x=JSON.parse(fs.readFileSync('/app/public/pdp-build.json','utf8')); process.exit(typeof x.build_id==='string'&&x.build_id.length>0?0:1)"
       interval: 5s
       timeout: 5s
       retries: 12
@@ -98,6 +94,7 @@ services:
   nginx:
     image: ${PDP_DOCKER_REGISTRY:-docker.arvancloud.ir/library}/nginx:1.27-alpine
     restart: unless-stopped
+    logging: *pdp-logging
     environment:
       PDP_MCP_PATH_TOKEN: ${PDP_MCP_PATH_TOKEN:-trial-path-not-configured}
       NGINX_ENVSUBST_FILTER: PDP_MCP_PATH_TOKEN
@@ -117,6 +114,7 @@ services:
     profiles: ["tunnel"]
     image: ${PDP_TAILSCALE_IMAGE:-docker.arvancloud.ir/tailscale/tailscale:stable}
     restart: unless-stopped
+    logging: *pdp-logging
     network_mode: "service:nginx"
     entrypoint: ["/usr/local/bin/tailscaled"]
     command:

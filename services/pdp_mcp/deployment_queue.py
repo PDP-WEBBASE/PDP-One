@@ -12,6 +12,7 @@ import hmac
 import json
 import os
 import re
+import shutil
 import tempfile
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -36,13 +37,56 @@ ALLOWED_ACTIONS = {
     "verify_backup_restore",
     "deploy_approved_release",
     "check_deployment_health",
+    "run_disk_maintenance",
     "rollback_deployment",
     "rotate_mcp_token",
 }
+EMERGENCY_RESERVE_BYTES = max(1024 * 1024, int(os.getenv("PDP_QUEUE_RESERVE_BYTES", str(8 * 1024 * 1024))))
+LOW_SPACE_BYTES = max(512 * 1024, int(os.getenv("PDP_QUEUE_LOW_SPACE_BYTES", str(2 * 1024 * 1024))))
+RESERVE_PATH = QUEUE_ROOT / ".queue-emergency-reserve"
 
 
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _disk_free_bytes() -> int:
+    probe = QUEUE_ROOT if QUEUE_ROOT.exists() else QUEUE_ROOT.parent
+    try:
+        return int(shutil.disk_usage(probe).free)
+    except OSError:
+        return -1
+
+
+def _release_emergency_reserve_if_needed() -> bool:
+    free_bytes = _disk_free_bytes()
+    if free_bytes >= 0 and free_bytes < LOW_SPACE_BYTES and RESERVE_PATH.exists():
+        RESERVE_PATH.unlink(missing_ok=True)
+        return True
+    return False
+
+
+def _ensure_emergency_reserve() -> None:
+    if RESERVE_PATH.exists():
+        return
+    free_bytes = _disk_free_bytes()
+    if free_bytes < EMERGENCY_RESERVE_BYTES * 4:
+        return
+    RESERVE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    chunk = b"\0" * min(1024 * 1024, EMERGENCY_RESERVE_BYTES)
+    remaining = EMERGENCY_RESERVE_BYTES
+    temporary = RESERVE_PATH.with_suffix(".tmp")
+    try:
+        with temporary.open("wb") as handle:
+            while remaining > 0:
+                part = chunk if remaining >= len(chunk) else chunk[:remaining]
+                handle.write(part)
+                remaining -= len(part)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, RESERVE_PATH)
+    except OSError:
+        temporary.unlink(missing_ok=True)
 
 
 def _require_queue() -> None:
@@ -50,6 +94,7 @@ def _require_queue() -> None:
         raise RuntimeError("The local deployment agent signing key is not configured.")
     for name in ("incoming", "responses"):
         (QUEUE_ROOT / name).mkdir(parents=True, exist_ok=True)
+    _ensure_emergency_reserve()
 
 
 def validate_commit(commit_sha: str) -> str:
@@ -71,9 +116,15 @@ def enqueue(
     params: dict[str, Any] | None = None,
     ttl_seconds: int | None = None,
 ) -> dict[str, Any]:
-    _require_queue()
     if action not in ALLOWED_ACTIONS:
         raise ValueError("Unsupported deployment-agent action.")
+    reserve_released = _release_emergency_reserve_if_needed()
+    _require_queue()
+    free_bytes = _disk_free_bytes()
+    if free_bytes >= 0 and free_bytes < LOW_SPACE_BYTES and action != "run_disk_maintenance":
+        raise RuntimeError(
+            "Deployment-agent storage is full. Run signed disk maintenance before starting another action."
+        )
     lifetime = ACTION_TTL_SECONDS.get(action, DEFAULT_TTL_SECONDS) if ttl_seconds is None else int(ttl_seconds)
     if not 30 <= lifetime <= MAX_TTL_SECONDS:
         raise ValueError(f"Queue request lifetime must be between 30 and {MAX_TTL_SECONDS} seconds.")
@@ -105,7 +156,13 @@ def enqueue(
         except FileNotFoundError:
             pass
         raise
-    return {"request_id": request_id, "action": action, "status": "queued", "expires_at": payload["expires_at"]}
+    return {
+        "request_id": request_id,
+        "action": action,
+        "status": "queued",
+        "expires_at": payload["expires_at"],
+        "emergency_reserve_released": reserve_released,
+    }
 
 
 def get_response(request_id: str) -> dict[str, Any]:
@@ -129,6 +186,7 @@ def get_queue_status() -> dict[str, Any]:
     configured = len(SIGNING_KEY) >= 32
     incoming = QUEUE_ROOT / "incoming"
     responses = QUEUE_ROOT / "responses"
+    free_bytes = _disk_free_bytes()
     return {
         "configured": configured,
         "queue_available": incoming.exists() and responses.exists(),
@@ -136,4 +194,8 @@ def get_queue_status() -> dict[str, Any]:
         "completed_responses": len(list(responses.glob("*.json"))) if responses.exists() else 0,
         "transport": "local signed file queue",
         "arbitrary_shell_allowed": False,
+        "disk_free_bytes": free_bytes,
+        "low_disk_space": free_bytes >= 0 and free_bytes < LOW_SPACE_BYTES,
+        "emergency_reserve_available": RESERVE_PATH.exists(),
+        "emergency_reserve_bytes": RESERVE_PATH.stat().st_size if RESERVE_PATH.exists() else 0,
     }

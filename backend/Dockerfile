@@ -9,6 +9,13 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PIP_RETRIES=10
 
 WORKDIR /app
+
+# pg_dump/psql/createdb/dropdb are required for the isolated Procurement
+# module SQL export and restore verification. No Docker volume is modified.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends postgresql-client \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY requirements.txt .
 
 # Keep successfully downloaded wheels between builds and tolerate temporary

@@ -1,0 +1,67 @@
+{
+  "schema": "pdp-one.deployment-profile.v1",
+  "issue": 43,
+  "change_management_mode": "development_fast",
+  "database_change": {
+    "type": "additive",
+    "destructive": false,
+    "sensitive_data_rewrite": false,
+    "requires_special_backup": false,
+    "description": "Adds persistent procurement analysis run, queue item, dataset and import tables; existing procurement, contract and finance rows are not rewritten or deleted."
+  },
+  "connected_app": {
+    "official_tools_registered": true,
+    "cached_schema_compatibility_bridge": true,
+    "bridge_tool": "save_analysis_draft",
+    "bridge_scope": [
+      "start_full_pending",
+      "start_incremental",
+      "status_and_history",
+      "claim",
+      "dataset_prepare_and_status",
+      "draft_only_import_and_status",
+      "pause_and_resume"
+    ],
+    "automatic_contract_or_finance_actions": false
+  },
+  "disk_guard": {
+    "cleanup_threshold_gb": 10,
+    "target_free_gb": 15,
+    "fixed_capacity_gate_enforced": false,
+    "deployment_attempted_until_actual_windows_or_docker_write_failure": true,
+    "cleanup_before_deploy": true,
+    "cleanup_immediately_after_deploy": true,
+    "remove_agent_download_and_staging_when_no_longer_needed": true,
+    "remove_unused_build_cache_immediately": true,
+    "remove_unused_images_immediately": true,
+    "remove_stopped_containers_immediately": true,
+    "remove_unused_networks_immediately": true,
+    "daily_task_time": "03:15",
+    "container_log_max_size": "10m",
+    "container_log_max_files": 3,
+    "keep_local_verified_final_backups": 2,
+    "archive_old_verified_backups_to_external_drive": true,
+    "compact_rancher_wsl_vhdx_only_in_critical_scheduled_or_emergency_mode": true,
+    "docker_volume_prune_allowed": false
+  },
+  "required_checks": [
+    "frontend_lint",
+    "frontend_build_and_tests",
+    "python_compile",
+    "migration_drift_check",
+    "backend_tests",
+    "disk_guard_contract",
+    "exact_commit_deploy",
+    "short_health_check",
+    "contract_and_receivable_count_invariance"
+  ],
+  "forbidden_operations": [
+    "docker_volume_delete",
+    "docker_volume_prune",
+    "automatic_ai_draft_publish",
+    "automatic_opportunity_selection",
+    "automatic_contract_creation",
+    "automatic_receivable_creation",
+    "automatic_payment_receipt_creation"
+  ]
+}

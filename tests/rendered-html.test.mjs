@@ -32,16 +32,17 @@ test("renders development preview metadata", async () => {
   assert.match(await response.text(), developmentPreviewMeta);
 });
 
-test("routes procurement through V20 while preserving V19 to V13", async () => {
+test("routes procurement through V21 while preserving V20 to V13", async () => {
   const page = await readFile(new URL("../app/procurement/page.tsx", import.meta.url), "utf8");
   const versions = new Map();
-  for (let version = 13; version <= 20; version += 1) {
+  for (let version = 13; version <= 21; version += 1) {
     versions.set(version, await readFile(new URL(`../app/procurement/ProcurementWorkspaceV${version}.tsx`, import.meta.url), "utf8"));
   }
-  assert.match(page, /ProcurementWorkspaceV20/);
-  for (let version = 20; version > 13; version -= 1) {
+  assert.match(page, /ProcurementWorkspaceV21/);
+  for (let version = 21; version > 13; version -= 1) {
     assert.match(versions.get(version), new RegExp(`ProcurementWorkspaceV${version - 1}`));
   }
+  assert.match(versions.get(21), /ProcurementAnalysisCenterPanel/);
   assert.match(versions.get(20), /AutomationControlPanel/);
   assert.match(versions.get(19), /ManagementDashboardPanel/);
   assert.match(versions.get(18), /CaseFollowUpPanel/);

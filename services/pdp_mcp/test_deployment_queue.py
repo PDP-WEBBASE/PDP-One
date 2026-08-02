@@ -8,6 +8,7 @@ import tempfile
 import unittest
 from datetime import datetime
 from pathlib import Path
+from unittest.mock import patch
 
 
 class DeploymentQueueTests(unittest.TestCase):
@@ -15,11 +16,15 @@ class DeploymentQueueTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         os.environ["PDP_DEPLOYMENT_QUEUE"] = self.temp.name
         os.environ["PDP_DEPLOYMENT_AGENT_SIGNING_KEY"] = "k" * 48
+        os.environ["PDP_QUEUE_RESERVE_BYTES"] = str(1024 * 1024)
+        os.environ["PDP_QUEUE_LOW_SPACE_BYTES"] = str(512 * 1024)
         import deployment_queue
         self.queue = importlib.reload(deployment_queue)
 
     def tearDown(self):
         self.temp.cleanup()
+        os.environ.pop("PDP_QUEUE_RESERVE_BYTES", None)
+        os.environ.pop("PDP_QUEUE_LOW_SPACE_BYTES", None)
 
     def _payload_for(self, result):
         path = Path(self.temp.name) / "incoming" / f"{result['request_id']}.json"
@@ -57,6 +62,33 @@ class DeploymentQueueTests(unittest.TestCase):
     def test_arbitrary_action_is_rejected(self):
         with self.assertRaises(ValueError):
             self.queue.enqueue("run_powershell", {"command": "whoami"})
+
+    def test_signed_disk_maintenance_is_allowlisted(self):
+        result = self.queue.enqueue("run_disk_maintenance", {"keep_local_final_backups": 2})
+        _, _, payload = self._payload_for(result)
+        self.assertEqual("run_disk_maintenance", payload["action"])
+        self.assertEqual(2, payload["params"]["keep_local_final_backups"])
+
+    def test_low_disk_releases_reserve_and_allows_only_maintenance(self):
+        queue_root = Path(self.temp.name)
+        queue_root.mkdir(parents=True, exist_ok=True)
+        self.queue.RESERVE_PATH.write_bytes(b"x" * 4096)
+        with patch.object(self.queue, "_disk_free_bytes", return_value=0):
+            result = self.queue.enqueue("run_disk_maintenance", {"keep_local_final_backups": 2})
+        self.assertTrue(result["emergency_reserve_released"])
+        self.assertFalse(self.queue.RESERVE_PATH.exists())
+
+        self.queue.RESERVE_PATH.write_bytes(b"x" * 4096)
+        with patch.object(self.queue, "_disk_free_bytes", return_value=0):
+            with self.assertRaisesRegex(RuntimeError, "storage is full"):
+                self.queue.enqueue("deploy_approved_release", {})
+
+    def test_queue_status_reports_disk_headroom(self):
+        self.queue.enqueue("check_deployment_health", {"deployment_id": "d-1"})
+        status = self.queue.get_queue_status()
+        self.assertIn("disk_free_bytes", status)
+        self.assertIn("low_disk_space", status)
+        self.assertIn("emergency_reserve_available", status)
 
     def test_commit_must_be_exact_sha(self):
         with self.assertRaises(ValueError):
