@@ -8,6 +8,8 @@ from procurement.analysis_run_service import finalize_run_if_exhausted, import_r
 
 
 class ProcurementImportPostgresLockContractTests(SimpleTestCase):
+    """Protect PostgreSQL row locking from nullable outer joins."""
+
     def test_locked_run_queries_do_not_join_nullable_analysis_request(self):
         source = inspect.getsource(import_result_records) + inspect.getsource(finalize_run_if_exhausted)
         self.assertNotIn(
