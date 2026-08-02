@@ -12,6 +12,7 @@ $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
 Set-StrictMode -Version Latest
 . (Join-Path $PSScriptRoot "PDPOne.Common.ps1")
+. (Join-Path $PSScriptRoot "PDPOne.OperationLock.ps1")
 
 $mutex = New-Object Threading.Mutex($false, "Global\PDP-One-Stable-Startup")
 if (-not $mutex.WaitOne(0)) { exit 0 }
@@ -21,6 +22,9 @@ $report = [ordered]@{
     started_at = (Get-Date).ToUniversalTime().ToString('o')
     completed_at = $null
     status = "failed"
+    deployment_in_progress = $false
+    deployment_id = ""
+    protected_target_commit = ""
     docker = "pending"
     rancher_policy_report = $null
     local_health = "pending"
@@ -39,6 +43,21 @@ $report = [ordered]@{
 try {
     $ProjectRoot = Get-PDPOneProjectRoot
     Set-Location $ProjectRoot
+
+    $deploymentOperation = Read-PDPOneDeploymentOperation -RemoveStale
+    if ($deploymentOperation.Active) {
+        $report.status = "skipped_deployment_in_progress"
+        $report.deployment_in_progress = $true
+        $report.deployment_id = [string]$deploymentOperation.State.deployment_id
+        $report.protected_target_commit = [string]$deploymentOperation.State.target_commit
+        $report.completed_at = (Get-Date).ToUniversalTime().ToString('o')
+        $reportDir = Join-Path $ProjectRoot "work\reports"
+        Write-PDPOneJsonFile -Path (Join-Path $reportDir "startup-latest.json") -Value $report
+        Write-PDPOneJsonFile -Path (Join-Path $ProjectRoot "PDP-ONE-LAST-STARTUP-REPORT.json") -Value $report
+        Write-Host "Stable startup skipped because an exact-commit deployment is in progress." -ForegroundColor Yellow
+        return
+    }
+
     try {
         $diskGuardOutput = @(& powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "Invoke-PDPOneDiskGuard.ps1") -Mode startup -ProjectRoot $ProjectRoot -BuildCacheBudgetGB 2)
         if ($diskGuardOutput.Count -gt 0) { $report.disk_guard_report = [string]$diskGuardOutput[-1] }
