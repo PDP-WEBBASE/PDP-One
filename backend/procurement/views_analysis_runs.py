@@ -217,10 +217,11 @@ def claim_analysis_work(request, run_id):
         )
     except (TypeError, ValueError) as exc:
         return Response({"detail": str(exc)}, status=status.HTTP_409_CONFLICT)
+    compact_payload = serialize_claimed_items(items)
     return Response({
         "run_id": str(run_id),
         "count": len(items),
-        "items": serialize_claimed_items(items),
+        **compact_payload,
         "decision_is_draft": True,
         "requires_human_review": True,
     })

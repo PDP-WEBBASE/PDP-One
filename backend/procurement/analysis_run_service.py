@@ -339,7 +339,7 @@ def claim_run_items(run_id: str, *, worker_id: str, limit: int = 25, lease_secon
         queryset = queryset.select_for_update(skip_locked=True)
     else:
         queryset = queryset.select_for_update()
-    selected = list(queryset[: max(1, min(int(limit), 250))])
+    selected = list(queryset[: max(1, min(int(limit), 500))])
     expires = now + timedelta(seconds=max(60, min(int(lease_seconds), 3600)))
     for item in selected:
         item.new_claim_token()
@@ -358,23 +358,170 @@ def claim_run_items(run_id: str, *, worker_id: str, limit: int = 25, lease_secon
     return selected
 
 
-def serialize_claimed_items(items: Iterable[ProcurementAnalysisRunItem]) -> list[dict[str, Any]]:
-    payload = []
-    for item in items:
-        notice = item.notice
-        payload.append({
-            "run_item_id": str(item.id),
-            "claim_token": str(item.claim_token),
-            "notice_id": str(notice.id),
-            "notice_content_hash": item.notice_content_hash,
-            "context_id": str(item.run.context_snapshot_id),
-            "context_version": item.run.context_snapshot.version,
-            "context_hash": item.context_hash,
-            "analysis_reason": item.analysis_reason,
-            "deadline_priority": item.deadline_priority,
-            "analysis_basis": notice_basis_payload(notice),
-        })
-    return payload
+COMPACT_CLAIM_SCHEMA = {
+    "item": {
+        "i": "run_item_id",
+        "k": "claim_token",
+        "n": "notice_id",
+        "c": "notice_content_hash",
+        "ar": "analysis_reason",
+        "dp": "deadline_priority",
+        "b": "analysis_basis",
+    },
+    "basis": {
+        "y": "type",
+        "t": "title",
+        "s": "summary",
+        "d": "description",
+        "o": "conditions",
+        "e": "employer",
+        "no": "notice_number",
+        "p": "province",
+        "ct": "city",
+        "l": "execution_location",
+        "pd": "published_date",
+        "dd": "submission_deadline",
+        "a": "estimated_amount_rials",
+        "g": "guarantee_amount_rials",
+        "q": "qualification_text",
+        "sh": "source_hashes",
+    },
+    "result": {
+        "i": "run_item_id",
+        "k": "claim_token",
+        "n": "notice_id",
+        "c": "notice_content_hash",
+        "x": "context_hash",
+        "r": "is_recommended",
+        "s": "score",
+        "p": "priority",
+        "f": "fit_for_pdp",
+        "g": "category",
+        "rs": "reason",
+        "a": "recommended_action",
+        "mq": "matched_qualifications",
+        "me": "matched_experience",
+        "rn": "risk_notes",
+        "mi": "missing_information",
+        "cf": "confidence",
+        "m": "analysis_mode",
+        "sr": "screening_reason",
+        "u": "urgency",
+        "cd": "create_draft",
+        "md": "model_label",
+    },
+}
+
+
+def _compact_basis(notice: ProcurementNotice) -> dict[str, Any]:
+    basis = notice_basis_payload(notice)
+    mapped = {
+        "y": basis.get("type"),
+        "t": basis.get("title"),
+        "s": basis.get("summary"),
+        "d": basis.get("description"),
+        "o": basis.get("conditions"),
+        "e": basis.get("employer"),
+        "no": basis.get("notice_number"),
+        "p": basis.get("province"),
+        "ct": basis.get("city"),
+        "l": basis.get("execution_location"),
+        "pd": basis.get("published_date"),
+        "dd": basis.get("submission_deadline"),
+        "a": basis.get("estimated_amount_rials"),
+        "g": basis.get("guarantee_amount_rials"),
+        "q": basis.get("qualification_text"),
+        "sh": basis.get("source_hashes"),
+    }
+    return {key: value for key, value in mapped.items() if value not in (None, "", [], {})}
+
+
+def serialize_claimed_items(items: Iterable[ProcurementAnalysisRunItem]) -> dict[str, Any]:
+    selected = list(items)
+    if not selected:
+        return {
+            "format": "pdp-one.compact-claim.v1",
+            "schema": COMPACT_CLAIM_SCHEMA,
+            "context": None,
+            "items": [],
+            "payload_chars": 2,
+        }
+    run = selected[0].run
+    payload = [
+        {
+            "i": str(item.id),
+            "k": str(item.claim_token),
+            "n": str(item.notice_id),
+            "c": item.notice_content_hash,
+            "ar": item.analysis_reason,
+            "dp": item.deadline_priority,
+            "b": _compact_basis(item.notice),
+        }
+        for item in selected
+    ]
+    canonical = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return {
+        "format": "pdp-one.compact-claim.v1",
+        "schema": COMPACT_CLAIM_SCHEMA,
+        "context": {
+            "id": str(run.context_snapshot_id),
+            "version": run.context_snapshot.version,
+            "hash": run.context_snapshot.content_hash,
+        },
+        "items": payload,
+        "payload_chars": len(canonical),
+        "payload_sha256": hashlib.sha256(canonical.encode("utf-8")).hexdigest(),
+    }
+
+
+_RESULT_KEY_MAP = {
+    "i": "run_item_id",
+    "k": "claim_token",
+    "n": "notice_id",
+    "c": "notice_content_hash",
+    "x": "context_hash",
+    "r": "is_recommended",
+    "s": "score",
+    "p": "priority",
+    "f": "fit_for_pdp",
+    "g": "category",
+    "rs": "reason",
+    "a": "recommended_action",
+    "mq": "matched_qualifications",
+    "me": "matched_experience",
+    "rn": "risk_notes",
+    "mi": "missing_information",
+    "cf": "confidence",
+    "m": "analysis_mode",
+    "sr": "screening_reason",
+    "u": "urgency",
+    "cd": "create_draft",
+    "md": "model_label",
+    "rm": "result_metadata",
+}
+
+
+def _normalize_result(result: dict[str, Any]) -> dict[str, Any]:
+    normalized = dict(result)
+    for short_key, full_key in _RESULT_KEY_MAP.items():
+        if full_key not in normalized and short_key in result:
+            normalized[full_key] = result[short_key]
+    return normalized
+
+
+def _should_create_draft(result: dict[str, Any]) -> bool:
+    if "create_draft" in result:
+        return bool(result.get("create_draft"))
+    priority = str(result.get("priority") or "").strip().lower()
+    screening_reason = str(result.get("screening_reason") or "").strip().lower()
+    score = max(0, min(int(result.get("score", 0)), 100))
+    return bool(
+        result.get("is_recommended")
+        or result.get("missing_information")
+        or priority in {"high", "urgent", "critical"}
+        or screening_reason in {"ambiguous", "borderline", "needs_information", "needs_review"}
+        or score >= 60
+    )
 
 
 def _draft_payload(result: dict[str, Any]) -> dict[str, Any]:
@@ -417,6 +564,8 @@ def import_result_records(
     counts = {
         "total": len(results),
         "imported": 0,
+        "drafts_created": 0,
+        "compact_results": 0,
         "duplicate": 0,
         "rejected": 0,
         "invalid_hash": 0,
@@ -429,6 +578,7 @@ def import_result_records(
 
     for index, result in enumerate(results, start=1):
         try:
+            result = _normalize_result(result)
             item = run.items.select_related("notice").get(pk=result.get("run_item_id"))
             if str(result.get("claim_token", "")) != str(item.claim_token or ""):
                 counts["rejected"] += 1
@@ -473,41 +623,59 @@ def import_result_records(
                 continue
 
             fields = _draft_payload(result)
+            create_draft = _should_create_draft(result)
             raw_output = {
-                "engine": "PDP One persistent analysis run",
+                "engine": "PDP One bulk ChatGPT analysis",
+                "format": "pdp-one.compact-result.v1",
                 "decision_is_draft": True,
-                "requires_human_review": True,
+                "requires_human_review": create_draft,
+                "compact_only": not create_draft,
                 "run_id": str(run.id),
                 "run_item_id": str(item.id),
-                "claim_token": str(item.claim_token),
                 "context_hash": run.context_snapshot.content_hash,
+                "is_recommended": fields["is_recommended"],
+                "score": fields["score"],
+                "priority": fields["priority"],
+                "category": fields["category"],
+                "fit_for_pdp": fields["fit_for_pdp"],
+                "reason": fields["reason"],
+                "recommended_action": fields["recommended_action"],
+                "confidence": fields["confidence"],
                 "screening_reason": result.get("screening_reason", ""),
                 "urgency": result.get("urgency", ""),
-                "analysis_mode": result.get("analysis_mode", "deep"),
+                "analysis_mode": result.get("analysis_mode", "bulk_direct"),
                 "matched_qualifications": result.get("matched_qualifications") or [],
+                "matched_experience": fields["matched_experience"],
+                "risk_notes": fields["risk_notes"],
                 "missing_information": result.get("missing_information") or [],
                 "result_metadata": result.get("result_metadata") or {},
             }
-            draft = NoticeAnalysisDraft.objects.create(
-                notice=item.notice,
-                batch=batch,
-                context_snapshot=run.context_snapshot,
-                notice_content_hash=item.notice_content_hash,
-                raw_output=raw_output,
-                model_label=str(result.get("model_label") or "ChatGPT")[:100],
-                review_status=NoticeAnalysisDraft.ReviewStatus.AI_DRAFT,
-                created_by_label="ChatGPT",
-                **fields,
-            )
-            item.draft = draft
+            update_fields = [
+                "status", "result_metadata", "completed_at", "claim_token", "claim_expires_at", "updated_at"
+            ]
+            if create_draft:
+                draft = NoticeAnalysisDraft.objects.create(
+                    notice=item.notice,
+                    batch=batch,
+                    context_snapshot=run.context_snapshot,
+                    notice_content_hash=item.notice_content_hash,
+                    raw_output=raw_output,
+                    model_label=str(result.get("model_label") or "ChatGPT Bulk")[:100],
+                    review_status=NoticeAnalysisDraft.ReviewStatus.AI_DRAFT,
+                    created_by_label="ChatGPT",
+                    **fields,
+                )
+                item.draft = draft
+                update_fields.insert(0, "draft")
+                counts["drafts_created"] += 1
+            else:
+                counts["compact_results"] += 1
             item.status = ProcurementAnalysisRunItem.Status.COMPLETED
             item.result_metadata = raw_output
             item.completed_at = timezone.now()
             item.claim_token = None
             item.claim_expires_at = None
-            item.save(update_fields=[
-                "draft", "status", "result_metadata", "completed_at", "claim_token", "claim_expires_at", "updated_at"
-            ])
+            item.save(update_fields=update_fields)
             item.notice.processing_status = ProcurementNotice.ProcessingStatus.ANALYZED
             item.notice.save(update_fields=["processing_status", "updated_at"])
             counts["imported"] += 1
