@@ -33,6 +33,10 @@ services:
 
   backend:
     image: ${PDP_BACKEND_IMAGE:-pdp-one-backend:local}
+    build:
+      context: ./backend
+      args:
+        PDP_DOCKER_REGISTRY: ${PDP_DOCKER_REGISTRY:-docker.arvancloud.ir/library}
     restart: unless-stopped
     logging: *pdp-logging
     env_file: .env
@@ -65,6 +69,10 @@ services:
 
   mcp:
     image: ${PDP_MCP_IMAGE:-pdp-one-mcp:local}
+    build:
+      context: ./services/pdp_mcp
+      args:
+        PDP_DOCKER_REGISTRY: ${PDP_DOCKER_REGISTRY:-docker.arvancloud.ir/library}
     restart: unless-stopped
     logging: *pdp-logging
     env_file: .env
@@ -78,6 +86,12 @@ services:
 
   web:
     image: ${PDP_WEB_IMAGE:-pdp-one-web:local}
+    build:
+      context: .
+      dockerfile: infra/docker/web.Dockerfile
+      args:
+        PDP_DOCKER_REGISTRY: ${PDP_DOCKER_REGISTRY:-docker.arvancloud.ir/library}
+        PDP_BUILD_ID: ${PDP_BUILD_ID:-bootstrap-registry-transition}
     restart: unless-stopped
     logging: *pdp-logging
     environment:
