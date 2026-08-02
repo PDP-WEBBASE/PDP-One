@@ -3,9 +3,11 @@ from __future__ import annotations
 import gzip
 import hashlib
 import json
+import logging
 from pathlib import Path
 
 from django.conf import settings
+from django.db import transaction
 from django.http import FileResponse
 from django.shortcuts import get_object_or_404
 from rest_framework import status
@@ -40,6 +42,8 @@ from .serializers_analysis_runs import (
     ProcurementAnalysisRunSerializer,
 )
 from .tasks_analysis_runs import export_analysis_dataset_task, initialize_analysis_run_task
+
+logger = logging.getLogger(__name__)
 
 
 def _allowed(user) -> bool:
@@ -319,16 +323,26 @@ def import_analysis_results(request, run_id):
         supplied_hash = str(request.data.get("result_hash") or calculated_hash)
         if supplied_hash != calculated_hash:
             return Response({"detail": "Result Hash با محتوای ورودی تطابق ندارد."}, status=status.HTTP_400_BAD_REQUEST)
-        import_record = import_result_records(
-            run_id=str(run_id),
-            results=results,
-            actor=_actor(request),
-            dataset_id=str(request.data.get("dataset_id") or "") or None,
-            result_hash=calculated_hash,
-            dry_run=str(request.data.get("dry_run", "false")).lower() in {"1", "true", "yes"},
-        )
+        with transaction.atomic():
+            import_record = import_result_records(
+                run_id=str(run_id),
+                results=results,
+                actor=_actor(request),
+                dataset_id=str(request.data.get("dataset_id") or "") or None,
+                result_hash=calculated_hash,
+                dry_run=str(request.data.get("dry_run", "false")).lower() in {"1", "true", "yes"},
+            )
     except (json.JSONDecodeError, TypeError, ValueError) as exc:
         return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+    except Exception as exc:  # pragma: no cover - production diagnostic guard
+        logger.exception("Procurement analysis result import failed for run %s", run_id)
+        return Response(
+            {
+                "detail": "خطای داخلی ورود نتایج تحلیل ثبت شد؛ شناسه Run را برای بررسی نگه دارید.",
+                "error_code": "procurement_import_internal_error",
+            },
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
     return Response({"import": ProcurementAnalysisImportSerializer(import_record).data}, status=status.HTTP_201_CREATED)
 
 
