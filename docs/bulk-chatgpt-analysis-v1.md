@@ -6,6 +6,9 @@ This implementation keeps analysis single-stage and model-driven while reducing 
 - Compact claim payload with empty fields omitted and Context carried once per batch.
 - Adaptive batch sizing supports up to 500 records while enforcing a compact payload-character budget.
 - Compact short-key result schema is accepted by the existing import tool.
+- Useful goods and service groups are included when available; transport-only source hashes are omitted from the model payload.
+- Claim updates use a single bulk database write instead of one write per record.
+- Import preloads Run Items, notice hashes and prior drafts, then bulk-updates compact results and notice statuses.
 - Every result is persisted on the Run Item and remains valid for later runs when Context and Content Hash are unchanged.
 - Detailed AI Drafts are created only for recommended, urgent, ambiguous, needs-information, or score >= 60 items.
 - Existing hash, claim-token, Context and human-review protections remain active.
