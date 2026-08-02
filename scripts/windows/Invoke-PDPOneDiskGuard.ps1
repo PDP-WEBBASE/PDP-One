@@ -18,6 +18,7 @@ $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
 Set-StrictMode -Version Latest
 . (Join-Path $PSScriptRoot "PDPOne.Common.ps1")
+. (Join-Path $PSScriptRoot "PDPOne.OperationLock.ps1")
 
 $mutex = New-Object Threading.Mutex($false, "Global\PDP-One-Disk-Guard")
 if (-not $mutex.WaitOne(0)) { exit 0 }
@@ -150,20 +151,26 @@ function Invoke-PDPOneBackupRetention([ref]$Archived, [ref]$Removed) {
     }
 }
 
+function Add-PDPOneCommitImageReferences([hashtable]$Keep, [string]$Commit) {
+    if ($Commit -notmatch '^[0-9a-f]{40}$') { return }
+    foreach ($service in @("backend", "mcp", "web")) {
+        $Keep[("ghcr.io/pdp-webbase/pdp-one-{0}:{1}" -f $service, $Commit).ToLowerInvariant()] = $true
+    }
+}
+
 function Get-PDPOneRetainedImageReferences {
     $keep = @{}
     $statePath = Join-Path $AgentRoot "state\last-deployment.json"
-    if (-not (Test-Path -LiteralPath $statePath)) { return $keep }
+    if (Test-Path -LiteralPath $statePath) {
+        try {
+            $state = Get-Content -LiteralPath $statePath -Raw -Encoding UTF8 | ConvertFrom-Json
+            Add-PDPOneCommitImageReferences -Keep $keep -Commit ([string]$state.approved_commit)
+            Add-PDPOneCommitImageReferences -Keep $keep -Commit ([string]$state.previous_commit)
+        } catch { }
+    }
 
-    try {
-        $state = Get-Content -LiteralPath $statePath -Raw -Encoding UTF8 | ConvertFrom-Json
-        foreach ($commit in @([string]$state.approved_commit, [string]$state.previous_commit)) {
-            if ($commit -notmatch '^[0-9a-f]{40}$') { continue }
-            foreach ($service in @("backend", "mcp", "web")) {
-                $keep[("ghcr.io/pdp-webbase/pdp-one-{0}:{1}" -f $service, $commit).ToLowerInvariant()] = $true
-            }
-        }
-    } catch { }
+    $inFlightCommit = Get-PDPOneInFlightCommit -AgentRoot $AgentRoot
+    Add-PDPOneCommitImageReferences -Keep $keep -Commit $inFlightCommit
     return $keep
 }
 
@@ -222,6 +229,11 @@ function Invoke-PDPOneVhdCompact([string]$Path) {
 }
 
 function Invoke-PDPOneRancherCompaction([ref]$Compacted) {
+    $activeDeployment = Read-PDPOneDeploymentOperation -AgentRoot $AgentRoot -RemoveStale
+    if ($activeDeployment.Active) {
+        throw "Rancher VHD compaction is disabled while a deployment is in progress."
+    }
+
     $vhdFiles = @(Get-PDPOneRancherVhdFiles)
     if ($vhdFiles.Count -eq 0) { return }
 
@@ -270,6 +282,11 @@ $maintenanceRoot = "C:\ProgramData\PDP-One\maintenance"
 New-Item -ItemType Directory -Force -Path $maintenanceRoot | Out-Null
 $reportPath = Join-Path $maintenanceRoot ("disk-guard-" + (Get-Date -Format "yyyyMMdd-HHmmss") + ".json")
 
+$deploymentOperation = Read-PDPOneDeploymentOperation -AgentRoot $AgentRoot -RemoveStale
+$skipForDeployment = $deploymentOperation.Active -and $Mode -in @("startup", "scheduled", "emergency")
+$deploymentId = if ($deploymentOperation.Active) { [string]$deploymentOperation.State.deployment_id } else { "" }
+$targetCommit = if ($deploymentOperation.Active) { [string]$deploymentOperation.State.target_commit } else { "" }
+
 $removedHostPaths = @()
 $removedImages = @()
 $archivedBackups = @()
@@ -282,7 +299,7 @@ $cleanupThreshold = [int64]$CleanupThresholdGB * 1GB
 $targetFree = [int64]$TargetFreeGB * 1GB
 $criticalFree = [int64]$CriticalFreeGB * 1GB
 $cacheBudget = [Math]::Max(1, $BuildCacheBudgetGB).ToString() + "GB"
-$mustClean = $Mode -in @("predeploy", "postdeploy", "scheduled", "emergency") -or $beforeFree -lt $cleanupThreshold
+$mustClean = (-not $skipForDeployment) -and ($Mode -in @("predeploy", "postdeploy", "scheduled", "emergency") -or $beforeFree -lt $cleanupThreshold)
 
 try {
     if ($mustClean) {
@@ -320,10 +337,10 @@ try {
     }
 
     $afterFree = Get-PDPOneFreeBytes
-    $status = if ($afterFree -ge $targetFree) { "healthy" } elseif ($afterFree -ge $criticalFree) { "degraded" } else { "critical" }
+    $status = if ($skipForDeployment) { "skipped_deployment_in_progress" } elseif ($afterFree -ge $targetFree) { "healthy" } elseif ($afterFree -ge $criticalFree) { "degraded" } else { "critical" }
 
     $report = [ordered]@{
-        schema = "pdp-one.disk-guard.v3"
+        schema = "pdp-one.disk-guard.v4"
         mode = $Mode
         completed_at = [DateTime]::UtcNow.ToString("o")
         c_free_bytes_before = $beforeFree
@@ -332,7 +349,11 @@ try {
         cleanup_threshold_gb = $CleanupThresholdGB
         target_free_gb = $TargetFreeGB
         build_cache_budget_gb = $BuildCacheBudgetGB
-        image_retention = "active_commit_and_previous_commit"
+        image_retention = "active_previous_and_inflight_commit"
+        deployment_in_progress = [bool]$deploymentOperation.Active
+        deployment_id = $deploymentId
+        protected_target_commit = $targetCommit
+        cleanup_skipped_due_to_deployment = $skipForDeployment
         status = $status
         capacity_gate_enforced = $false
         deployment_allowed = $true
@@ -357,11 +378,15 @@ try {
     }
 } catch {
     $fallback = [ordered]@{
-        schema = "pdp-one.disk-guard.v3"
+        schema = "pdp-one.disk-guard.v4"
         mode = $Mode
         completed_at = [DateTime]::UtcNow.ToString("o")
         status = "guard_error"
         build_cache_budget_gb = $BuildCacheBudgetGB
+        image_retention = "active_previous_and_inflight_commit"
+        deployment_in_progress = [bool]$deploymentOperation.Active
+        deployment_id = $deploymentId
+        protected_target_commit = $targetCommit
         capacity_gate_enforced = $false
         deployment_allowed = $true
         error = ConvertTo-PDPOneRedactedText $_.Exception.Message
