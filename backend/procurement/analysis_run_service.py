@@ -401,7 +401,7 @@ def import_result_records(
     result_hash: str = "",
     dry_run: bool = False,
 ) -> ProcurementAnalysisImport:
-    run = ProcurementAnalysisRun.objects.select_for_update().select_related("context_snapshot", "analysis_request").get(pk=run_id)
+    run = ProcurementAnalysisRun.objects.select_for_update().select_related("context_snapshot").get(pk=run_id)
     dataset = None
     if dataset_id:
         dataset = ProcurementAnalysisDataset.objects.get(pk=dataset_id, run=run)
@@ -539,7 +539,7 @@ def import_result_records(
 
 @transaction.atomic
 def finalize_run_if_exhausted(run: ProcurementAnalysisRun, *, actor: str = "system") -> ProcurementAnalysisRun:
-    run = ProcurementAnalysisRun.objects.select_for_update().select_related("analysis_request").get(pk=run.pk)
+    run = ProcurementAnalysisRun.objects.select_for_update().get(pk=run.pk)
     counters = refresh_run_counters(run, save=False)
     run.counters = {**(run.counters or {}), **counters}
     run.heartbeat_at = timezone.now()

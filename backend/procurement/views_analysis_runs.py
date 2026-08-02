@@ -338,7 +338,7 @@ def import_analysis_results(request, run_id):
         logger.exception("Procurement analysis result import failed for run %s", run_id)
         return Response(
             {
-                "detail": f"{type(exc).__name__}: {str(exc)[:300]}",
+                "detail": "خطای داخلی ورود نتایج تحلیل ثبت شد؛ شناسه Run را برای بررسی نگه دارید.",
                 "error_code": "procurement_import_internal_error",
             },
             status=status.HTTP_500_INTERNAL_SERVER_ERROR,
