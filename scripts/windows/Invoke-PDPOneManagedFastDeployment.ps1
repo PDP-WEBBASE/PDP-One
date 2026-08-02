@@ -18,17 +18,89 @@ $guardScript = Join-Path $PSScriptRoot "Invoke-PDPOneDiskGuard.ps1"
 $policyScript = Join-Path $PSScriptRoot "Ensure-PDPOneRancherPolicy.ps1"
 $innerScript = Join-Path $PSScriptRoot "Invoke-PDPOneRegistryFastDeployment.ps1"
 $downloadRoot = Join-Path $AgentRoot ("downloads\" + $DeploymentId)
+$stateRoot = Join-Path $AgentRoot "state"
+$coordinationMarker = Join-Path $stateRoot "deployment-in-progress.json"
+$coordinationToken = [Guid]::NewGuid().ToString("N")
+$coordinationMutex = New-Object Threading.Mutex($false, "Global\PDP-One-Deployment-Coordinator")
+$coordinationMutexHeld = $false
+$taskStates = @()
 $deploymentOutput = @()
 $deploymentExitCode = 1
 $predeployGuardReport = ""
 $postdeployGuardReport = ""
 $rancherPolicyReport = ""
 
+$coordinatedTaskNames = @(
+    "PDP One Stable Startup",
+    "PDP One Open Local Web",
+    "PDP One MCP Self Heal",
+    "PDP One Disk Guard",
+    "PDP One Emergency Disk Guard"
+)
+
+function Suspend-PDPOneCompetingTasks {
+    foreach ($taskName in $coordinatedTaskNames) {
+        $task = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+        if ($null -eq $task) { continue }
+
+        $wasEnabled = ([string]$task.State -ne "Disabled")
+        $taskStates += [pscustomobject]@{
+            Name = $taskName
+            WasEnabled = $wasEnabled
+        }
+
+        try { Stop-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue } catch { }
+        if ($wasEnabled) {
+            Disable-ScheduledTask -TaskName $taskName -ErrorAction Stop | Out-Null
+        }
+    }
+}
+
+function Restore-PDPOneCompetingTasks {
+    foreach ($taskState in $taskStates) {
+        if (-not [bool]$taskState.WasEnabled) { continue }
+        try {
+            Enable-ScheduledTask -TaskName ([string]$taskState.Name) -ErrorAction Stop | Out-Null
+        } catch {
+            Write-Warning ("Scheduled task could not be restored: " + [string]$taskState.Name)
+        }
+    }
+}
+
+function Remove-PDPOneCoordinationMarker {
+    if (-not (Test-Path -LiteralPath $coordinationMarker)) { return }
+    try {
+        $marker = Get-Content -LiteralPath $coordinationMarker -Raw -Encoding UTF8 | ConvertFrom-Json
+        if ([string]$marker.coordination_token -ne $coordinationToken) { return }
+    } catch {
+        return
+    }
+    Remove-Item -LiteralPath $coordinationMarker -Force -ErrorAction SilentlyContinue
+}
+
 if (-not (Test-Path -LiteralPath $innerScript)) {
     throw "Registry-backed fast deployment implementation was not found."
 }
 
 try {
+    $coordinationMutexHeld = $coordinationMutex.WaitOne(0)
+    if (-not $coordinationMutexHeld) {
+        throw "Another coordinated PDP One deployment is already active."
+    }
+
+    New-Item -ItemType Directory -Force -Path $stateRoot | Out-Null
+    [ordered]@{
+        deployment_id = $DeploymentId
+        preview_id = $PreviewId
+        commit_sha = $CommitSha
+        coordination_token = $coordinationToken
+        process_id = $PID
+        started_at = [DateTime]::UtcNow.ToString("o")
+        status = "in_progress"
+    } | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $coordinationMarker -Encoding UTF8
+
+    Suspend-PDPOneCompetingTasks
+
     if (Test-Path -LiteralPath $policyScript) {
         $policyOutput = @(& powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File $policyScript -DockerTimeoutSeconds 300)
         if ($LASTEXITCODE -ne 0) { throw "The Rancher Kubernetes-off policy could not be applied." }
@@ -59,6 +131,14 @@ try {
             Write-Warning "Post-deployment cleanup did not finish. The deployment result is preserved and the daily disk task will retry cleanup."
         }
     }
+
+    Remove-PDPOneCoordinationMarker
+    Restore-PDPOneCompetingTasks
+
+    if ($coordinationMutexHeld) {
+        $coordinationMutex.ReleaseMutex()
+    }
+    $coordinationMutex.Dispose()
 }
 
 if ($deploymentExitCode -ne 0) {
@@ -73,6 +153,8 @@ if ($deploymentReport -and (Test-Path -LiteralPath $deploymentReport)) {
         $report | Add-Member -NotePropertyName rancher_policy_report -NotePropertyValue $rancherPolicyReport -Force
         $report | Add-Member -NotePropertyName predeploy_disk_guard_report -NotePropertyValue $predeployGuardReport -Force
         $report | Add-Member -NotePropertyName postdeploy_disk_guard_report -NotePropertyValue $postdeployGuardReport -Force
+        $report | Add-Member -NotePropertyName deployment_coordination_lock -NotePropertyValue $true -Force
+        $report | Add-Member -NotePropertyName competing_tasks_suspended -NotePropertyValue @($taskStates | ForEach-Object { $_.Name }) -Force
         $report | Add-Member -NotePropertyName obsolete_artifacts_cleaned_immediately -NotePropertyValue $true -Force
         $report | Add-Member -NotePropertyName capacity_gate_enforced -NotePropertyValue $false -Force
         $report | Add-Member -NotePropertyName deployment_attempted_until_actual_write_failure -NotePropertyValue $true -Force
