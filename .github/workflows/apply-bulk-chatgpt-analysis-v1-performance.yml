@@ -1,0 +1,32 @@
+name: Apply bulk ChatGPT analysis v1 performance
+
+on:
+  push:
+    branches:
+      - feature/bulk-chatgpt-analysis-v1
+    paths:
+      - .github/workflows/apply-bulk-chatgpt-analysis-v1-performance.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out feature branch
+        uses: actions/checkout@v4
+        with:
+          ref: feature/bulk-chatgpt-analysis-v1
+          fetch-depth: 0
+
+      - name: Apply database performance patch
+        run: python scripts/apply_bulk_chatgpt_analysis_v1_performance.py
+
+      - name: Commit optimized bulk analysis implementation
+        run: |
+          git config user.name "PDP One Automation"
+          git config user.email "actions@users.noreply.github.com"
+          git add -A
+          git commit -m "Optimize bulk claim and import database access"
+          git push origin HEAD:feature/bulk-chatgpt-analysis-v1
