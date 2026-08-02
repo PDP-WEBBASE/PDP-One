@@ -91,7 +91,7 @@ def register_procurement_analysis_tools(mcp, api: ApiCall) -> None:
         run_id: str,
         worker_id: str = "chatgpt-connected-app",
         limit: int = 500,
-        lease_seconds: int = 900,
+        lease_seconds: int = 3600,
     ) -> dict:
         return await api(
             "POST",

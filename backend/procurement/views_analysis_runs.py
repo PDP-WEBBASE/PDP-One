@@ -212,8 +212,8 @@ def claim_analysis_work(request, run_id):
         items = claim_run_items(
             str(run_id),
             worker_id=str(request.data.get("worker_id") or _actor(request)),
-            limit=int(request.data.get("limit") or 25),
-            lease_seconds=int(request.data.get("lease_seconds") or 900),
+            limit=int(request.data.get("limit") or 500),
+            lease_seconds=int(request.data.get("lease_seconds") or 3600),
         )
     except (TypeError, ValueError) as exc:
         return Response({"detail": str(exc)}, status=status.HTTP_409_CONFLICT)

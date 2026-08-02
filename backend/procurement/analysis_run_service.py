@@ -66,7 +66,11 @@ def _candidate_queryset(run: ProcurementAnalysisRun):
     queryset = (
         ProcurementNotice.objects.filter(soft_deleted_at__isnull=True, is_hidden=False)
         .exclude(processing_status=ProcurementNotice.ProcessingStatus.RETENTION_CLEANED)
-        .prefetch_related("source_links__source_notice__connector__source")
+        .prefetch_related(
+            "source_links__source_notice__connector__source",
+            "analysis_drafts",
+            "persistent_analysis_items",
+        )
         .order_by("created_at", "id")
     )
     if not run.include_expired:
@@ -84,22 +88,31 @@ def _candidate_queryset(run: ProcurementAnalysisRun):
 
 def _analysis_reason(run: ProcurementAnalysisRun, notice: ProcurementNotice, basis_hash: str) -> str | None:
     drafts = list(notice.analysis_drafts.all()) if hasattr(notice, "analysis_drafts") else []
-    current = [draft for draft in drafts if draft.context_snapshot_id == run.context_snapshot_id]
-    exact = [draft for draft in current if draft.notice_content_hash == basis_hash]
+    compact_items = [
+        item
+        for item in (list(notice.persistent_analysis_items.all()) if hasattr(notice, "persistent_analysis_items") else [])
+        if item.status == ProcurementAnalysisRunItem.Status.COMPLETED and bool(item.result_metadata)
+    ]
+    current_drafts = [draft for draft in drafts if draft.context_snapshot_id == run.context_snapshot_id]
+    exact_drafts = [draft for draft in current_drafts if draft.notice_content_hash == basis_hash]
+    current_compact = [item for item in compact_items if item.context_hash == run.context_snapshot.content_hash]
+    exact_compact = [item for item in current_compact if item.notice_content_hash == basis_hash]
 
     if run.include_previously_analyzed:
         return "explicit_reanalysis"
     if notice.processing_status == ProcurementNotice.ProcessingStatus.ANALYSIS_FAILED:
         return "previous_analysis_failed"
-    if exact:
-        for draft in exact:
+    if exact_drafts:
+        for draft in exact_drafts:
             review = (draft.raw_output or {}).get("human_review") or {}
             if review.get("decision") == "needs_revision":
                 return "returned_for_completion"
         return None
-    if not drafts:
+    if exact_compact:
+        return None
+    if not drafts and not compact_items:
         return "never_analyzed"
-    if not current:
+    if not current_drafts and not current_compact:
         return "analysis_context_changed"
     return "notice_content_changed"
 
@@ -312,7 +325,7 @@ def refresh_run_counters(run: ProcurementAnalysisRun, *, save: bool = True) -> d
 
 
 @transaction.atomic
-def claim_run_items(run_id: str, *, worker_id: str, limit: int = 25, lease_seconds: int = 900) -> list[ProcurementAnalysisRunItem]:
+def claim_run_items(run_id: str, *, worker_id: str, limit: int = 500, lease_seconds: int = 3600) -> list[ProcurementAnalysisRunItem]:
     run = ProcurementAnalysisRun.objects.select_for_update().select_related("context_snapshot").get(pk=run_id)
     if run.status == ProcurementAnalysisRun.Status.PAUSED:
         return []
@@ -332,14 +345,32 @@ def claim_run_items(run_id: str, *, worker_id: str, limit: int = 25, lease_secon
         claim_expires_at=None,
         last_error="claim_lease_expired",
     )
-    queryset = run.items.filter(
+    queryset = run.items.select_related("notice").prefetch_related(
+        "notice__source_links__source_notice"
+    ).filter(
         status__in=[ProcurementAnalysisRunItem.Status.PENDING, ProcurementAnalysisRunItem.Status.RETRY]
     ).order_by("sequence")
     if connection.features.has_select_for_update_skip_locked:
         queryset = queryset.select_for_update(skip_locked=True)
     else:
         queryset = queryset.select_for_update()
-    selected = list(queryset[: max(1, min(int(limit), 500))])
+    candidates = list(queryset[: max(1, min(int(limit), 500))])
+    selected: list[ProcurementAnalysisRunItem] = []
+    estimated_payload_chars = 2
+    max_payload_chars = 240_000
+    for candidate in candidates:
+        estimate = len(json.dumps({
+            "i": str(candidate.id),
+            "n": str(candidate.notice_id),
+            "c": candidate.notice_content_hash,
+            "ar": candidate.analysis_reason,
+            "dp": candidate.deadline_priority,
+            "b": _compact_basis(candidate.notice),
+        }, ensure_ascii=False, sort_keys=True, separators=(",", ":"))) + 48
+        if selected and estimated_payload_chars + estimate > max_payload_chars:
+            break
+        selected.append(candidate)
+        estimated_payload_chars += estimate
     expires = now + timedelta(seconds=max(60, min(int(lease_seconds), 3600)))
     for item in selected:
         item.new_claim_token()
@@ -414,24 +445,28 @@ COMPACT_CLAIM_SCHEMA = {
 
 
 def _compact_basis(notice: ProcurementNotice) -> dict[str, Any]:
-    basis = notice_basis_payload(notice)
+    source_hashes = sorted(
+        link.source_notice.content_hash
+        for link in notice.source_links.all()
+        if getattr(link, "source_notice", None) is not None
+    )
     mapped = {
-        "y": basis.get("type"),
-        "t": basis.get("title"),
-        "s": basis.get("summary"),
-        "d": basis.get("description"),
-        "o": basis.get("conditions"),
-        "e": basis.get("employer"),
-        "no": basis.get("notice_number"),
-        "p": basis.get("province"),
-        "ct": basis.get("city"),
-        "l": basis.get("execution_location"),
-        "pd": basis.get("published_date"),
-        "dd": basis.get("submission_deadline"),
-        "a": basis.get("estimated_amount_rials"),
-        "g": basis.get("guarantee_amount_rials"),
-        "q": basis.get("qualification_text"),
-        "sh": basis.get("source_hashes"),
+        "y": notice.resolved_notice_type,
+        "t": notice.title,
+        "s": notice.summary,
+        "d": notice.description,
+        "o": notice.conditions,
+        "e": notice.employer_name,
+        "no": notice.notice_number,
+        "p": notice.province,
+        "ct": notice.city,
+        "l": notice.execution_location,
+        "pd": notice.published_date.isoformat() if notice.published_date else None,
+        "dd": notice.submission_deadline.isoformat() if notice.submission_deadline else None,
+        "a": str(notice.estimated_amount_rials) if notice.estimated_amount_rials is not None else None,
+        "g": str(notice.guarantee_amount_rials) if notice.guarantee_amount_rials is not None else None,
+        "q": notice.qualification_text,
+        "sh": source_hashes,
     }
     return {key: value for key, value in mapped.items() if value not in (None, "", [], {})}
 
@@ -510,18 +545,17 @@ def _normalize_result(result: dict[str, Any]) -> dict[str, Any]:
 
 
 def _should_create_draft(result: dict[str, Any]) -> bool:
-    if "create_draft" in result:
-        return bool(result.get("create_draft"))
     priority = str(result.get("priority") or "").strip().lower()
     screening_reason = str(result.get("screening_reason") or "").strip().lower()
     score = max(0, min(int(result.get("score", 0)), 100))
-    return bool(
+    material = bool(
         result.get("is_recommended")
         or result.get("missing_information")
         or priority in {"high", "urgent", "critical"}
         or screening_reason in {"ambiguous", "borderline", "needs_information", "needs_review"}
         or score >= 60
     )
+    return bool(result.get("create_draft")) or material
 
 
 def _draft_payload(result: dict[str, Any]) -> dict[str, Any]:
@@ -628,7 +662,8 @@ def import_result_records(
                 "engine": "PDP One bulk ChatGPT analysis",
                 "format": "pdp-one.compact-result.v1",
                 "decision_is_draft": True,
-                "requires_human_review": create_draft,
+                "requires_human_review": True,
+                "review_queue": "detailed" if create_draft else "compact",
                 "compact_only": not create_draft,
                 "run_id": str(run.id),
                 "run_item_id": str(item.id),
@@ -797,6 +832,12 @@ def queue_summary() -> dict[str, Any]:
     valid_notice_ids = set(
         NoticeAnalysisDraft.objects.filter(context_snapshot=context).values_list("notice_id", flat=True)
     )
+    valid_notice_ids.update(
+        ProcurementAnalysisRunItem.objects.filter(
+            status=ProcurementAnalysisRunItem.Status.COMPLETED,
+            context_hash=context.content_hash,
+        ).exclude(result_metadata={}).values_list("notice_id", flat=True)
+    )
     visible = ProcurementNotice.objects.filter(soft_deleted_at__isnull=True, is_hidden=False).exclude(
         processing_status=ProcurementNotice.ProcessingStatus.RETENTION_CLEANED
     )
@@ -804,7 +845,7 @@ def queue_summary() -> dict[str, Any]:
     valid = 0
     reanalysis = 0
     urgent = 0
-    for notice in visible.prefetch_related("analysis_drafts").iterator(chunk_size=500):
+    for notice in visible.prefetch_related("analysis_drafts", "persistent_analysis_items", "source_links__source_notice").iterator(chunk_size=500):
         basis = notice_basis_hash(notice)
         reason = _analysis_reason(
             ProcurementAnalysisRun(context_snapshot=context, include_previously_analyzed=False), notice, basis

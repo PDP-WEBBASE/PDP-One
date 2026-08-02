@@ -95,3 +95,38 @@ class BulkChatGPTAnalysisTests(APITransactionTestCase):
         self.assertEqual(ProcurementAnalysisRunItem.objects.filter(status="completed").count(), 2)
         compact_item = ProcurementAnalysisRunItem.objects.get(draft__isnull=True)
         self.assertTrue(compact_item.result_metadata["compact_only"])
+
+
+    def test_compact_result_is_valid_analysis_for_future_runs(self):
+        items = claim_run_items(str(self.run.id), worker_id="reuse-test", limit=500, lease_seconds=3600)
+        results = []
+        for item in items:
+            results.append({
+                "i": str(item.id),
+                "k": str(item.claim_token),
+                "n": str(item.notice_id),
+                "c": item.notice_content_hash,
+                "x": self.context.content_hash,
+                "r": False,
+                "s": 5,
+                "p": "low",
+                "f": "نامرتبط",
+                "g": "نامرتبط",
+                "rs": "تناسب ندارد",
+                "a": "عدم پیگیری",
+                "cf": 95,
+                "cd": False,
+            })
+        response = self.client.post(self.import_url, {"results": results}, format="json")
+        self.assertEqual(response.status_code, 201, response.data)
+        self.assertEqual(response.data["import"]["counts"]["compact_results"], 2)
+        next_run, created = create_or_resume_run(
+            run_type=ProcurementAnalysisRun.RunType.INCREMENTAL,
+            trigger=ProcurementAnalysisRun.Trigger.MANUAL_CHATGPT,
+            scope=ProcurementAnalysisRun.Scope.ALL_PENDING,
+            actor=self.user.username,
+            requested_by=self.user,
+        )
+        self.assertTrue(created)
+        next_run = initialize_run(str(next_run.id), actor=self.user.username)
+        self.assertEqual(next_run.items.count(), 0)
