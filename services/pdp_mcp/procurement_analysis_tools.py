@@ -84,21 +84,21 @@ def register_procurement_analysis_tools(mcp, api: ApiCall) -> None:
         return await api("POST", f"procurement/analysis/runs/{run_id}/cancel/", json={})
 
     @mcp.tool(
-        description="Atomically claim the next safe work package for one analysis worker. Every item includes notice, Content Hash, Context Hash and a lease token.",
+        description="Claim a compact direct-ChatGPT work package. The response carries Context once per batch, omits empty notice fields, supports up to 500 records, and includes a short-key schema for safe import.",
         annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, openWorldHint=False, idempotentHint=False),
     )
     async def claim_procurement_analysis_work(
         run_id: str,
         worker_id: str = "chatgpt-connected-app",
-        limit: int = 25,
-        lease_seconds: int = 900,
+        limit: int = 500,
+        lease_seconds: int = 3600,
     ) -> dict:
         return await api(
             "POST",
             f"procurement/analysis/runs/{run_id}/claim/",
             json={
                 "worker_id": worker_id[:120],
-                "limit": max(1, min(int(limit), 250)),
+                "limit": max(1, min(int(limit), 500)),
                 "lease_seconds": max(60, min(int(lease_seconds), 3600)),
             },
         )
