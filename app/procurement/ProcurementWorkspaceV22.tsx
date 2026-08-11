@@ -4,6 +4,7 @@ import ProcurementWorkspaceV21 from "./ProcurementWorkspaceV21";
 
 type NoticeRow = {
   id?: string;
+  is_recommended?: boolean;
   [key: string]: unknown;
 };
 
@@ -48,7 +49,6 @@ function isWorkspaceRootNoticeRequest(url: URL | null) {
   if (!isNoticeCollection(url)) return false;
   if (url!.searchParams.get("ordering") !== "-last_seen_at") return false;
   if (url!.searchParams.has("page")) return false;
-  if (url!.searchParams.has("is_recommended")) return false;
   if (url!.searchParams.has("resolved_notice_type")) return false;
   return true;
 }
@@ -58,7 +58,6 @@ function isWorkspaceNoticePageRequest(url: URL | null) {
     isNoticeCollection(url)
     && url!.searchParams.get("ordering") === "-last_seen_at"
     && url!.searchParams.has("page")
-    && !url!.searchParams.has("is_recommended")
   );
 }
 
@@ -93,16 +92,21 @@ function withoutSignal(init?: RequestInit): RequestInit | undefined {
   return rest;
 }
 
+function recommendationUrl(root: URL) {
+  const next = new URL(root.toString());
+  next.pathname = next.pathname.replace(/\/notices\/$/, "/recommended-notices/");
+  next.search = "";
+  next.searchParams.set("ordering", "-last_seen_at");
+  return next;
+}
+
 async function fetchCompleteRecommended(
   nativeFetch: typeof window.fetch,
   root: URL,
   init?: RequestInit,
 ) {
   const rows: NoticeRow[] = [];
-  let next: URL | null = new URL(root.toString());
-  next.search = "";
-  next.searchParams.set("is_recommended", "true");
-  next.searchParams.set("ordering", "-last_seen_at");
+  let next: URL | null = recommendationUrl(root);
   let pages = 0;
   const recommendationInit = withoutSignal(init);
 
@@ -112,10 +116,10 @@ async function fetchCompleteRecommended(
     if (!response.ok || !(response.headers.get("content-type") || "").includes("application/json")) break;
     const payload = await response.json() as CollectionPayload;
     if (Array.isArray(payload)) {
-      rows.push(...payload);
+      rows.push(...payload.map((item) => ({ ...item, is_recommended: true })));
       break;
     }
-    rows.push(...(payload.results || []));
+    rows.push(...(payload.results || []).map((item) => ({ ...item, is_recommended: true })));
     if (!payload.next) break;
     const candidate = new URL(payload.next, window.location.origin);
     if (candidate.origin !== window.location.origin) break;
@@ -144,10 +148,9 @@ function installRecommendedCoverageFetch() {
 
     if (isWorkspaceRootNoticeRequest(url)) {
       rootRequestCount += 1;
-      // ProcurementWorkspaceV13 deliberately loads the first page first for fast
-      // startup, then starts a broader background load. Leave the first request
-      // untouched and enrich only the background request with the complete,
-      // server-filtered recommended set.
+      // ProcurementWorkspaceV13 loads one fast page and then one wider background
+      // collection. Only the background collection is enriched with the complete
+      // canonical AI recommendation set.
       if (rootRequestCount % 2 === 1) {
         backgroundCycle = false;
         injectedRecommendationIds = new Set<string>();
@@ -174,9 +177,8 @@ function installRecommendedCoverageFetch() {
           results: mergeUnique(basePayload.results || [], recommended),
         });
       } catch {
-        // Recommendation coverage is additive. If it fails, preserve the normal
-        // workspace response instead of turning a non-critical enhancement into
-        // a startup failure.
+        // Recommendation coverage is additive. A failure must not break the
+        // ordinary procurement workspace.
         return baseResponse;
       }
     }
