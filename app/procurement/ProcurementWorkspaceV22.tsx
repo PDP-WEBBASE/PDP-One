@@ -88,7 +88,8 @@ function jsonResponse(response: Response, payload: unknown) {
 
 function withoutSignal(init?: RequestInit): RequestInit | undefined {
   if (!init) return init;
-  const { signal: _signal, ...rest } = init;
+  const rest: RequestInit = { ...init };
+  delete rest.signal;
   return rest;
 }
 
