@@ -81,8 +81,8 @@ test("keeps approved V12 structure and compact list enhancements", async () => {
   assert.match(source, /برد و باخت/);
   assert.match(source, /جمع‌بندی مدیریتی ChatGPT/);
   assert.match(source, /پرونده‌های فعال/);
-  assert.match(source, /کل مناقصات/);
-  assert.match(source, /کل استعلامات/);
+  assert.match(source, /مناقصات ۳ روز اخیر/);
+  assert.match(source, /استعلامات ۳ روز اخیر/);
   assert.match(source, /کل ارجاعات مستقیم/);
   assert.match(source, /ثبت ارجاع مستقیم جدید/);
   assert.match(source, /compactRecordStyle/);
