@@ -32,16 +32,17 @@ test("renders development preview metadata", async () => {
   assert.match(await response.text(), developmentPreviewMeta);
 });
 
-test("routes procurement through V21 while preserving V20 to V13", async () => {
+test("routes procurement through V22 while preserving V21 to V13", async () => {
   const page = await readFile(new URL("../app/procurement/page.tsx", import.meta.url), "utf8");
   const versions = new Map();
-  for (let version = 13; version <= 21; version += 1) {
+  for (let version = 13; version <= 22; version += 1) {
     versions.set(version, await readFile(new URL(`../app/procurement/ProcurementWorkspaceV${version}.tsx`, import.meta.url), "utf8"));
   }
-  assert.match(page, /ProcurementWorkspaceV21/);
-  for (let version = 21; version > 13; version -= 1) {
+  assert.match(page, /ProcurementWorkspaceV22/);
+  for (let version = 22; version > 13; version -= 1) {
     assert.match(versions.get(version), new RegExp(`ProcurementWorkspaceV${version - 1}`));
   }
+  assert.match(versions.get(22), /is_recommended/);
   assert.match(versions.get(21), /ProcurementAnalysisCenterPanel/);
   assert.match(versions.get(20), /AutomationControlPanel/);
   assert.match(versions.get(19), /ManagementDashboardPanel/);
@@ -80,8 +81,8 @@ test("keeps approved V12 structure and compact list enhancements", async () => {
   assert.match(source, /برد و باخت/);
   assert.match(source, /جمع‌بندی مدیریتی ChatGPT/);
   assert.match(source, /پرونده‌های فعال/);
-  assert.match(source, /کل مناقصات/);
-  assert.match(source, /کل استعلامات/);
+  assert.match(source, /مناقصات ۳ روز اخیر/);
+  assert.match(source, /استعلامات ۳ روز اخیر/);
   assert.match(source, /کل ارجاعات مستقیم/);
   assert.match(source, /ثبت ارجاع مستقیم جدید/);
   assert.match(source, /compactRecordStyle/);

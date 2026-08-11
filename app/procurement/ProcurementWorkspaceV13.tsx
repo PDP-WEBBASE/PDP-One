@@ -130,6 +130,7 @@ const PROCUREMENT_API = `${API_BASE}/procurement`;
 const fa = new Intl.NumberFormat("fa-IR");
 const dateFa = new Intl.DateTimeFormat("fa-IR-u-ca-persian", { year: "numeric", month: "2-digit", day: "2-digit" });
 const dateTimeFa = new Intl.DateTimeFormat("fa-IR-u-ca-persian", { year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
+const RECENT_NOTICE_DAYS = 3;
 
 const tabs: [Tab, string][] = [
   ["dashboard", "داشبورد مدیریتی"],
@@ -198,16 +199,23 @@ function urgency(value: string | null) {
   return { tone:"normal" as UrgencyTone, label:"عادی", remaining:`${fa.format(Math.ceil(hours/24))} روز باقی‌مانده` };
 }
 
+function isRecentNotice(value: string | null | undefined) {
+  if (!value) return false;
+  const timestamp = new Date(value).getTime();
+  if (Number.isNaN(timestamp)) return false;
+  return timestamp >= Date.now() - RECENT_NOTICE_DAYS * 24 * 60 * 60 * 1000;
+}
+
 function allLabel(tab: Tab) {
-  if (tab === "tenders") return "کل مناقصات";
-  if (tab === "inquiries") return "کل استعلامات";
+  if (tab === "tenders") return "مناقصات ۳ روز اخیر";
+  if (tab === "inquiries") return "استعلامات ۳ روز اخیر";
   return "کل ارجاعات مستقیم";
 }
 
 function noticeMatches(item: ApiNotice, view: WorkflowView) {
   const stage = item.case_stage || "";
-  if (view === "all") return true;
-  if (view === "recommended") return item.is_recommended && !stage;
+  if (view === "all") return isRecentNotice(item.first_seen_at);
+  if (view === "recommended") return item.is_recommended;
   if (view === "selected") return selectedNoticeStages.has(stage);
   if (view === "submitted") return submittedNoticeStages.has(stage);
   return resultNoticeStages.has(stage);
@@ -304,9 +312,6 @@ export default function ProcurementWorkspaceV13() {
           return;
         }
 
-        // Critical path: authenticate, load dashboard totals and only the first
-        // page of operational records. This lets the workspace become usable
-        // without waiting for every historical page or management-only dataset.
         const [noticeItems, directItems, dashboardResponse] = await Promise.all([
           fetchCollection<ApiNotice>(`${PROCUREMENT_API}/notices/?ordering=-last_seen_at`, 1),
           fetchCollection<ApiDirectOpportunity>(`${PROCUREMENT_API}/direct-opportunities/?ordering=-last_activity_at`, 1),
@@ -324,8 +329,6 @@ export default function ProcurementWorkspaceV13() {
         hasLoadedOnce.current = true;
         setMode("live");
 
-        // Complete the operational collections in the background. A slow later
-        // page must never cover or remove the already usable workspace.
         void Promise.all([
           fetchCollection<ApiNotice>(`${PROCUREMENT_API}/notices/?ordering=-last_seen_at`),
           fetchCollection<ApiDirectOpportunity>(`${PROCUREMENT_API}/direct-opportunities/?ordering=-last_activity_at`),
@@ -349,9 +352,6 @@ export default function ProcurementWorkspaceV13() {
     return () => { active = false; };
   }, [refresh]);
 
-  // Sources, extraction history and automation settings are management-only
-  // data. Fetch them lazily when that tab is opened instead of delaying every
-  // visit to the dashboard, tenders or inquiries.
   useEffect(() => {
     if (tab !== "management" || mode !== "live" || managementLoadVersion.current === refresh) return;
     managementLoadVersion.current = refresh;
@@ -405,7 +405,6 @@ export default function ProcurementWorkspaceV13() {
           setRefresh((value) => value + 1);
         }
       } catch {
-        // Preserve the last successful screen while the next background poll retries.
       }
     };
     const timer = window.setInterval(poll, 5000);
@@ -439,7 +438,7 @@ export default function ProcurementWorkspaceV13() {
       (!directTypeFilter || item.opportunity_type === directTypeFilter);
   }), [directReferrals, directView, search, provinceFilter, importanceFilter, urgencyFilter, directTypeFilter]);
 
-  const recommendedCount = notices.filter((item) => item.is_recommended && !item.case_stage).length + directReferrals.filter((item) => recommendedDirectStages.has(item.stage)).length;
+  const recommendedCount = notices.filter((item) => item.is_recommended).length + directReferrals.filter((item) => recommendedDirectStages.has(item.stage)).length;
   const selectedCount = notices.filter((item) => selectedNoticeStages.has(item.case_stage || "")).length + directReferrals.filter((item) => selectedDirectStages.has(item.stage)).length;
   const submittedCount = notices.filter((item) => submittedNoticeStages.has(item.case_stage || "")).length + directReferrals.filter((item) => item.stage === "submitted").length;
   const urgentCount = notices.filter((item) => ["critical", "high"].includes(urgency(item.submission_deadline).tone) && !resultNoticeStages.has(item.case_stage || "")).length;
