@@ -2,8 +2,10 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
-test("routes procurement through V22 while preserving the V15 opportunity workflow", async () => {
+test("routes procurement through V23 while preserving the V15 opportunity workflow", async () => {
   const page = await readFile(new URL("../app/procurement/page.tsx", import.meta.url), "utf8");
+  const v23 = await readFile(new URL("../app/procurement/ProcurementWorkspaceV23.tsx", import.meta.url), "utf8");
+  const enhancements = await readFile(new URL("../app/procurement/ProcurementWorkspaceEnhancements.tsx", import.meta.url), "utf8");
   const v22 = await readFile(new URL("../app/procurement/ProcurementWorkspaceV22.tsx", import.meta.url), "utf8");
   const v21 = await readFile(new URL("../app/procurement/ProcurementWorkspaceV21.tsx", import.meta.url), "utf8");
   const v20 = await readFile(new URL("../app/procurement/ProcurementWorkspaceV20.tsx", import.meta.url), "utf8");
@@ -13,19 +15,20 @@ test("routes procurement through V22 while preserving the V15 opportunity workfl
   const v16 = await readFile(new URL("../app/procurement/ProcurementWorkspaceV16.tsx", import.meta.url), "utf8");
   const v15 = await readFile(new URL("../app/procurement/ProcurementWorkspaceV15.tsx", import.meta.url), "utf8");
 
-  assert.match(page, /ProcurementWorkspaceV22/);
+  assert.match(page, /ProcurementWorkspaceV23/);
+  assert.match(v23, /ProcurementWorkspaceV22/);
+  assert.match(v23, /ProcurementWorkspaceEnhancements/);
   assert.match(v22, /ProcurementWorkspaceV21/);
   assert.match(v21, /ProcurementWorkspaceV20/);
-  assert.match(v21, /ProcurementAnalysisCenterPanel/);
   assert.match(v20, /ProcurementWorkspaceV19/);
   assert.match(v19, /ProcurementWorkspaceV18/);
   assert.match(v18, /ProcurementWorkspaceV17/);
   assert.match(v17, /ProcurementWorkspaceV16/);
   assert.match(v16, /ProcurementWorkspaceV15/);
-  assert.match(v16, /AIReviewCenterPanel/);
   assert.match(v15, /ProcurementWorkspaceV14/);
-  assert.match(v15, /OpportunityWorkflowPanel/);
-  assert.match(v15, /مدیریت فرصت‌ها/);
+  assert.match(enhancements, /OpportunityWorkflowPanel/);
+  assert.match(enhancements, /مدیریت فرصت‌ها/);
+  assert.match(enhancements, /ابزارهای مدیریتی زیرسامانه/);
 });
 
 test("loads live cases and notices and saves only explicit human changes", async () => {

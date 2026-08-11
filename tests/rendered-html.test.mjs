@@ -32,24 +32,27 @@ test("renders development preview metadata", async () => {
   assert.match(await response.text(), developmentPreviewMeta);
 });
 
-test("routes procurement through V22 while preserving V21 to V13", async () => {
+test("routes procurement through V23 while preserving V22 to V13", async () => {
   const page = await readFile(new URL("../app/procurement/page.tsx", import.meta.url), "utf8");
   const versions = new Map();
-  for (let version = 13; version <= 22; version += 1) {
+  for (let version = 13; version <= 23; version += 1) {
     versions.set(version, await readFile(new URL(`../app/procurement/ProcurementWorkspaceV${version}.tsx`, import.meta.url), "utf8"));
   }
-  assert.match(page, /ProcurementWorkspaceV22/);
+  const enhancements = await readFile(new URL("../app/procurement/ProcurementWorkspaceEnhancements.tsx", import.meta.url), "utf8");
+  assert.match(page, /ProcurementWorkspaceV23/);
+  assert.match(versions.get(23), /ProcurementWorkspaceV22/);
+  assert.match(versions.get(23), /ProcurementWorkspaceEnhancements/);
   for (let version = 22; version > 13; version -= 1) {
     assert.match(versions.get(version), new RegExp(`ProcurementWorkspaceV${version - 1}`));
   }
   assert.match(versions.get(22), /is_recommended/);
-  assert.match(versions.get(21), /ProcurementAnalysisCenterPanel/);
-  assert.match(versions.get(20), /AutomationControlPanel/);
-  assert.match(versions.get(19), /ManagementDashboardPanel/);
-  assert.match(versions.get(18), /CaseFollowUpPanel/);
-  assert.match(versions.get(17), /CaseContractDraftPanel/);
-  assert.match(versions.get(16), /AIReviewCenterPanel/);
-  assert.match(versions.get(15), /OpportunityWorkflowPanel/);
+  assert.match(enhancements, /ProcurementAnalysisCenterPanel/);
+  assert.match(enhancements, /AutomationControlPanel/);
+  assert.match(enhancements, /ManagementDashboardPanel/);
+  assert.match(enhancements, /CaseFollowUpPanel/);
+  assert.match(enhancements, /CaseContractDraftPanel/);
+  assert.match(enhancements, /AIReviewCenterPanel/);
+  assert.match(enhancements, /OpportunityWorkflowPanel/);
   assert.match(versions.get(14), /AnalysisContextManager/);
   assert.match(versions.get(14), /AnalysisEnginePanel/);
   assert.match(versions.get(13), /متصل به API و پایگاه‌داده واقعی سامانه/);
