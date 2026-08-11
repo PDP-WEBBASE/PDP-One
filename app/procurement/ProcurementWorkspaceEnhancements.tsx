@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import AIReviewCenterPanel from "./AIReviewCenterPanel";
 import AutomationControlPanel from "./AutomationControlPanel";
@@ -80,8 +80,13 @@ function normalize(value: string | null | undefined) {
   return String(value || "").replace(/\s+/g, " ").trim();
 }
 
+function normalizeEmployer(value: string | null | undefined) {
+  const normalized = normalize(value);
+  return normalized === "کارفرما نامشخص" ? "" : normalized;
+}
+
 function rowKey(title: string, employer: string) {
-  return `${normalize(title)}\u0000${normalize(employer)}`;
+  return `${normalize(title)}\u0000${normalizeEmployer(employer)}`;
 }
 
 function sameOriginPath(value: string) {
@@ -204,15 +209,25 @@ export default function ProcurementWorkspaceEnhancements() {
   const [uploading, setUploading] = useState(false);
   const [uploadMessage, setUploadMessage] = useState("");
 
-  useEffect(() => {
-    let active = true;
-    loadSelectedCases().then((items) => {
-      if (active) setSelectedCases(items);
-    }).catch(() => {
-      if (active) setSelectedCases([]);
-    });
-    return () => { active = false; };
+  const refreshSelectedCases = useCallback(() => {
+    void loadSelectedCases().then(setSelectedCases).catch(() => setSelectedCases([]));
   }, []);
+
+  useEffect(() => {
+    refreshSelectedCases();
+    const timer = window.setInterval(refreshSelectedCases, 30000);
+    const handleClick = (event: MouseEvent) => {
+      const target = event.target instanceof Element ? event.target.closest("button") : null;
+      if (normalize(target?.textContent) === "انتخاب") {
+        window.setTimeout(refreshSelectedCases, 1200);
+      }
+    };
+    document.addEventListener("click", handleClick);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener("click", handleClick);
+    };
+  }, [refreshSelectedCases]);
 
   const selectedCaseByRow = useMemo(() => {
     const groups = new Map<string, SelectedCase[]>();
@@ -261,7 +276,7 @@ export default function ProcurementWorkspaceEnhancements() {
 
         for (const article of articles) {
           const title = normalize(article.querySelector("h3")?.textContent);
-          const employer = normalize(article.querySelector("p")?.textContent);
+          const employer = normalizeEmployer(article.querySelector("p")?.textContent);
           const item = selectedCaseByRow.get(rowKey(title, employer));
           if (!item) continue;
           matchedHostIds.add(item.id);
