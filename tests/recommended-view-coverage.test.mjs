@@ -2,13 +2,15 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import test from "node:test";
 
+const v23 = fs.readFileSync("app/procurement/ProcurementWorkspaceV23.tsx", "utf8");
 const workspace = fs.readFileSync("app/procurement/ProcurementWorkspaceV22.tsx", "utf8");
 const baseWorkspace = fs.readFileSync("app/procurement/ProcurementWorkspaceV13.tsx", "utf8");
 const page = fs.readFileSync("app/procurement/page.tsx", "utf8");
 const backendView = fs.readFileSync("backend/procurement/views_recommended.py", "utf8");
 
-test("procurement page activates the complete recommended coverage wrapper", () => {
-  assert.match(page, /ProcurementWorkspaceV22/);
+test("procurement page activates V23 while preserving complete recommended coverage", () => {
+  assert.match(page, /ProcurementWorkspaceV23/);
+  assert.match(v23, /ProcurementWorkspaceV22/);
   assert.match(workspace, /ProcurementWorkspaceV21/);
 });
 
