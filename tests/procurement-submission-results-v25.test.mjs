@@ -1,0 +1,53 @@
+import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
+import test from "node:test";
+
+const overlayPath = new URL("../app/procurement/ProcurementSubmissionResultsEnhancements.tsx", import.meta.url);
+const wrapperPath = new URL("../app/procurement/ProcurementWorkspaceV23.tsx", import.meta.url);
+const recommendedViewPath = new URL("../backend/procurement/views_recommended.py", import.meta.url);
+
+test("mounts the V25 submission and result workflow overlay", async () => {
+  const wrapper = await readFile(wrapperPath, "utf8");
+  assert.match(wrapper, /ProcurementSubmissionResultsEnhancements/);
+  assert.match(wrapper, /<ProcurementWorkspaceEnhancements \/>/);
+  assert.match(wrapper, /<ProcurementSubmissionResultsEnhancements \/>/);
+});
+
+test("allows submission without requiring an attached file", async () => {
+  const source = await readFile(overlayPath, "utf8");
+  assert.match(source, /fileInput\.required = false/);
+  assert.match(source, /fileInput\.removeAttribute\("required"\)/);
+  assert.match(source, /if \(!fileInput \|\| fileInput\.files\?\.length\) return/);
+  assert.match(source, /JSON\.stringify\(\{ stage: "submitted" \}\)/);
+  assert.match(source, /بدون فایل نیز ثبت ارسال انجام می‌شود/);
+});
+
+test("adds result registration for submitted tenders inquiries and direct opportunities", async () => {
+  const source = await readFile(overlayPath, "utf8");
+  assert.match(source, /workflowLabel === "ارسال‌شده"/);
+  assert.match(source, /result\.textContent = "ثبت نتیجه"/);
+  assert.match(source, /const OPPORTUNITY_RESULTS_API = `\$\{PROCUREMENT_API\}\/opportunity-results`/);
+  assert.match(source, /method: "PATCH"/);
+  assert.match(source, /method: "POST"/);
+  assert.match(source, /stage: resultOutcome/);
+  assert.match(source, /opportunity: resultTarget\.id/);
+  assert.match(source, /مورد به بخش «نتایج» منتقل شد/);
+});
+
+test("removes the proposed tab from direct referrals but keeps human selection from the complete list", async () => {
+  const source = await readFile(overlayPath, "utf8");
+  assert.match(source, /button\.style\.display = isDirect \? "none" : ""/);
+  assert.match(source, /workflowLabel === "پیشنهادی"/);
+  assert.match(source, /کل ارجاعات مستقیم/);
+});
+
+test("allows a human to dismiss an AI recommendation without deleting the notice", async () => {
+  const source = await readFile(overlayPath, "utf8");
+  const backend = await readFile(recommendedViewPath, "utf8");
+  assert.match(source, /حذف از پیشنهادی/);
+  assert.match(source, /\$\{RECOMMENDED_API\}\/\$\{item\.id\}\/dismiss\//);
+  assert.match(backend, /@action\(detail=True, methods=\["post"\], url_path="dismiss"\)/);
+  assert.match(backend, /NoticeAnalysisDraft\.ReviewStatus\.REJECTED/);
+  assert.match(backend, /procurement\.ai_recommendation\.dismiss/);
+  assert.match(backend, /"notice_deleted": False/);
+});
