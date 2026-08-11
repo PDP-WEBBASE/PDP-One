@@ -29,10 +29,12 @@ from .views_direct import DirectOpportunityViewSet, OpportunityContactViewSet, O
 from .views_documents import ProcurementSubmissionDocumentViewSet
 from .views_extraction import ExtractionRunViewSet
 from .views_management_dashboard import unified_management_dashboard
+from .views_recommended import AIRecommendedNoticeViewSet
 from .views_review import AIReviewDraftViewSet, analysis_review_summary_view, review_analysis_draft, select_reviewed_analysis_draft
 
 router = DefaultRouter()
 router.register("notices", ProcurementNoticeViewSet, basename="procurement-notice")
+router.register("recommended-notices", AIRecommendedNoticeViewSet, basename="procurement-recommended-notice")
 router.register("tenders", TenderViewSet, basename="procurement-tender")
 router.register("inquiries", InquiryViewSet, basename="procurement-inquiry")
 router.register("cases", ProcurementCaseViewSet, basename="procurement-case")
