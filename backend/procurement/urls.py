@@ -3,6 +3,7 @@ from rest_framework.routers import DefaultRouter
 
 from .views import InquiryViewSet, ProcurementConnectorViewSet, ProcurementNoticeViewSet, ProcurementSourceViewSet, TenderViewSet, procurement_dashboard
 from .views_analysis import AnalysisBatchViewSet, AnalysisRequestViewSet, active_analysis_context, analysis_context_manifest, analysis_queue, latest_extraction_run, notice_analysis_context
+from .views_analysis_adaptive import claim_analysis_work_adaptive
 from .views_analysis_engine import analysis_engine_work, finish_analysis_engine, start_analysis_engine
 from .views_analysis_management import ManagedAnalysisContextAttachmentViewSet, ManagedAnalysisContextSnapshotViewSet
 from .views_analysis_runs import (
@@ -12,7 +13,6 @@ from .views_analysis_runs import (
     analysis_run_queue_summary,
     analysis_run_status,
     cancel_analysis_run,
-    claim_analysis_work,
     current_analysis_run,
     download_analysis_dataset,
     import_analysis_results,
@@ -83,7 +83,7 @@ urlpatterns = [
     path("analysis/runs/<uuid:run_id>/pause/", pause_analysis_run, name="analysis-run-pause"),
     path("analysis/runs/<uuid:run_id>/resume/", resume_analysis_run, name="analysis-run-resume"),
     path("analysis/runs/<uuid:run_id>/cancel/", cancel_analysis_run, name="analysis-run-cancel"),
-    path("analysis/runs/<uuid:run_id>/claim/", claim_analysis_work, name="analysis-run-claim"),
+    path("analysis/runs/<uuid:run_id>/claim/", claim_analysis_work_adaptive, name="analysis-run-claim"),
     path("analysis/runs/<uuid:run_id>/datasets/prepare/", prepare_analysis_dataset, name="analysis-dataset-prepare"),
     path("analysis/runs/<uuid:run_id>/results/import/", import_analysis_results, name="analysis-results-import"),
     path("analysis/datasets/<uuid:dataset_id>/", analysis_dataset_status, name="analysis-dataset-status"),

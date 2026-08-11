@@ -1,0 +1,85 @@
+from datetime import timedelta
+
+from django.contrib.auth import get_user_model
+from django.test import TestCase
+from django.utils import timezone
+
+from procurement.analysis_run_adaptive import admit_newest_pending_items, claim_newest_run_items
+from procurement.analysis_run_service import create_or_resume_run, initialize_run
+from procurement.models import ProcurementNotice
+from procurement.models_analysis import AnalysisContextSnapshot
+from procurement.models_analysis_runs import ProcurementAnalysisRun
+
+
+class AdaptiveAnalysisPriorityTests(TestCase):
+    def setUp(self):
+        self.user = get_user_model().objects.create_user(
+            username="adaptive-analysis-manager",
+            password="test-pass",
+            is_staff=True,
+        )
+        self.context = AnalysisContextSnapshot.objects.create(
+            version=91,
+            status=AnalysisContextSnapshot.Status.ACTIVE,
+            role_text="تحلیلگر مناقصات",
+            base_instructions="همه نتایج فقط AI Draft هستند.",
+            analysis_prompt="فراخوان‌ها را بر اساس تناسب با PDP تحلیل کن.",
+            company_profile={"name": "PDP"},
+            qualifications=["معماری", "شهرسازی"],
+            keywords={"active": ["مطالعات", "طراحی"]},
+            experience_summary=[{"title": "مطالعات"}],
+            component_versions={"snapshot": 91},
+        )
+
+    def _notice(self, title: str, seen_at):
+        return ProcurementNotice.objects.create(
+            resolved_notice_type=ProcurementNotice.NoticeType.TENDER,
+            title=title,
+            description="خدمات مشاوره و طراحی",
+            employer_name="کارفرمای آزمون",
+            province="تهران",
+            processing_status=ProcurementNotice.ProcessingStatus.READY_FOR_ANALYSIS,
+            first_seen_at=seen_at,
+            last_seen_at=seen_at,
+            published_date=seen_at.date(),
+        )
+
+    def _run(self):
+        run, created = create_or_resume_run(
+            run_type=ProcurementAnalysisRun.RunType.FULL_PENDING,
+            trigger=ProcurementAnalysisRun.Trigger.MANUAL_WEB,
+            scope=ProcurementAnalysisRun.Scope.ALL_PENDING,
+            actor=self.user.username,
+            requested_by=self.user,
+        )
+        self.assertTrue(created)
+        return initialize_run(str(run.id), actor=self.user.username)
+
+    def test_claim_prefers_newest_notice_even_when_sequence_is_older_first(self):
+        now = timezone.now()
+        old_notice = self._notice("فراخوان قدیمی", now - timedelta(days=5))
+        fresh_notice = self._notice("فراخوان جدید", now - timedelta(hours=1))
+        run = self._run()
+
+        claimed = claim_newest_run_items(str(run.id), worker_id="priority-worker", limit=1)
+
+        self.assertEqual(len(claimed), 1)
+        self.assertEqual(claimed[0].notice_id, fresh_notice.id)
+        self.assertNotEqual(claimed[0].notice_id, old_notice.id)
+
+    def test_notice_arriving_after_run_start_is_admitted_and_claimed_first(self):
+        now = timezone.now()
+        self._notice("فراخوان اولیه", now - timedelta(days=2))
+        run = self._run()
+
+        fresh_notice = self._notice("فراخوان تازه پس از شروع Run", timezone.now() + timedelta(seconds=1))
+        admission = admit_newest_pending_items(str(run.id), actor=self.user.username)
+        run.refresh_from_db()
+
+        self.assertEqual(admission["admitted"], 1)
+        self.assertTrue(run.items.filter(notice=fresh_notice).exists())
+        self.assertEqual(run.metadata["priority_policy"], "newest_first")
+
+        claimed = claim_newest_run_items(str(run.id), worker_id="fresh-worker", limit=1)
+        self.assertEqual(len(claimed), 1)
+        self.assertEqual(claimed[0].notice_id, fresh_notice.id)
