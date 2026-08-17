@@ -56,6 +56,14 @@ def register_procurement_analysis_tools(mcp, api: ApiCall) -> None:
         return await api("GET", "procurement/analysis/runs/current/")
 
     @mcp.tool(
+        description="Return exact procurement analysis statistics split into tender, inquiry and total counts, including run attempts, completed results, remaining work, displayed AI drafts, effective recommendations and retry diagnostics.",
+        annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, openWorldHint=False, idempotentHint=True),
+    )
+    async def get_procurement_analysis_statistics(run_id: str = "") -> dict:
+        params = {"run_id": run_id} if run_id else {}
+        return await api("GET", "procurement/analysis/runs/statistics/", params=params)
+
+    @mcp.tool(
         description="List recent full-pending and incremental procurement analysis runs and their persisted checkpoints.",
         annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, openWorldHint=False, idempotentHint=True),
     )
@@ -84,13 +92,13 @@ def register_procurement_analysis_tools(mcp, api: ApiCall) -> None:
         return await api("POST", f"procurement/analysis/runs/{run_id}/cancel/", json={})
 
     @mcp.tool(
-        description="Claim a compact direct-ChatGPT work package. The response carries Context once per batch, omits empty notice fields, supports up to 500 records, and includes a short-key schema for safe import.",
+        description="Claim one bounded compact direct-ChatGPT work package. Backpressure permits one active package per worker and the server caps a package at 50 records to prevent lease-expiry retry storms.",
         annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, openWorldHint=False, idempotentHint=False),
     )
     async def claim_procurement_analysis_work(
         run_id: str,
         worker_id: str = "chatgpt-connected-app",
-        limit: int = 500,
+        limit: int = 50,
         lease_seconds: int = 3600,
     ) -> dict:
         return await api(
@@ -98,7 +106,7 @@ def register_procurement_analysis_tools(mcp, api: ApiCall) -> None:
             f"procurement/analysis/runs/{run_id}/claim/",
             json={
                 "worker_id": worker_id[:120],
-                "limit": max(1, min(int(limit), 500)),
+                "limit": max(1, min(int(limit), 50)),
                 "lease_seconds": max(60, min(int(lease_seconds), 3600)),
             },
         )
