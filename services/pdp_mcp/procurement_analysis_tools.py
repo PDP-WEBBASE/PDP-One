@@ -84,13 +84,13 @@ def register_procurement_analysis_tools(mcp, api: ApiCall) -> None:
         return await api("POST", f"procurement/analysis/runs/{run_id}/cancel/", json={})
 
     @mcp.tool(
-        description="Claim a compact direct-ChatGPT work package. The response carries Context once per batch, omits empty notice fields, supports up to 500 records, and includes a short-key schema for safe import.",
+        description="Atomically claim the next backend-governed safe procurement analysis package for one worker. The backend enforces the current package and in-flight caps and returns integrity fields for safe import.",
         annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, openWorldHint=False, idempotentHint=False),
     )
     async def claim_procurement_analysis_work(
         run_id: str,
         worker_id: str = "chatgpt-connected-app",
-        limit: int = 500,
+        limit: int = 50,
         lease_seconds: int = 3600,
     ) -> dict:
         return await api(
@@ -100,6 +100,25 @@ def register_procurement_analysis_tools(mcp, api: ApiCall) -> None:
                 "worker_id": worker_id[:120],
                 "limit": max(1, min(int(limit), 500)),
                 "lease_seconds": max(60, min(int(lease_seconds), 3600)),
+            },
+        )
+
+    @mcp.tool(
+        description="Renew only the still-active procurement analysis claim owned by this worker. Expired claims are never resurrected and no new work is claimed.",
+        annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, openWorldHint=False, idempotentHint=False),
+    )
+    async def renew_procurement_analysis_claim(
+        run_id: str,
+        worker_id: str = "chatgpt-connected-app",
+        lease_seconds: int = 3600,
+    ) -> dict:
+        return await api(
+            "POST",
+            f"procurement/analysis/runs/{run_id}/claim/",
+            json={
+                "worker_id": worker_id[:120],
+                "lease_seconds": max(60, min(int(lease_seconds), 3600)),
+                "renew_only": True,
             },
         )
 
