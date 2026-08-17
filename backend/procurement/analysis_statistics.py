@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from django.db.models import BooleanField, Case, F, OuterRef, Subquery, Value, When
+from django.db.models import BooleanField, Case, Count, F, OuterRef, Subquery, Value, When
 from django.utils import timezone
 
 from .analysis_run_adaptive import GLOBAL_ACTIVE_CLAIM_CAP, SAFE_CLAIM_LIMIT
@@ -128,6 +128,11 @@ def procurement_analysis_statistics(run: ProcurementAnalysisRun | None = None) -
         worker = str(row["claimed_by"] or "")
         worker_counts[worker] = worker_counts.get(worker, 0) + 1
 
+    retry_reason_counts = {
+        str(row["last_error"] or "unspecified"): int(row["count"] or 0)
+        for row in retry.values("last_error").annotate(count=Count("id")).order_by("-count")
+    }
+
     result["throughput"] = throughput
     result["active_run"] = {
         "id": str(run.id),
@@ -150,6 +155,7 @@ def procurement_analysis_statistics(run: ProcurementAnalysisRun | None = None) -
         "effective_remaining": throughput["effective_backlog"]["effective_remaining"],
         "retry_diagnostics": {
             "claim_lease_expired": retry.filter(last_error="claim_lease_expired").count(),
+            "reason_counts": retry_reason_counts,
             "active_claimed": active_claimed.count(),
             "expired_claimed_waiting_for_recovery": claimed.filter(claim_expires_at__lt=now).count(),
             "attempts_1": remaining.filter(attempts=1).count(),
