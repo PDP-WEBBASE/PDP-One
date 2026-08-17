@@ -42,9 +42,13 @@ test("Windows startup and self-heal validate token-bound MCP health end to end",
   assert.match(repair, /TransientConfirmDelaySeconds/);
   assert.match(repair, /public_mcp_health/);
   assert.match(repair, /mcp\/\$mcpPathToken\/healthz/);
-  assert.ok(
-    repair.indexOf("transient_failure_rechecked") < repair.indexOf("Restart-PDPOnePublicRoute"),
-    "public-route repair must record/recheck transient failure before disruptive recreation",
+  assert.match(
+    repair,
+    /if \(-not \$checks\.Success\) \{[\s\S]*?transient_failure_rechecked[\s\S]*?Start-Sleep[\s\S]*?Test-PublicPdpEndpoints/,
+  );
+  assert.match(
+    repair,
+    /if \(\$attempt -lt \$RepairAttempts\) \{ \[void\]\(Restart-PDPOnePublicRoute\) \}/,
   );
 
   assert.match(watchdog, /\.State\.Health/);
