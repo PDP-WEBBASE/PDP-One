@@ -54,6 +54,10 @@ test("Windows startup and self-heal validate token-bound MCP health end to end",
 
   assert.match(watchdog, /\.State\.Health/);
   assert.match(watchdog, /Test-LocalMcpRoute/);
+  assert.match(watchdog, /Test-PublicMcpRoute/);
+  assert.match(watchdog, /PDP_PUBLIC_BASE_URL/);
+  assert.match(watchdog, /confirmedPublicFailure/);
+  assert.match(watchdog, /healthy_after_public_route_repair/);
   assert.match(watchdog, /healthy_after_route_repair/);
   assert.match(watchdog, /--no-build/);
   assert.match(watchdog, /--pull never/);
