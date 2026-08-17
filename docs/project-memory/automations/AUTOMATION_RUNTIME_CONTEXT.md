@@ -42,6 +42,7 @@ Important fields:
 - global in-flight cap: backend-governed, currently **400**;
 - one active package per worker;
 - after successful Import with no unresolved integrity errors, the same worker may immediately claim the next package;
+- `renew_procurement_analysis_claim` may extend only that worker's still-active package; it never claims more work and never resurrects an expired claim;
 - capacity comes from sequential package cycles, never from one giant claim.
 
 ### Adaptive targets
@@ -62,8 +63,9 @@ Targets are **not guarantees**. The backend may reduce package cycles when recen
 - Auxiliary lanes never create/cancel/restart runs.
 - A lane exits when its lane number is greater than `policy.desired_lanes`.
 - A lane loops up to `policy.max_packages_per_lane` only while execution remains healthy.
-- Each loop is exactly: Claim up to 50 → semantic analysis of all items → one Import → verify successful clean checkpoint → next claim.
-- A lane stops on `count=0`, Context sync failure, invalid/rejected import integrity, or inability to safely complete another package.
+- Each loop is exactly: Claim up to 50 → semantic analysis of all items → renew the same active package when processing has been long → one Import → verify successful clean checkpoint → next claim.
+- If renewal returns `renewed_items=0`, stop and do not Import against a claim that may have expired or no longer belong to the worker.
+- A lane stops on `count=0`, Context sync failure, invalid/rejected import integrity, renewal failure, or inability to safely complete another package.
 - During long runs, periodically re-read status/policy and obey reduced backpressure immediately.
 
 ## Semantic fast/deep behavior
@@ -72,7 +74,7 @@ Every record is semantically analyzed against the active PDP Context. Clear non-
 
 ## Effective backlog behavior
 
-The legacy active full-pending run has `include_previously_analyzed=true`. Backend v2 may mark an open `explicit_reanalysis` item as `SKIPPED` only when the same Notice content under the same Context already has an exact valid draft/compact result and human review did not request revision. History is preserved; no Notice or analysis evidence is deleted.
+The legacy active full-pending run has `include_previously_analyzed=true`. Backend v2 may mark an open `explicit_reanalysis` item as `SKIPPED` only when the same Notice content under the same Context already has an exact valid draft/compact result and human review did not request revision. History is preserved; no Notice or analysis evidence is deleted. Full reconciliation is throttled/checkpointed instead of rescanning the entire backlog for every package claim.
 
 ## Model execution path
 
@@ -92,4 +94,4 @@ Routine analysis Automations must not:
 
 ## Failure behavior
 
-If required Context/live run cannot be read, import integrity fails, or another claim is unresolved, stop at the latest clean imported checkpoint and report the concrete error. Do not silently fall back to a historical prompt, local heuristic queue or speculative bulk reservation.
+If required Context/live run cannot be read, renewal fails, import integrity fails, or another claim is unresolved, stop at the latest clean imported checkpoint and report the concrete error. Do not silently fall back to a historical prompt, local heuristic queue or speculative bulk reservation.
