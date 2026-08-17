@@ -38,7 +38,7 @@ test("Compose and nginx require MCP health and preserve long-lived streamable HT
   assert.match(nginx, /proxy_read_timeout 3600s;/);
 });
 
-test("Windows startup and self-heal validate token-bound MCP health end to end", async () => {
+test("Windows startup and self-heal validate MCP without amplifying public-only transients", async () => {
   const startup = await load("../scripts/windows/Start-PDPOne.ps1");
   const repair = await load("../scripts/windows/Repair-PDPOneConnectivity.ps1");
   const watchdog = await load("../scripts/windows/Ensure-PDPOneMcpHealthy.ps1");
@@ -47,18 +47,21 @@ test("Windows startup and self-heal validate token-bound MCP health end to end",
   assert.match(startup, /public_mcp_health/);
   assert.match(startup, /mcp\/\$mcpPathToken\/healthz/);
   assert.match(startup, /Ensure-PDPOneMcpHealthy\.ps1/);
+  assert.match(startup, /public_mcp_health\s*=\s*\[string\]\$connectivity\.public_mcp_health/);
+  assert.match(startup, /public_mcp_health -eq "degraded"/);
 
   assert.match(repair, /Test-PublicPdpEndpoints/);
-  assert.match(repair, /TransientConfirmDelaySeconds/);
-  assert.match(repair, /public_mcp_health/);
+  assert.match(repair, /TransientConfirmDelaySeconds\s*=\s*10/);
+  assert.match(repair, /public_confirmation_count/);
+  assert.match(repair, /foreach \(\$confirm in 1\.\.2\)/);
   assert.match(repair, /mcp\/\$mcpPathToken\/healthz/);
   assert.match(
     repair,
-    /if \(-not \$checks\.Success\) \{[\s\S]*?transient_failure_rechecked[\s\S]*?Start-Sleep[\s\S]*?Test-PublicPdpEndpoints/,
+    /if \(\$checks\.Health\.Success -and \$checks\.ApiHealth\.Success -and -not \$checks\.McpHealth\.Success\) \{[\s\S]*?preserving the existing Funnel route[\s\S]*?McpState "degraded"/,
   );
   assert.match(
     repair,
-    /if \(\$attempt -lt \$RepairAttempts\) \{ \[void\]\(Restart-PDPOnePublicRoute\) \}/,
+    /Only a repeatedly confirmed full web\/API public-route failure[\s\S]*?Restart-PDPOnePublicRoute/,
   );
 
   assert.match(watchdog, /\.State\.Health/);
@@ -66,8 +69,10 @@ test("Windows startup and self-heal validate token-bound MCP health end to end",
   assert.match(watchdog, /Test-PublicMcpRoute/);
   assert.match(watchdog, /PDP_PUBLIC_BASE_URL/);
   assert.match(watchdog, /confirmedPublicFailure/);
-  assert.match(watchdog, /healthy_after_public_route_repair/);
+  assert.match(watchdog, /degraded_observed/);
+  assert.match(watchdog, /healthy_local_public_degraded_observed/);
   assert.match(watchdog, /healthy_after_route_repair/);
+  assert.doesNotMatch(watchdog, /healthy_after_public_route_repair/);
   assert.match(watchdog, /--no-build/);
   assert.match(watchdog, /--pull never/);
   assert.doesNotMatch(watchdog, /docker compose build/);
