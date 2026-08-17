@@ -1,3 +1,5 @@
+from datetime import timedelta
+
 from django.db.models import BooleanField, Case, F, Subquery, Value, When, Window
 from django.db.models.functions import RowNumber
 from django.utils import timezone
@@ -66,7 +68,7 @@ def pagination_dashboard_metrics(request):
     """
 
     now = timezone.now()
-    within_72_hours = now + timezone.timedelta(hours=72)
+    within_72_hours = now + timedelta(hours=72)
     notices = ProcurementNotice.objects.filter(soft_deleted_at__isnull=True, is_hidden=False)
     cases = ProcurementCase.objects.all()
     direct = DirectOpportunity.objects.filter(soft_deleted_at__isnull=True)
