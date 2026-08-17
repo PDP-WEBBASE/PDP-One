@@ -198,6 +198,15 @@ This register preserves decisions across chats. Old decisions are not erased; th
 - Policy: `docs/project-memory/MEMORY_RETENTION_AND_COMPACTION.md`.
 - Status: **Active**.
 
+### DEC-041 — Web UI no-reload interaction policy
+- Decision: ordinary authenticated PDP One web mutations are **no-reload by default**. Data entry, selection, stage changes, submission/documents, results, settings and management actions update affected local UI state and reconcile targeted data in the background rather than reloading the full page or rebuilding the whole workspace.
+- Optimistic UI is preferred when rollback is deterministic; otherwise use the confirmed server response. Pending/error state should remain local so unrelated work can continue, while PostgreSQL/API remains authoritative.
+- Current tab, filters, search, scroll and unrelated loaded data should be preserved across ordinary mutations.
+- Human Selected remains distinct from AI Recommended: a selected item leaves the actionable Recommended queue while recommendation history remains preserved under DEC-016/DEC-017/DEC-023.
+- Allowed hard-navigation/reload exceptions are limited to real route/subsystem navigation, authentication/session recovery, explicit emergency connectivity recovery, or loading a newly deployed client when required.
+- ADR: `docs/project-memory/decisions/ADR-041-WEB-UI-NO-RELOAD.md`.
+- Status: **Active hard UX/architecture rule**.
+
 ## Conflict precedence
 
 Latest explicit user decision > verified current operational fact > exact deployment evidence > current GitHub source > active decisions > cached current state > historical archive > transferred context > proposal > inference.
