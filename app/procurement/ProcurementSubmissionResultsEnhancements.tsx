@@ -1,6 +1,7 @@
 "use client";
 
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { emitProcurementUiSync, PROCUREMENT_UI_SYNC_EVENT, ProcurementUiSyncDetail } from "./procurementUiSync";
 
 type Collection<T> = T[] | { results?: T[]; next?: string | null };
 
@@ -41,6 +42,7 @@ type RecommendedNotice = NoticeSummary;
 type ResultTarget = {
   owner: "case" | "direct";
   id: string;
+  noticeId?: string;
   title: string;
   employer: string;
   kindLabel: string;
@@ -67,7 +69,6 @@ const CASE_ACTION_STAGES = [
 ] as const;
 
 const CASE_RESULT_STAGES = new Set(["submitted", "awaiting_result"]);
-const DIRECT_SELECTED_STAGES = new Set(["selected", "preparing"]);
 
 const caseOutcomes = [
   ["won", "برنده"],
@@ -263,6 +264,16 @@ export default function ProcurementSubmissionResultsEnhancements() {
     return () => window.clearInterval(timer);
   }, [refresh]);
 
+  useEffect(() => {
+    const handleSync = (event: Event) => {
+      const detail = (event as CustomEvent<ProcurementUiSyncDetail>).detail;
+      if (!detail || detail.source === "submission-results") return;
+      if (detail.noticeId || detail.directId || detail.bulkWorkspace) refresh();
+    };
+    window.addEventListener(PROCUREMENT_UI_SYNC_EVENT, handleSync);
+    return () => window.removeEventListener(PROCUREMENT_UI_SYNC_EVENT, handleSync);
+  }, [refresh]);
+
   const caseByRow = useMemo(
     () => uniqueByRow(caseItems, (item) => item.notice_title, (item) => item.notice_employer_name),
     [caseItems],
@@ -295,7 +306,8 @@ export default function ProcurementSubmissionResultsEnhancements() {
         body: JSON.stringify({ reason: "حذف از فهرست پیشنهادی توسط کاربر" }),
       });
       if (!response.ok) throw new Error(await responseMessage(response, "حذف از فهرست پیشنهادی انجام نشد."));
-      window.location.reload();
+      setRecommendedItems((current) => current.filter((candidate) => candidate.id !== item.id));
+      emitProcurementUiSync({ source:"submission-results", noticeId:item.id, dashboard:true });
     } catch (error) {
       window.alert(error instanceof Error ? error.message : "حذف از فهرست پیشنهادی انجام نشد.");
     }
@@ -325,7 +337,7 @@ export default function ProcurementSubmissionResultsEnhancements() {
         const direct = topLabel === "ارجاعات مستقیم" ? directByRow.get(key) : undefined;
         const procurementCase = topLabel !== "ارجاعات مستقیم" ? caseByRow.get(key) : undefined;
         const targetUrl = direct ? `${DIRECT_API}/${direct.id}/` : procurementCase ? `${CASES_API}/${procurementCase.id}/` : "";
-        if (!targetUrl) throw new Error("پرونده متناظر برای ثبت ارسال پیدا نشد؛ صفحه را تازه‌سازی کنید و دوباره تلاش کنید.");
+        if (!targetUrl) throw new Error("پرونده متناظر برای ثبت ارسال پیدا نشد؛ اطلاعات صفحه را دوباره همگام کنید و تلاش کنید.");
 
         const token = await csrfToken();
         const response = await fetch(targetUrl, {
@@ -335,8 +347,17 @@ export default function ProcurementSubmissionResultsEnhancements() {
           body: JSON.stringify({ stage: "submitted" }),
         });
         if (!response.ok) throw new Error(await responseMessage(response, "ثبت ارسال بدون فایل انجام نشد."));
+        if (direct) {
+          const updated = await response.json() as DirectOpportunity;
+          setDirectItems((current) => current.map((item) => item.id === updated.id ? updated : item));
+          emitProcurementUiSync({ source:"submission-results", directId:direct.id, dashboard:true, closeSubmissionDialog:true });
+        } else if (procurementCase) {
+          const updated = await response.json() as RawCase;
+          setCaseItems((current) => current.map((item) => item.id === updated.id ? { ...item, ...updated } : item));
+          emitProcurementUiSync({ source:"submission-results", noticeId:procurementCase.notice, dashboard:true, closeSubmissionDialog:true });
+        }
         window.alert("مورد بدون فایل پیوست به «ارسال‌شده» منتقل شد. هر زمان لازم باشد می‌توانید مدارک را جداگانه در پرونده نگهداری کنید.");
-        window.location.reload();
+        submissionBusy.current = false;
       } catch (error) {
         window.alert(error instanceof Error ? error.message : "ثبت ارسال بدون فایل انجام نشد.");
         submissionBusy.current = false;
@@ -419,7 +440,7 @@ export default function ProcurementSubmissionResultsEnhancements() {
             result.type = "button";
             result.textContent = "ثبت نتیجه";
             result.style.cssText = actionButton("primary");
-            result.onclick = () => openResult({ owner:"case", id:item.id, title:item.notice_title, employer:item.notice_employer_name, kindLabel:item.notice_type_label });
+            result.onclick = () => openResult({ owner:"case", id:item.id, noticeId:item.notice, title:item.notice_title, employer:item.notice_employer_name, kindLabel:item.notice_type_label });
             host.appendChild(result);
             decision.appendChild(host);
             continue;
@@ -488,8 +509,17 @@ export default function ProcurementSubmissionResultsEnhancements() {
         });
       }
       if (!response.ok) throw new Error(await responseMessage(response, "ثبت نتیجه انجام نشد."));
+      if (resultTarget.owner === "case") {
+        setCaseItems((current) => current.filter((item) => item.id !== resultTarget.id));
+        emitProcurementUiSync({ source:"submission-results", noticeId:resultTarget.noticeId, dashboard:true });
+      } else {
+        emitProcurementUiSync({ source:"submission-results", directId:resultTarget.id, dashboard:true });
+      }
+      setResultTarget(null);
+      setResultReason("");
+      setResultNotes("");
       window.alert("نتیجه ثبت شد و مورد به بخش «نتایج» منتقل شد.");
-      window.location.reload();
+      refresh();
     } catch (error) {
       setResultMessage(error instanceof Error ? error.message : "ثبت نتیجه انجام نشد.");
     } finally {
