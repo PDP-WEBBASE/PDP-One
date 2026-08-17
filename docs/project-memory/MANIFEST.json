@@ -1,0 +1,80 @@
+{
+  "schema_version": "pdp-project-memory-v1",
+  "project_name": "PDP One",
+  "repository": "PDP-WEBBASE/PDP-One",
+  "canonical_branch": "main",
+  "memory_version": "1.0-bootstrap",
+  "last_updated_at": "2026-08-17T15:42:00+03:30",
+  "activation_keyword": "PDPONE START",
+  "status_command": "PDPONE STATUS",
+  "end_command": "PDPONE END",
+  "mandatory_read_files": [
+    "PDP-ONE-START-HERE.md",
+    "docs/project-memory/CURRENT_STATE.md",
+    "docs/project-memory/SYSTEM_OF_RECORD_MATRIX.md",
+    "docs/project-memory/live-sources/LIVE_SOURCE_REGISTRY.md",
+    "docs/project-memory/SECURITY_AND_SAFETY_GUARDRAILS.md",
+    "docs/project-memory/MULTI_CHAT_COORDINATION.md",
+    "docs/project-memory/CURRENT_BACKLOG.md",
+    "docs/project-memory/decisions/DECISION_REGISTER.md"
+  ],
+  "domain_documents": {
+    "procurement": [
+      "docs/project-memory/procurement/PROCUREMENT_OVERVIEW.md",
+      "docs/project-memory/procurement/ANALYSIS_ENGINE.md",
+      "docs/project-memory/procurement/PROCUREMENT_WORKFLOW.md"
+    ],
+    "automation": [
+      "docs/project-memory/automations/AUTOMATION_REGISTRY.md",
+      "docs/project-memory/automations/AUTOMATION_RUNTIME_CONTEXT.md"
+    ],
+    "infrastructure": [
+      "docs/project-memory/infrastructure/RESOURCE_AND_ENVIRONMENT_REGISTRY.md",
+      "docs/project-memory/infrastructure/BACKUP_AND_RECOVERY.md"
+    ]
+  },
+  "source_catalog": "docs/project-memory/sources/SOURCE_CATALOG.md",
+  "live_source_registry": "docs/project-memory/live-sources/LIVE_SOURCE_REGISTRY.md",
+  "current_state_file": "docs/project-memory/CURRENT_STATE.md",
+  "decision_register": "docs/project-memory/decisions/DECISION_REGISTER.md",
+  "timeline": "docs/project-memory/history/TIMELINE.md",
+  "bootstrap_session": {
+    "session_id": "PDP-SESSION-20260817-PROJECT-MEMORY-BOOTSTRAP",
+    "issue": 59,
+    "branch": "docs/project-memory-bootstrap-20260817",
+    "base_main": "b99dfedc43c64c00b536bcb625d62499d7f1a4c3"
+  },
+  "historical_transfer_package": {
+    "name": "PDPOne-Transfer-Package-v10.0-2026-07-31",
+    "file_count": 69,
+    "zip_sha256": "fac51cd0ee4999b53fcae613c0ca6186a7e3fdcb4e7f99f1c0e606b71a62fff4",
+    "internal_checksum_covered_files": 68,
+    "internal_checksum_passed": 68,
+    "historical_not_current": true
+  },
+  "current_main_commit": "b99dfedc43c64c00b536bcb625d62499d7f1a4c3",
+  "current_deployed_exact_commit": "d2d70c67f5e1e3290a6a165b953118e4e7f90c9f",
+  "current_deployment_id": "analysis-hyper-turbo-d2d70c67-20260812-r2",
+  "deployment_identity_verified_at": "2026-08-17T15:44:00+03:30",
+  "current_context_version": 3,
+  "current_context_hash": "67564111125cee3ee86a3f0709e18161fdc2298e1e832ef573999b01598beadf",
+  "current_analysis_run": "755ad573-0bdd-4437-9b3e-0f6f09a64b96",
+  "current_health": {
+    "database": "connected",
+    "trial_mode": true,
+    "deployment_queue": "available",
+    "arbitrary_shell_allowed": false
+  },
+  "open_pull_requests_at_bootstrap": [45, 46],
+  "active_session_issues_before_bootstrap": 0,
+  "known_drift": [
+    {
+      "type": "AUTOMATION_DRIFT",
+      "summary": "Historical desired Hyper Turbo configuration is eight lanes, but live ChatGPT Automations currently have lanes 3 and 5 disabled while lanes 1,2,4,6,7,8 are enabled."
+    },
+    {
+      "type": "OPEN_PR_STALENESS",
+      "summary": "PR45 and PR46 remain open from older operational baselines and must be treated as historical/stale until intentionally reconciled."
+    }
+  ]
+}
