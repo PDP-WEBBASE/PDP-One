@@ -6,6 +6,7 @@ from .views_analysis import AnalysisBatchViewSet, AnalysisRequestViewSet, active
 from .views_analysis_adaptive import claim_analysis_work_adaptive
 from .views_analysis_engine import analysis_engine_work, finish_analysis_engine, start_analysis_engine
 from .views_analysis_management import ManagedAnalysisContextAttachmentViewSet, ManagedAnalysisContextSnapshotViewSet
+from .views_analysis_run_status_stats import analysis_run_status_with_statistics, current_analysis_run_with_statistics
 from .views_analysis_runs import (
     analysis_dataset_status,
     analysis_import_status,
@@ -22,6 +23,7 @@ from .views_analysis_runs import (
     start_full_pending_analysis,
     start_incremental_analysis,
 )
+from .views_analysis_statistics import analysis_statistics
 from .views_automation import ProcurementAutomationSettingsViewSet
 from .views_case_actions import ProcurementCaseViewSet
 from .views_case_followup import case_follow_up, follow_up_summary, follow_up_users
@@ -75,11 +77,12 @@ urlpatterns = [
     path("analysis/engine/drafts/<uuid:draft_id>/review/", review_analysis_draft, name="analysis-engine-review"),
     path("analysis/engine/drafts/<uuid:draft_id>/select/", select_reviewed_analysis_draft, name="analysis-engine-select"),
     path("analysis/runs/queue-summary/", analysis_run_queue_summary, name="analysis-run-queue-summary"),
-    path("analysis/runs/current/", current_analysis_run, name="analysis-run-current"),
+    path("analysis/runs/current/", current_analysis_run_with_statistics, name="analysis-run-current"),
     path("analysis/runs/history/", analysis_run_history, name="analysis-run-history"),
+    path("analysis/runs/statistics/", analysis_statistics, name="analysis-run-statistics"),
     path("analysis/runs/full-pending/start/", start_full_pending_analysis, name="analysis-run-full-start"),
     path("analysis/runs/incremental/start/", start_incremental_analysis, name="analysis-run-incremental-start"),
-    path("analysis/runs/<uuid:run_id>/", analysis_run_status, name="analysis-run-status"),
+    path("analysis/runs/<uuid:run_id>/", analysis_run_status_with_statistics, name="analysis-run-status"),
     path("analysis/runs/<uuid:run_id>/pause/", pause_analysis_run, name="analysis-run-pause"),
     path("analysis/runs/<uuid:run_id>/resume/", resume_analysis_run, name="analysis-run-resume"),
     path("analysis/runs/<uuid:run_id>/cancel/", cancel_analysis_run, name="analysis-run-cancel"),

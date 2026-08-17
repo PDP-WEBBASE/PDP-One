@@ -1,10 +1,11 @@
 from datetime import timedelta
+from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
 from django.test import TestCase
 from django.utils import timezone
 
-from procurement.analysis_run_adaptive import admit_newest_pending_items, claim_newest_run_items
+from procurement.analysis_run_adaptive import SAFE_CLAIM_LIMIT, admit_newest_pending_items, claim_newest_run_items
 from procurement.analysis_run_service import create_or_resume_run, initialize_run
 from procurement.models import ProcurementNotice
 from procurement.models_analysis import AnalysisContextSnapshot
@@ -83,3 +84,38 @@ class AdaptiveAnalysisPriorityTests(TestCase):
         claimed = claim_newest_run_items(str(run.id), worker_id="fresh-worker", limit=1)
         self.assertEqual(len(claimed), 1)
         self.assertEqual(claimed[0].notice_id, fresh_notice.id)
+
+    def test_same_worker_cannot_open_second_package_before_first_finishes(self):
+        now = timezone.now()
+        self._notice("فراخوان اول", now - timedelta(minutes=2))
+        self._notice("فراخوان دوم", now - timedelta(minutes=1))
+        run = self._run()
+
+        first = claim_newest_run_items(str(run.id), worker_id="same-worker", limit=1)
+        second = claim_newest_run_items(str(run.id), worker_id="same-worker", limit=1)
+
+        self.assertEqual(len(first), 1)
+        self.assertEqual(second, [])
+
+    def test_global_active_claim_cap_applies_across_workers(self):
+        now = timezone.now()
+        self._notice("فراخوان اول", now - timedelta(minutes=2))
+        self._notice("فراخوان دوم", now - timedelta(minutes=1))
+        run = self._run()
+
+        with patch("procurement.analysis_run_adaptive.GLOBAL_ACTIVE_CLAIM_CAP", 1):
+            first = claim_newest_run_items(str(run.id), worker_id="worker-a", limit=1)
+            second = claim_newest_run_items(str(run.id), worker_id="worker-b", limit=1)
+
+        self.assertEqual(len(first), 1)
+        self.assertEqual(second, [])
+
+    def test_server_clamps_large_claim_request_to_safe_limit(self):
+        now = timezone.now()
+        for index in range(SAFE_CLAIM_LIMIT + 10):
+            self._notice(f"فراخوان {index}", now + timedelta(seconds=index))
+        run = self._run()
+
+        claimed = claim_newest_run_items(str(run.id), worker_id="bounded-worker", limit=500)
+
+        self.assertEqual(len(claimed), SAFE_CLAIM_LIMIT)
