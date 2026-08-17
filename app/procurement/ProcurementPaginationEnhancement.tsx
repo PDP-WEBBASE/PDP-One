@@ -315,9 +315,9 @@ function PaginationBar({ meta }: { meta: PaginationMeta }) {
 
   return <div dir="rtl" style={{marginTop:12,padding:"10px 12px",border:"1px solid #dbe3ec",borderRadius:12,background:"#f8fafc",display:"flex",alignItems:"center",justifyContent:"space-between",gap:10,flexWrap:"wrap"}}>
     <div style={{display:"flex",alignItems:"center",gap:7,flexWrap:"wrap"}}>
-      <button type="button" disabled={current <= 1} style={{...buttonStyle,opacity:current<=1?.45:1}} onClick={() => { setPage(current - 1); emitRefresh(); }}>قبلی</button>
+      <button type="button" disabled={current <= 1} style={{...buttonStyle,opacity:current <= 1 ? 0.45 : 1}} onClick={() => { setPage(current - 1); emitRefresh(); }}>قبلی</button>
       {tokens.map((token, index) => token === "…" ? <span key={`ellipsis-${index}`} style={{padding:"0 2px"}}>…</span> : <button key={token} type="button" style={token === current ? activeStyle : buttonStyle} onClick={() => { setPage(token); emitRefresh(); }}>{fa.format(token)}</button>)}
-      <button type="button" disabled={current >= totalPages} style={{...buttonStyle,opacity:current>=totalPages?.45:1}} onClick={() => { setPage(current + 1); emitRefresh(); }}>بعدی</button>
+      <button type="button" disabled={current >= totalPages} style={{...buttonStyle,opacity:current >= totalPages ? 0.45 : 1}} onClick={() => { setPage(current + 1); emitRefresh(); }}>بعدی</button>
     </div>
     <div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap",fontSize:12,color:"#475569"}}>
       <b>صفحه {fa.format(current)} از {fa.format(totalPages)} — مجموع {fa.format(meta.count)} رکورد</b>
