@@ -75,6 +75,14 @@ services:
       - "${PDP_DEPLOYMENT_AGENT_ROOT:-C:/ProgramData/PDP-One/deployment-agent}/queue/incoming:/deployment-agent/queue/incoming"
       - "${PDP_DEPLOYMENT_AGENT_ROOT:-C:/ProgramData/PDP-One/deployment-agent}/queue/responses:/deployment-agent/queue/responses:ro"
     depends_on: [backend]
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - python -c "import urllib.request; r=urllib.request.urlopen('http://127.0.0.1:8010/healthz', timeout=4); raise SystemExit(0 if r.status == 200 and b'pdp-one-mcp' in r.read(512) else 1)"
+      interval: 15s
+      timeout: 5s
+      retries: 4
+      start_period: 10s
 
   web:
     image: ${PDP_WEB_IMAGE:-pdp-one-web:local}
@@ -108,7 +116,7 @@ services:
       backend:
         condition: service_started
       mcp:
-        condition: service_started
+        condition: service_healthy
 
   tailscale:
     profiles: ["tunnel"]
