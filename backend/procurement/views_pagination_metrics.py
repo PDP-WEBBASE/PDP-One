@@ -1,14 +1,13 @@
 from datetime import timedelta
 
-from django.db.models import BooleanField, Case, F, Subquery, Value, When, Window
-from django.db.models.functions import RowNumber
+from django.db.models import Subquery
 from django.utils import timezone
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 
 from .models import ProcurementCase, ProcurementNotice
-from .models_analysis import NoticeAnalysisDraft
 from .models_direct import DirectOpportunity
+from .views_recommended import latest_effective_recommended_notice_ids
 
 
 NOTICE_SELECTED_STAGES = [
@@ -40,25 +39,6 @@ DIRECT_SELECTED_STAGES = [
 ]
 
 
-def _latest_effective_recommended_ids():
-    return (
-        NoticeAnalysisDraft.objects.annotate(
-            recommendation_rank=Window(
-                expression=RowNumber(),
-                partition_by=[F("notice_id")],
-                order_by=[F("analyzed_at").desc(), F("created_at").desc(), F("id").desc()],
-            ),
-            effective_recommendation=Case(
-                When(review_status=NoticeAnalysisDraft.ReviewStatus.REJECTED, then=Value(False)),
-                default=F("is_recommended"),
-                output_field=BooleanField(),
-            ),
-        )
-        .filter(recommendation_rank=1, effective_recommendation=True)
-        .values("notice_id")
-    )
-
-
 @api_view(["GET"])
 def pagination_dashboard_metrics(request):
     """Exact aggregate counts used when browser collections are page-bounded.
@@ -73,7 +53,9 @@ def pagination_dashboard_metrics(request):
     cases = ProcurementCase.objects.all()
     direct = DirectOpportunity.objects.filter(soft_deleted_at__isnull=True)
 
-    effective_recommended = notices.filter(pk__in=Subquery(_latest_effective_recommended_ids())).count()
+    effective_recommended = notices.filter(
+        pk__in=Subquery(latest_effective_recommended_notice_ids())
+    ).count()
     direct_recommended = direct.filter(stage__in=DIRECT_RECOMMENDED_STAGES).count()
     selected = cases.filter(stage__in=NOTICE_SELECTED_STAGES).count() + direct.filter(stage__in=DIRECT_SELECTED_STAGES).count()
     submitted = cases.filter(stage__in=NOTICE_SUBMITTED_STAGES).count() + direct.filter(stage=DirectOpportunity.Stage.SUBMITTED).count()
