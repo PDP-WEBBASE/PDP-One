@@ -1,7 +1,7 @@
 from datetime import date
 
-from django.db.models import BooleanField, Case, Count, DateField, F, Subquery, Value, When, Window
-from django.db.models.functions import Coalesce, RowNumber
+from django.db.models import Count, DateField, Exists, OuterRef, Q, Subquery, Value
+from django.db.models.functions import Coalesce
 from rest_framework import serializers, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.response import Response
@@ -24,30 +24,35 @@ class AIRecommendedNoticeSerializer(ProcurementNoticeListSerializer):
 
 
 def latest_effective_recommended_notice_ids():
-    """Return notice IDs whose latest analysis draft is effectively recommended.
+    """Return notice IDs whose exact latest draft is effectively recommended.
 
-    Rank the comparatively small draft table once, then join the resulting notice
-    IDs back to ProcurementNotice. This avoids the former correlated subquery over
-    every notice while preserving the exact latest-draft / rejected-draft rule.
+    Work on the comparatively small draft table rather than correlating a latest-
+    draft subquery from every ProcurementNotice. A draft is latest only when no
+    lexicographically newer draft exists for the same notice using the canonical
+    analyzed_at, created_at and id ordering. The composite latest-draft index makes
+    this anti-join bounded while preserving rejected/non-recommended latest drafts.
     """
 
-    return (
-        NoticeAnalysisDraft.objects.annotate(
-            recommendation_rank=Window(
-                expression=RowNumber(),
-                partition_by=[F("notice_id")],
-                order_by=[F("analyzed_at").desc(), F("created_at").desc(), F("id").desc()],
-            ),
-            effective_recommendation=Case(
-                When(
-                    review_status=NoticeAnalysisDraft.ReviewStatus.REJECTED,
-                    then=Value(False),
-                ),
-                default=F("is_recommended"),
-                output_field=BooleanField(),
-            ),
+    newer_draft = NoticeAnalysisDraft.objects.filter(notice_id=OuterRef("notice_id")).filter(
+        Q(analyzed_at__gt=OuterRef("analyzed_at"))
+        | Q(
+            analyzed_at=OuterRef("analyzed_at"),
+            created_at__gt=OuterRef("created_at"),
         )
-        .filter(recommendation_rank=1, effective_recommendation=True)
+        | Q(
+            analyzed_at=OuterRef("analyzed_at"),
+            created_at=OuterRef("created_at"),
+            id__gt=OuterRef("id"),
+        )
+    )
+
+    return (
+        NoticeAnalysisDraft.objects.annotate(has_newer_draft=Exists(newer_draft))
+        .filter(
+            has_newer_draft=False,
+            is_recommended=True,
+        )
+        .exclude(review_status=NoticeAnalysisDraft.ReviewStatus.REJECTED)
         .values("notice_id")
     )
 
