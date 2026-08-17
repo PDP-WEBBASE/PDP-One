@@ -1,63 +1,105 @@
 # PDP One — Change Protocol
 
-## 1. Activation
+## 1. Conversation activation
 
-A project mutation session exists only when the user's operational request starts with:
+A fresh ChatGPT Conversation may mutate PDP One only after the user activates:
 
 `PDPONE START`
 
-Otherwise the conversation remains read-only/advisory.
+Activation is **per Conversation**, not per message and not per individual PR/work item.
 
-## 2. START Context Sync
+After the first successful START Context Sync, the Conversation remains operationally active for later PDP One requests without repeating the keyword. Completing a Work Session/PR does not deactivate the Conversation.
 
-Read:
+`PDPONE END` explicitly finalizes applicable memory/session closure and deactivates mutation mode in that Conversation. A new Conversation always needs its own first `PDPONE START`.
 
-- `PDP-ONE-START-HERE.md`
+## 2. Initial START Context Sync
+
+On first activation in a Conversation, read the compact Tier-0/Tier-1 canonical context defined by `PDP-ONE-START-HERE.md` and `MEMORY_RETENTION_AND_COMPACTION.md`:
+
 - Manifest / Current State
 - System of Record / Live Source Registry
 - Guardrails
 - Multi-Chat Coordination
 - Current Backlog
-- active decisions
-- relevant domain documentation
+- active/relevant decisions
+- relevant domain summary
 - active Session Issues
-- open PRs
-- latest relevant live state
+- relevant open PRs
+- relevant live state
+
+Do not read all historical Session Logs/source archives by default.
 
 Result must be PASS before normal writes.
 
-## 3. Create a Session record
+## 3. Establish the Conversation baseline
 
-Before first project write:
+After START, retain a lightweight baseline:
 
+- current `main` SHA;
+- Project Memory schema/memory version;
+- active Session Issues and relevant PR heads;
+- relevant decisions/domain docs already loaded;
+- relevant Runtime/Automation versions when needed.
+
+This cached baseline accelerates later requests but is never authoritative over GitHub/Runtime/Automation live sources.
+
+## 4. Work Session record
+
+Conversation activation and a GitHub Work Session are separate.
+
+Before the first write of each new material change/workstream:
+
+- run the applicable Delta/Concurrency Check;
 - create a GitHub Session Issue;
 - record exact starting `main`;
 - declare scope/soft locks;
 - record relevant live state and known conflicts;
 - create an independent branch.
 
-## 4. PRE-WRITE sync
+One activated Conversation can complete multiple sequential Work Sessions without asking for `PDPONE START` again.
+
+## 5. Delta Sync for later requests
+
+After the initial START, follow `coordination/DELTA_SYNC_PROTOCOL.md`.
+
+Before later instructions/checkpoints, first compare the cached baseline against:
+
+- current `main` SHA;
+- active Session Issues/heartbeats;
+- relevant open PR heads;
+- only the Runtime/Automation live facts needed by the requested action.
+
+If nothing relevant changed, reuse existing context.
+
+If something changed, read only the relevant commits/diffs/issues/decisions/domain docs and patch the baseline.
+
+Full Project Memory reload is exceptional, not routine.
+
+## 6. PRE-WRITE delta checkpoint
 
 Immediately before material source/config/schema/automation writes:
 
 - refresh `main`;
 - refresh active sessions/PRs;
-- verify no new overlap;
+- compare new deltas with lock scope;
+- load only relevant changed context;
 - update the Session Issue if scope changed.
 
-## 5. Implementation
+## 7. Implementation
 
 Use the smallest safe change consistent with current architecture. Preserve established working behavior unless the user explicitly requests redesign.
 
-For each material milestone, record:
+For each material milestone, record compactly:
 
 - investigation/root cause
-- decision
+- decision and rationale
 - commit/head
 - tests/CI
 - new blockers
 
-## 6. Development-fast deployment
+Do not paste large raw logs/diffs into memory when exact evidence can be referenced.
+
+## 8. Development-fast deployment
 
 For ordinary active development:
 
@@ -75,23 +117,24 @@ Once a deployment returns a Request ID:
 
 Development-fast does not have automatic rollback.
 
-## 7. Standard/guarded mode
+## 9. Standard/guarded mode
 
 Historical standard gates may additionally require Preview, final backup, isolated restore verification and explicit approval. Use this mode only when the active workflow/risk/user request requires it.
 
-## 8. PRE-DEPLOY sync
+## 10. PRE-DEPLOY delta checkpoint
 
 Before deployment:
 
 - refresh `main` and branch/head;
 - check concurrent deployment sessions;
+- read relevant deltas since the last checkpoint;
 - verify CI/image artifacts for the exact head;
 - verify Deployment Agent queue/disk state;
-- verify any current prerequisite runtime facts.
+- verify current prerequisite Runtime facts.
 
 Do not deploy stale/unverified code.
 
-## 9. Post-deploy verification
+## 11. Post-deploy verification
 
 - follow exact deployment request to terminal state;
 - run independent health when required;
@@ -99,17 +142,18 @@ Do not deploy stale/unverified code.
 - distinguish a healthy runtime from proof that the intended build is active;
 - record exact deployed commit/deployment ID/health evidence.
 
-## 10. PRE-MERGE sync
+## 12. PRE-MERGE delta checkpoint
 
 Immediately before merge:
 
 - refresh `main`;
-- inspect active session Issues and open PRs;
-- reconcile any change since branch start;
+- inspect active Session Issues and relevant open PRs;
+- compare/reconcile changes since the last baseline;
+- load only overlapping/dependency-relevant deltas;
 - verify required deploy/health/data evidence;
 - ensure memory/decision/session documentation is updated.
 
-## 11. Merge
+## 13. Merge
 
 Merge only after the applicable gates pass.
 
@@ -120,32 +164,48 @@ Keep separately:
 - exact deployed SHA
 - merge SHA
 
-## 12. Post-merge memory sync
+## 14. Post-merge memory sync
 
-Update as applicable:
+Update only the canonical records affected by the change:
 
 - Session Log
-- Timeline
-- Decision Register/ADR
-- Deployment/Incident history
-- Current State
+- Timeline/event index when material
+- Decision Register/ADR when a decision changed
+- Deployment/Incident history when applicable
+- Current State when current truth changed
 - Backlog
-- Automation Registry/specs
-- Live Source/Resource Registry
-- Manifest
+- Automation Registry/specs when applicable
+- Live Source/Resource Registry when applicable
+- compact domain summary when accepted behavior changed
+- Manifest when routing/schema/governance changed
 
-Then close the Session Issue.
+Then close the Work Session Issue.
 
-## 13. Definition of done
+Do not append repetitive run/log detail into active files.
 
-A change is done only when:
+## 15. Memory retention/compaction
+
+Follow `MEMORY_RETENTION_AND_COMPACTION.md`.
+
+- Tier 0/1 remains compact.
+- Tier 2 domain summaries are lazy-loaded by domain.
+- Tier 3 history is loaded only for rationale/regression/audit.
+- Tier 4 source/evidence is loaded only when needed.
+- Raw high-volume datasets/logs/automation payloads stay in their authoritative systems.
+- Material changes preserve reasoning/provenance without copying entire transcripts or telemetry.
+
+## 16. Definition of done
+
+A Work Session change is done only when:
 
 `Implementation + Verification + Deployment evidence when applicable + Memory Sync + Session closure`
 
-## 14. Special change classes
+Work Session closure does not deactivate the Conversation unless the user explicitly uses `PDPONE END`.
+
+## 17. Special change classes
 
 ### Automation change
-Read both GitHub desired spec and live ChatGPT task; detect drift; mutate only in an activated session; verify live after update; immediately sync registry/spec.
+Read both GitHub desired spec and live ChatGPT task; detect drift; mutate only in an activated Conversation with a scoped Work Session; verify live after update; sync registry/spec. Routine successful run payloads are not copied into Git history.
 
 ### Database migration
 Declare DB soft lock; inspect concurrent migrations; preserve business data; never delete data merely to simplify migration.
