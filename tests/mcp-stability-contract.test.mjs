@@ -17,6 +17,15 @@ test("MCP image exposes an explicit health route and pins stable v1 SDK", async 
   assert.match(requirements, /^mcp==1\.28\.1$/m);
 });
 
+test("MCP keeps stateful sessions while returning short-lived JSON POST responses", async () => {
+  const entry = await load("../services/pdp_mcp/server_procurement.py");
+
+  assert.match(entry, /mcp\.settings\.json_response\s*=\s*True/);
+  assert.match(entry, /mcp\.settings\.stateless_http\s*=\s*False/);
+  assert.match(entry, /mcp\.run\(transport="streamable-http"\)/);
+  assert.doesNotMatch(entry, /stateless_http\s*=\s*True/);
+});
+
 test("Compose and nginx require MCP health and preserve long-lived streamable HTTP", async () => {
   const compose = await load("../docker-compose.yml");
   const nginx = await load("../infra/nginx/default.conf.template");
