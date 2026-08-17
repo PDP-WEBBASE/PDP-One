@@ -25,10 +25,12 @@ test("recommended coverage comes from the canonical latest-analysis endpoint", (
   assert.match(backendView, /filter\(ai_is_recommended=True\)/);
 });
 
-test("general tender and inquiry view is recent while recommendations keep full history", () => {
+test("general view is recent while canonical recommendation history stays complete and selected items leave the actionable queue", () => {
   assert.match(baseWorkspace, /RECENT_NOTICE_DAYS = 3/);
   assert.match(baseWorkspace, /view === "all"\) return isRecentNotice\(item\.first_seen_at\)/);
-  assert.match(baseWorkspace, /view === "recommended"\) return item\.is_recommended;/);
+  assert.match(baseWorkspace, /view === "recommended"\) return item\.is_recommended && !stage;/);
+  assert.match(workspace, /fetchCompleteRecommended/);
+  assert.match(workspace, /is_recommended: true/);
   assert.match(baseWorkspace, /مناقصات ۳ روز اخیر/);
   assert.match(baseWorkspace, /استعلامات ۳ روز اخیر/);
 });

@@ -11,6 +11,7 @@ import CaseFollowUpPanel from "./CaseFollowUpPanel";
 import ManagementDashboardPanel from "./ManagementDashboardPanel";
 import OpportunityWorkflowPanel from "./OpportunityWorkflowPanel";
 import ProcurementAnalysisCenterPanel from "./ProcurementAnalysisCenterPanel";
+import { emitProcurementUiSync, PROCUREMENT_UI_SYNC_EVENT, ProcurementUiSyncDetail } from "./procurementUiSync";
 
 type ToolKey =
   | "workflow"
@@ -313,6 +314,22 @@ export default function ProcurementWorkspaceEnhancements() {
     };
   }, [refreshActionData]);
 
+  useEffect(() => {
+    const handleSync = (event: Event) => {
+      const detail = (event as CustomEvent<ProcurementUiSyncDetail>).detail;
+      if (!detail || detail.source === "workspace-enhancements") return;
+      if (detail.closeSubmissionDialog) {
+        setUploadTarget(null);
+        setFiles([]);
+        setDescription("");
+        setUploadMessage("");
+      }
+      if (detail.noticeId || detail.directId || detail.bulkWorkspace) refreshActionData();
+    };
+    window.addEventListener(PROCUREMENT_UI_SYNC_EVENT, handleSync);
+    return () => window.removeEventListener(PROCUREMENT_UI_SYNC_EVENT, handleSync);
+  }, [refreshActionData]);
+
   const selectedCaseByRow = useMemo(() => {
     const groups = new Map<string, SelectedCase[]>();
     for (const item of selectedCases) {
@@ -353,7 +370,8 @@ export default function ProcurementWorkspaceEnhancements() {
         headers: { "X-CSRFToken": token, Accept: "application/json" },
       });
       if (!response.ok) throw new Error(await responseMessage(response, "حذف از منتخب انجام نشد."));
-      window.location.reload();
+      setSelectedCases((current) => current.filter((candidate) => candidate.id !== item.id));
+      emitProcurementUiSync({ source:"workspace-enhancements", noticeId:item.notice, dashboard:true });
     } catch (error) {
       window.alert(error instanceof Error ? error.message : "حذف از منتخب انجام نشد.");
     }
@@ -369,7 +387,9 @@ export default function ProcurementWorkspaceEnhancements() {
         body: JSON.stringify({ stage }),
       });
       if (!response.ok) throw new Error(await responseMessage(response, stage === "selected" ? "انتخاب ارجاع مستقیم انجام نشد." : "حذف از منتخب انجام نشد."));
-      window.location.reload();
+      const updated = await response.json() as DirectOpportunity;
+      setDirectItems((current) => current.map((candidate) => candidate.id === updated.id ? updated : candidate));
+      emitProcurementUiSync({ source:"workspace-enhancements", directId:item.id, dashboard:true });
     } catch (error) {
       window.alert(error instanceof Error ? error.message : "تغییر مرحله ارجاع مستقیم انجام نشد.");
     }
@@ -579,8 +599,26 @@ export default function ProcurementWorkspaceEnhancements() {
       });
       if (!stageResponse.ok) throw new Error(await responseMessage(stageResponse, "مدارک ذخیره شد اما انتقال مورد به ارسال‌شده انجام نشد."));
 
+      if (uploadTarget.owner === "case") {
+        const selectedCase = selectedCases.find((item) => item.id === uploadTarget.id);
+        setSelectedCases((current) => current.filter((item) => item.id !== uploadTarget.id));
+        emitProcurementUiSync({ source:"workspace-enhancements", noticeId:selectedCase?.notice, dashboard:true });
+      } else {
+        const updated = await stageResponse.json() as DirectOpportunity;
+        setDirectItems((current) => current.map((item) => item.id === updated.id ? updated : item));
+        setDirectDocumentCounts((current) => {
+          const next = { ...current };
+          delete next[uploadTarget.id];
+          return next;
+        });
+        emitProcurementUiSync({ source:"workspace-enhancements", directId:uploadTarget.id, dashboard:true });
+      }
+
       window.alert(`${files.length} فایل ذخیره شد و مورد به «ارسال‌شده» منتقل شد.`);
-      window.location.reload();
+      setUploadTarget(null);
+      setFiles([]);
+      setDescription("");
+      setUploadMessage("");
     } catch (error) {
       setUploadMessage(error instanceof Error ? error.message : "ثبت مدارک و ارسال انجام نشد.");
     } finally {
