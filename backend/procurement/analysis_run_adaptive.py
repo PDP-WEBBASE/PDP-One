@@ -16,6 +16,8 @@ from .models_analysis_runs import ProcurementAnalysisRun, ProcurementAnalysisRun
 
 
 ADMISSION_OVERLAP = timedelta(minutes=10)
+SAFE_CLAIM_LIMIT = 50
+GLOBAL_ACTIVE_CLAIM_CAP = 400
 
 
 def _admission_since(run: ProcurementAnalysisRun):
@@ -118,15 +120,41 @@ def admit_newest_pending_items(run_id: str, *, actor: str = "adaptive-analysis")
     }
 
 
+def _expire_stale_claims(run: ProcurementAnalysisRun, now) -> int:
+    stale = run.items.filter(
+        status=ProcurementAnalysisRunItem.Status.CLAIMED,
+        claim_expires_at__lt=now,
+    )
+    count = stale.count()
+    if count:
+        stale.update(
+            status=ProcurementAnalysisRunItem.Status.RETRY,
+            claim_token=None,
+            claimed_by="",
+            claimed_at=None,
+            claim_expires_at=None,
+            last_error="claim_lease_expired",
+        )
+    return count
+
+
 @transaction.atomic
 def claim_newest_run_items(
     run_id: str,
     *,
     worker_id: str,
-    limit: int = 500,
+    limit: int = SAFE_CLAIM_LIMIT,
     lease_seconds: int = 3600,
 ) -> list[ProcurementAnalysisRunItem]:
-    """Claim the freshest pending notices first while keeping claims atomic."""
+    """Claim the freshest pending notices first with bounded in-flight work.
+
+    ChatGPT scheduled workers can overlap when one execution takes close to an
+    hour. The previous adaptive implementation allowed every overlap to reserve a
+    new large package, which produced thousands of expired leases and RETRY rows.
+    A worker may now own only one active package at a time and the whole run has a
+    bounded active-claim pool. This protects throughput by favoring completed
+    imports over speculative reservations.
+    """
 
     run = ProcurementAnalysisRun.objects.select_for_update().select_related("context_snapshot").get(pk=run_id)
     if run.status == ProcurementAnalysisRun.Status.PAUSED:
@@ -137,18 +165,26 @@ def claim_newest_run_items(
         raise ValueError("Run در وضعیت قابل Claim نیست.")
 
     now = timezone.now()
-    run.items.filter(
-        status=ProcurementAnalysisRunItem.Status.CLAIMED,
-        claim_expires_at__lt=now,
-    ).update(
-        status=ProcurementAnalysisRunItem.Status.RETRY,
-        claim_token=None,
-        claimed_by="",
-        claimed_at=None,
-        claim_expires_at=None,
-        last_error="claim_lease_expired",
-    )
+    worker_key = worker_id[:120]
+    _expire_stale_claims(run, now)
 
+    worker_has_active_claim = run.items.filter(
+        status=ProcurementAnalysisRunItem.Status.CLAIMED,
+        claimed_by=worker_key,
+        claim_expires_at__gte=now,
+    ).exists()
+    if worker_has_active_claim:
+        return []
+
+    active_claims = run.items.filter(
+        status=ProcurementAnalysisRunItem.Status.CLAIMED,
+        claim_expires_at__gte=now,
+    ).count()
+    available_global_slots = max(0, GLOBAL_ACTIVE_CLAIM_CAP - active_claims)
+    if available_global_slots <= 0:
+        return []
+
+    requested_limit = max(1, min(int(limit), SAFE_CLAIM_LIMIT, available_global_slots))
     queryset = (
         run.items.select_related("notice")
         .prefetch_related("notice__source_links__source_notice")
@@ -165,10 +201,10 @@ def claim_newest_run_items(
     else:
         queryset = queryset.select_for_update()
 
-    candidates = list(queryset[: max(1, min(int(limit), 500))])
+    candidates = list(queryset[:requested_limit])
     selected: list[ProcurementAnalysisRunItem] = []
     estimated_payload_chars = 2
-    max_payload_chars = 240_000
+    max_payload_chars = 120_000
     for candidate in candidates:
         estimate = len(
             json.dumps(
@@ -194,7 +230,7 @@ def claim_newest_run_items(
     for item in selected:
         item.new_claim_token()
         item.status = ProcurementAnalysisRunItem.Status.CLAIMED
-        item.claimed_by = worker_id[:120]
+        item.claimed_by = worker_key
         item.claimed_at = now
         item.claim_expires_at = expires
         item.attempts += 1
@@ -211,7 +247,7 @@ def claim_newest_run_items(
                 "attempts",
                 "updated_at",
             ],
-            batch_size=500,
+            batch_size=SAFE_CLAIM_LIMIT,
         )
         run.status = ProcurementAnalysisRun.Status.WAITING_FOR_RESULTS
         run.heartbeat_at = now
