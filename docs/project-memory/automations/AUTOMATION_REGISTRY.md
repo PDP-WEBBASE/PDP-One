@@ -14,6 +14,7 @@ Shared purpose: consume the active procurement analysis run through atomic Claim
 - Backend global active-claim cap remains **400** records.
 - One worker may own only **one in-flight package** at a time.
 - A worker may claim another package **immediately after its prior package imports successfully with no unresolved integrity errors**.
+- A still-active package lease may be safely renewed by the same worker through `renew_procurement_analysis_claim`; expired claims are never resurrected and renewal never claims additional work.
 - Throughput scales by repeated safe package cycles; it must **not** scale by reserving one giant 10k/20k claim.
 - Backend `get_procurement_analysis_run_status.statistics.throughput.policy` is the desired capacity source for each live run.
 - Targets are acceptance goals, not guarantees. Actual imported/hour, completed delta/hour, lease expiry, errors and backlog net delta decide success.
@@ -61,16 +62,17 @@ Every lane execution must:
 7. Analyze every claimed record **semantically** against the active PDP Context. Keywords are context/search guidance only, never deterministic scoring.
 8. Use a semantic fast pass for clear non-fit records while preserving structured reasoning. Recommended, urgent, ambiguous, needs-information or score>=60 records are detailed/deep-analysis candidates.
 9. Preserve run item ID, claim token, Notice ID, Content Hash and Context Hash exactly.
-10. Import the complete package in one `import_procurement_analysis_results(..., dry_run=false)` call.
-11. Take the next package only after the prior Import is successful and has no unresolved rejected/invalid-hash/invalid-context/error items.
-12. Re-read status/policy periodically during long executions and obey lower backpressure/desired-lane values.
-13. Finish with packages, claimed, imported/completed, errors, remaining and effective remaining.
+10. If package processing is long or the lane is approaching Import after substantial work, call `renew_procurement_analysis_claim` for the same run/worker before Import. Renewal must return `renewed_items>0`; if it returns 0, do not import against a possibly expired claim—stop and report the checkpoint.
+11. Import the complete package in one `import_procurement_analysis_results(..., dry_run=false)` call.
+12. Take the next package only after the prior Import is successful and has no unresolved rejected/invalid-hash/invalid-context/error items.
+13. Re-read status/policy periodically during long executions and obey lower backpressure/desired-lane values.
+14. Finish with packages, claimed, imported/completed, errors, remaining and effective remaining.
 
 If ChatGPT execution/runtime limits prevent the theoretical package count, stop only at a clean imported checkpoint; never reserve speculative future packages.
 
 ## Effective backlog rule
 
-The historical active run was created with `include_previously_analyzed=true`. Backend v2 distinguishes raw Remaining from Effective Remaining. An open `explicit_reanalysis` row may be marked `SKIPPED` only when an exact current-content/current-Context valid draft or compact result already exists and human review did not request revision. The Notice, prior result and audit history are preserved.
+The historical active run was created with `include_previously_analyzed=true`. Backend v2 distinguishes raw Remaining from Effective Remaining. An open `explicit_reanalysis` row may be marked `SKIPPED` only when an exact current-content/current-Context valid draft or compact result already exists and human review did not request revision. The Notice, prior result and audit history are preserved. Full reconciliation scans are checkpointed/throttled rather than repeated on every package claim.
 
 ## Shared safety contract
 
@@ -97,7 +99,7 @@ Before changing any live Task:
 3. read actual live Automation(s);
 4. read active analysis run/Context and backend throughput policy;
 5. check active GitHub session/automation locks;
-6. deploy and verify backend support before changing prompts that depend on it;
+6. deploy and verify backend/MCP support before changing prompts that depend on it;
 7. mutate only the governed Lane prompts/schedules needed;
 8. verify live Task state after mutation;
 9. record meaningful throughput/drift evidence, not every routine run payload.
