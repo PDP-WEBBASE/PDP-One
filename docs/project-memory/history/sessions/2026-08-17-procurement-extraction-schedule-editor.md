@@ -64,23 +64,57 @@ No separate open `[PDP SESSION]` Issue was found for that work. The final branch
 
 Concurrency Check: `OVERLAP → RECONCILED / SCOPE RESTORED`.
 
+## Exact-head gates before deployment
+
+Accepted application exact commit: `7973fcb4716f26529c2b24817bd177fd32d48387`.
+
+- PDP One CI run `32056627002` / #733 — **success**.
+  - Windows PowerShell 5.1 compatibility — success.
+  - secret/destructive-volume scan — success.
+  - frontend install/lint/tests — success.
+  - Python syntax/migration verification — success.
+  - signed deployment queue tests — success.
+  - backend tests, including the new automation-settings API coverage — success.
+- Immutable exact images run `32056626975` / #128 — **success** for Backend, MCP and Web.
+- Memory Governance runs `32056626904` / #62 and `32056643176` / #63 — **success** after the required PR Session/Issue/Memory linkage was corrected.
+- PRE-DEPLOY `main` remained `cc5852ac5fa797c98624976881a74764ae13056c`; the only open PDP Session Issue was #77; PR78 remained at exact head `7973fcb...` and mergeable.
+
+## Runtime acceptance
+
+Development-fast exact deployment:
+
+- exact application commit: `7973fcb4716f26529c2b24817bd177fd32d48387`
+- deployment ID: `schedule-editor-7973fcb4-20260817`
+- deployment request: `e68939d4-bacc-48e4-913d-078749a06812`
+- terminal result: **succeeded**
+- deployment report health: **healthy**
+- backup: skipped as expected under `development_fast`
+
+The MCP connection briefly dropped while the service restarted. No duplicate deployment was created; the same exact request was polled after reconnection and returned the terminal success above.
+
+Independent post-deployment short health:
+
+- health request: `e6312dab-86c0-4c46-97eb-c4ef2f0cc888`
+- result: **succeeded / healthy**
+- ChatGPT tool check: `reported-through-connected-app`
+
+Post-acceptance operational checks:
+
+- Deployment Agent: queue available, pending requests `0`, completed responses `289`, arbitrary shell disabled, disk reserve healthy.
+- PDP One: PostgreSQL connected; contracts `10`; receivables `3`.
+- No destructive database operation or migration occurred.
+- Crucially, the live automation schedule remained exactly unchanged after deployment: existing record `864f59ed-26c3-4749-91c8-3faff3ed5c95`, enabled `true`, cadence `hourly`, interval `60` minutes, timezone `Asia/Tehran`, `daily_time=null`. The deployment therefore did not silently apply the 11:00 fallback or alter the user's current schedule.
+
 ## Safety
 
 - No destructive database or Docker volume operation.
-- No database migration is required.
-- Deployment itself must not alter the existing live schedule.
-- No ChatGPT Automation mutation is part of this work.
-- No local application-image build.
+- No database migration.
+- No ChatGPT Automation mutation.
+- No local application-image build; deployment used immutable exact images from CI.
 - No token or credential rotation.
+- No automatic rollback.
 - DEC-041 no-reload behavior remains in force.
 
-## Acceptance status
+## Merge rule
 
-Functional implementation head before memory/governance-only follow-up commits: `6a1646d6f00f913056171760c90f4de04fb88599`.
-
-- Memory Governance initially blocked PR78 because the PR body lacked the required machine-readable Session/Issue/Memory linkage and the code PR had no Project Memory file. This session log and corrected PR metadata resolve that governance defect rather than bypassing the gate.
-- Final exact-head CI / immutable image / Memory Governance: pending after the governance/scoping follow-up commits.
-- Exact runtime deployment/health: pending.
-- Merge: pending.
-
-This file must be updated with exact final CI, deployment request/ID, health evidence, final application commit and merge evidence before Session #77 is closed.
+This final Project Memory update is documentation-only and occurs after accepted exact application deployment/health. It does not require a second application deployment. The final PR head must still pass exact-head CI/Memory Governance as applicable and a PRE-MERGE Delta Sync before PR78 is merged and Issue #77 is closed.
