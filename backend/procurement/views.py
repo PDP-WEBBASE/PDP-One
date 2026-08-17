@@ -1,6 +1,7 @@
-from datetime import datetime, time, timedelta
+from datetime import date, datetime, time, timedelta
 
-from django.db.models import Count, Q
+from django.db.models import Count, DateField, Q, Value
+from django.db.models.functions import Coalesce
 from django.utils import timezone
 from rest_framework import mixins, viewsets
 from rest_framework.decorators import api_view
@@ -22,6 +23,44 @@ from .serializers import (
 )
 
 
+NOTICE_SELECTED_STAGES = [
+    ProcurementCase.Stage.SELECTED,
+    ProcurementCase.Stage.EVALUATING,
+    ProcurementCase.Stage.PARTICIPATE,
+    ProcurementCase.Stage.PREPARING,
+    ProcurementCase.Stage.READY_TO_SUBMIT,
+]
+NOTICE_SUBMITTED_STAGES = [
+    ProcurementCase.Stage.SUBMITTED,
+    ProcurementCase.Stage.AWAITING_RESULT,
+]
+NOTICE_RESULT_STAGES = [
+    ProcurementCase.Stage.WON,
+    ProcurementCase.Stage.LOST,
+    ProcurementCase.Stage.CANCELLED,
+    ProcurementCase.Stage.RENEWED,
+    ProcurementCase.Stage.DO_NOT_PARTICIPATE,
+]
+
+
+def _filter_deadline_urgency(queryset, field_name: str, urgency: str):
+    now = timezone.now()
+    in_24_hours = now + timedelta(hours=24)
+    in_72_hours = now + timedelta(hours=72)
+    in_168_hours = now + timedelta(hours=168)
+    if urgency == "critical":
+        return queryset.filter(**{f"{field_name}__lt": in_24_hours, f"{field_name}__isnull": False})
+    if urgency == "high":
+        return queryset.filter(**{f"{field_name}__gte": in_24_hours, f"{field_name}__lte": in_72_hours})
+    if urgency == "medium":
+        return queryset.filter(**{f"{field_name}__gt": in_72_hours, f"{field_name}__lte": in_168_hours})
+    if urgency == "normal":
+        return queryset.filter(**{f"{field_name}__gt": in_168_hours})
+    if urgency == "unknown":
+        return queryset.filter(**{f"{field_name}__isnull": True})
+    return queryset
+
+
 class ProcurementNoticeViewSet(viewsets.ReadOnlyModelViewSet):
     search_fields = [
         "reference_record__code",
@@ -41,26 +80,69 @@ class ProcurementNoticeViewSet(viewsets.ReadOnlyModelViewSet):
         "is_recommended",
         "province",
         "employer_name",
+        "importance",
     ]
     ordering_fields = [
+        "publication_sort",
         "published_date",
         "submission_deadline",
         "first_seen_at",
         "last_seen_at",
         "created_at",
+        "id",
     ]
-    ordering = ["-last_seen_at"]
+    ordering = ["-publication_sort", "-last_seen_at", "-id"]
 
     def get_queryset(self):
         queryset = (
             ProcurementNotice.objects.filter(soft_deleted_at__isnull=True)
             .select_related("case", "case__responsible", "reference_record")
             .prefetch_related("source_links__source_notice__connector__source")
-            .annotate(source_count=Count("source_links"))
+            .annotate(
+                source_count=Count("source_links", distinct=True),
+                publication_sort=Coalesce(
+                    "published_date",
+                    Value(date(1900, 1, 1)),
+                    output_field=DateField(),
+                ),
+            )
         )
         notice_type = getattr(self, "fixed_notice_type", None)
         if notice_type:
             queryset = queryset.filter(resolved_notice_type=notice_type)
+
+        params = self.request.query_params
+        recent_days = params.get("recent_days", "").strip()
+        if recent_days:
+            try:
+                days = min(max(int(recent_days), 1), 365)
+            except ValueError:
+                days = 0
+            if days:
+                start_date = timezone.localdate() - timedelta(days=days - 1)
+                queryset = queryset.filter(published_date__gte=start_date)
+
+        workflow_view = params.get("workflow_view", "").strip()
+        if workflow_view == "selected":
+            queryset = queryset.filter(case__stage__in=NOTICE_SELECTED_STAGES)
+        elif workflow_view == "submitted":
+            queryset = queryset.filter(case__stage__in=NOTICE_SUBMITTED_STAGES)
+        elif workflow_view == "results":
+            queryset = queryset.filter(case__stage__in=NOTICE_RESULT_STAGES)
+        elif workflow_view == "active":
+            queryset = queryset.filter(case__stage__in=NOTICE_SELECTED_STAGES + NOTICE_SUBMITTED_STAGES)
+
+        source_name = params.get("source_name", "").strip()
+        if source_name:
+            queryset = queryset.filter(
+                source_links__source_notice__connector__source__name=source_name
+            )
+
+        queryset = _filter_deadline_urgency(
+            queryset,
+            "submission_deadline",
+            params.get("urgency", "").strip(),
+        )
         return queryset
 
     def get_serializer_class(self):
