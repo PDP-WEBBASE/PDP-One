@@ -1,0 +1,27 @@
+# PDP One — Glossary
+
+- **AI Draft** — analysis/report/record produced by AI that still requires human review/approval according to domain policy.
+- **Automation Drift** — difference between GitHub desired Automation spec and actual live ChatGPT Task configuration.
+- **Canonical Memory** — GitHub project-memory documents that preserve active/superseded decisions, history, provenance and current cached state.
+- **Claim** — atomic reservation of analysis run items for a worker/lane.
+- **Claim Token** — integrity identity proving the importing worker owns the leased analysis item.
+- **Context** — versioned PDP company/prompt/qualification/keyword/experience snapshot used by AI analysis.
+- **Current State** — timestamped cached view; must be refreshed from live sources before sensitive action.
+- **Development-fast** — Branch → CI → immutable exact images → exact-commit deploy → health → merge.
+- **Direct Opportunity** — direct-referral/business opportunity workflow distinct from Tender/Inquiry Notice recommendation list.
+- **Exact deployed commit** — source commit actually used for running immutable application images; distinct from merge SHA.
+- **Historical Snapshot** — evidence of system state at a particular timestamp; not a live truth source.
+- **Human Selected** — company/user decision to pursue an opportunity; distinct from AI Recommended.
+- **Lease** — time-bound ownership of claimed analysis work.
+- **Live Source** — authoritative current system such as GitHub, PDP One Runtime or ChatGPT Automations.
+- **Notice** — canonical procurement Tender/Inquiry record.
+- **PDPONE START** — sole operational mutation activation phrase for a new PDP One chat request.
+- **PDPONE STATUS** — read-only context/status sync command.
+- **PDPONE END** — session finalization/memory-sync command.
+- **Recommended** — current effective AI recommendation; advisory rather than final human decision.
+- **Run** — persistent procurement analysis workload/checkpoint container.
+- **Session Issue** — GitHub coordination record for one activated PDP operational chat/workstream.
+- **Soft Lock** — declared session scope used to prevent uncoordinated overlap; governance lock, not a filesystem mutex.
+- **Source Artifact** — original evidence file/report/snapshot.
+- **Superseded** — historically valid decision/state replaced by a newer active one without deleting history.
+- **Transfer v10** — `PDPOne-Transfer-Package-v10.0-2026-07-31`, immutable historical package used for memory backfill.
