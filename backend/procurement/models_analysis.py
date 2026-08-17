@@ -258,4 +258,8 @@ class NoticeAnalysisDraft(TimestampedModel):
         indexes = [
             models.Index(fields=["is_recommended", "priority"], name="proc_ana_rec_prio_idx"),
             models.Index(fields=["review_status", "analyzed_at"], name="proc_ana_review_idx"),
+            models.Index(
+                fields=["notice", "-analyzed_at", "-created_at", "-id"],
+                name="proc_ana_notice_latest_idx",
+            ),
         ]
