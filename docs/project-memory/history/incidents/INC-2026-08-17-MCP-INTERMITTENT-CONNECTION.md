@@ -4,7 +4,7 @@
 - Session: `PDP-SESSION-20260817-MCP-STABILITY`
 - Issue: #61
 - PR: #66
-- Status: **Mitigation implementation in progress — first runtime acceptance failed**
+- Status: **Mitigation implementation in progress — two runtime acceptances failed**
 
 ## Symptom reproduced
 
@@ -14,45 +14,21 @@ During read-only diagnosis, PDP One MCP connectivity alternated between success 
 2. an immediately following read failed with `mcp_network_error / Connection failed`;
 3. a subsequent read succeeded again.
 
-At the reproduced failure:
+At reproduced failures, PostgreSQL/web/API and the signed deployment queue were healthy in surrounding checks. The incident is therefore an intermittent ChatGPT-facing MCP/public-route failure rather than a persistent database/backend outage.
 
-- Deployment Agent pending requests: 0;
-- signed deployment queue: available;
-- PostgreSQL: reachable;
-- PDP One web/API: reachable in surrounding checks.
+## Original architecture gaps
 
-Therefore the incident is an intermittent MCP/public-route connectivity failure rather than a persistent database/backend outage or a normal deployment restart.
+- MCP watchdog treated container state/restart count as sufficient health.
+- Stable Startup checked public web/API but not token-bound MCP.
+- public-route repair could amplify transient external failures into nginx/Tailscale recreation.
+- Nginx Streamable HTTP timeout was 300 seconds.
+- MCP SDK dependency was not exact-pinned.
 
-## Root-cause architecture gap
+Historical PR45/PR46 contain useful incident lineage but are obsolete baselines and are not directly merged.
 
-The original health model could report the system as healthy while ChatGPT could not reach MCP:
+## First mitigation and runtime acceptance — FAILED
 
-- MCP watchdog checked container state/restart count, not the MCP HTTP endpoint;
-- Stable Startup checked public web/API but not MCP;
-- public-route repair checked public web/API but not the token-bound MCP route;
-- Nginx Streamable HTTP timeout was 300 seconds;
-- healthy-container route failure and unhealthy-container failure were not differentiated strongly enough.
-
-The first mitigation closed those observability/self-heal gaps, but production acceptance proved that service health alone was not sufficient: the ChatGPT-facing Streamable HTTP request path still reproduced one transient connection failure after multiple successful calls.
-
-## Historical relation
-
-Historical PR45 recorded an earlier, different MCP incident: a restart loop caused by a missing Python module in the MCP image. Historical PR46 addressed deployment/startup/disk coordination races. Their useful safety lessons are preserved, but neither stale branch is directly merged into the 2026-08-17 baseline.
-
-## First mitigation and deployment
-
-PR66 first implemented:
-
-- explicit MCP `/healthz` service route;
-- Docker MCP healthcheck;
-- nginx waits for MCP `service_healthy`;
-- token-bound local/public MCP health path;
-- 3600-second Streamable HTTP read/send timeout and buffering/cache disabled;
-- Stable Startup validates local/public MCP health;
-- public route failure is rechecked before disruptive recreate;
-- watchdog uses Docker health + route health and prefers route repair before recreating a healthy MCP container;
-- stable MCP SDK v1 exact pin `mcp==1.28.1`;
-- regression contract tests.
+PR66 first added end-to-end MCP `/healthz`, Docker health, token-bound local/public health, 3600-second Streamable HTTP proxy timeouts with buffering/cache disabled, Startup/public checks, route-first self-heal, exact `mcp==1.28.1`, and regression tests.
 
 Exact first deployment:
 
@@ -61,41 +37,64 @@ Exact first deployment:
 - deployment request: `b1f0d773-0c1c-4d9d-b177-dae91ed59ad8`
 - independent health request: `73037eb8-553f-4aac-b190-75b111c64df4`
 - deployment result: healthy
-- independent layered health: healthy
-- business baseline after deploy: PostgreSQL connected, contracts 10, receivables 3
+- independent health: healthy
+- business baseline: PostgreSQL connected, contracts 10, receivables 3
 
-## First live acceptance result — FAILED
+After several successful real MCP calls, a connected `get_system_status` call again failed with `mcp_network_error / Connection failed`, followed by a successful call. PR66 was correctly left unmerged.
 
-After the first deployment, several real connected MCP reads succeeded, including system/deployment status reads. A later real `get_system_status` call reproduced `mcp_network_error / Connection failed`. The immediately following governed MCP read succeeded again.
+## Second mitigation — stateful JSON POST responses
 
-This proves:
+The pinned FastMCP v1.28.1 implementation creates its Streamable HTTP session manager lazily and supports `json_response`/`stateless_http` settings. PR66 therefore configured:
 
-- the incident is not resolved;
-- the failure remains intermittent rather than a persistent MCP/container/database outage;
-- PR66 must not be merged or the incident closed based only on Docker/local/public `/healthz` checks;
-- real ChatGPT tool traffic remains a mandatory acceptance gate.
+- `mcp.settings.json_response = True` before `mcp.run()` so POST tool responses are short-lived JSON instead of request-scoped SSE response streams;
+- `mcp.settings.stateless_http = False` so the guarded stateful session model remains enabled.
 
-## Second mitigation — stateful JSON responses
+Exact second deployment:
 
-The pinned `mcp==1.28.1` FastMCP implementation supports both `json_response` and `stateless_http` settings, and creates its Streamable HTTP session manager lazily. PR66 therefore now configures:
+- commit: `f364f0564379a3cd3c16c07e6d0f3a925f881c0b`
+- deployment: `mcp-stability-json-f364f056-20260817`
+- deployment request: `2dcba6e7-3371-48ec-b1cf-12ef1e2d8f23`
+- deployment result: healthy
+- independent health request: `2717cbf7-3d9a-4e8d-9597-3d860b011148`
+- independent health result: healthy
 
-- `mcp.settings.json_response = True` before `mcp.run()` so each POST returns a short-lived JSON response instead of a request-scoped SSE response stream;
-- `mcp.settings.stateless_http = False` so the existing stateful session model is retained.
+During the independent health window, the Connected MCP route became unavailable for several minutes and then recovered while the layered health request itself completed successfully. `Test-PDPOne.ps1` does not recreate services/routes, so the drop was not caused by that health command. This second acceptance also failed and PR66 remained unmerged.
 
-This is intentionally narrower than migrating to MCP v2 or rewriting the service on the low-level server API. Stateless v1 mode is not enabled as part of this incident fix.
+## Third mitigation — prevent self-heal from amplifying public-only transients
+
+Source audit identified a high-risk feedback loop in the scheduled self-heal architecture:
+
+- `PDP One MCP Self Heal` runs every five minutes;
+- when Docker + local token-bound MCP are healthy, the watchdog still probes the public MCP route;
+- two failed public observations could send a healthy local installation into `Repair-PDPOneConnectivity.ps1`;
+- that repair path could recreate nginx/Tailscale, turning a short external probe miss into a multi-minute ChatGPT disconnect.
+
+PR66 now changes the policy:
+
+1. The five-minute MCP watchdog treats a confirmed **public-only** MCP failure as observational degradation. If Docker health and local token-bound MCP are healthy, it writes `healthy_local_public_degraded_observed` and exits without route/container recreation.
+2. Public connectivity repair now requires three observations before disruptive action.
+3. If public web + session API are healthy and only the public MCP probe is degraded, the existing Funnel route is preserved and the result is returned as `public_mcp_health=degraded`.
+4. nginx/Tailscale recreation remains available only for repeatedly confirmed full public web/API route failure, or for local route/service failures where repair is actually warranted.
+5. Stable Startup accepts the non-disruptive MCP-only degraded observation as a warning while keeping local MCP, web/API, data and token continuity healthy.
+6. No token rotation, local image build, Docker volume operation, DB mutation, or Tailscale identity reset is introduced.
+
+## Concurrency coordination
+
+A second active Session #68 / PR67 began while PR66 was in acceptance. PR66 and PR67 have no changed-file overlap but share the same old base, so exact deployments could overwrite each other's runtime changes. Session #68 was explicitly instructed to hold PR67 deployment until PR66 completes/merges; PR67 must then refresh onto the new main and rerun its gates before deployment.
 
 ## Acceptance still required
 
 Before closing this incident:
 
-- final-head CI success;
-- immutable image build success;
-- second exact-commit deployment;
-- independent health;
-- extended repeated real ChatGPT MCP calls over multiple minutes with no reproduced network failure;
-- unchanged business-data safety checks;
-- PRE-MERGE concurrency/context sync;
-- merge exact accepted PR head;
+- third-mitigation exact-head CI + Windows PowerShell 5.1 success;
+- immutable Backend/MCP/Web images success;
+- PRE-DEPLOY concurrency sync;
+- third exact-commit deployment;
+- independent layered health;
+- extended repeated **real Connected MCP calls across multiple watchdog periods** with zero `mcp_network_error`;
+- contracts remain 10 and receivables remain 3;
+- PRE-MERGE sync;
+- merge only the accepted exact PR head;
 - final Project Memory/session synchronization.
 
 ## Safety
