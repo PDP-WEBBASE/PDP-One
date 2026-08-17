@@ -110,11 +110,11 @@ try {
 
     $localMcpHealthUrl = "http://127.0.0.1:8080/mcp/$mcpPathToken/healthz"
     if (-not (Wait-PDPOneUrl -Url $localMcpHealthUrl -TimeoutSeconds 30)) {
-        Write-Host "The local web/API path is healthy but the token-bound MCP route is not. Recreating nginx and Tailscale once ..." -ForegroundColor Yellow
-        & docker compose --profile tunnel up --detach --no-build --pull never --force-recreate nginx tailscale
-        if ($LASTEXITCODE -ne 0) { throw "The nginx/Tailscale MCP-route repair could not be started." }
+        Write-Host "The local web/API path is healthy but the token-bound MCP route is not. Running the MCP self-heal path ..." -ForegroundColor Yellow
+        & powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "Ensure-PDPOneMcpHealthy.ps1") -ProjectRoot $ProjectRoot
+        if ($LASTEXITCODE -ne 0) { throw "The MCP self-heal path could not restore service/route health." }
         if (-not (Wait-PDPOneUrl -Url $localMcpHealthUrl -TimeoutSeconds 60)) {
-            throw "PDP One local token-bound MCP health route did not become ready after route repair."
+            throw "PDP One local token-bound MCP health route did not become ready after MCP self-heal."
         }
     }
     $report.local_mcp_health = "healthy"
