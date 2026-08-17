@@ -28,14 +28,35 @@ server {
         proxy_set_header X-Forwarded-Proto $http_x_forwarded_proto;
     }
 
+    # Token-bound health route: verifies Tailscale/Nginx token rendering and
+    # Nginx -> MCP reachability without creating an MCP protocol session.
+    location = /mcp/${PDP_MCP_PATH_TOKEN}/healthz {
+        access_log off;
+        proxy_pass http://$pdp_mcp_upstream/healthz;
+        proxy_http_version 1.1;
+        proxy_connect_timeout 5s;
+        proxy_send_timeout 10s;
+        proxy_read_timeout 10s;
+        proxy_buffering off;
+        proxy_request_buffering off;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $http_x_forwarded_proto;
+    }
+
     # Trial-only capability URL. The random path is generated locally and is
     # never committed. Closing the temporary tunnel revokes external access.
     location = /mcp/${PDP_MCP_PATH_TOKEN} {
         proxy_pass http://$pdp_mcp_upstream/mcp;
         proxy_http_version 1.1;
         proxy_buffering off;
+        proxy_request_buffering off;
+        proxy_cache off;
         proxy_connect_timeout 5s;
-        proxy_read_timeout 300s;
+        # Streamable HTTP may keep a response stream open for a long time.
+        # Do not terminate a healthy idle stream at the previous 300s boundary.
+        proxy_send_timeout 3600s;
+        proxy_read_timeout 3600s;
         proxy_set_header Host $host;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $http_x_forwarded_proto;

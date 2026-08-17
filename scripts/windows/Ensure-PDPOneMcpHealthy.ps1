@@ -9,6 +9,7 @@ param(
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
 Set-StrictMode -Version Latest
+. (Join-Path $PSScriptRoot "PDPOne.Common.ps1")
 . (Join-Path $PSScriptRoot "PDPOne.OperationLock.ps1")
 
 function Get-InstallationRoot {
@@ -34,18 +35,39 @@ function Test-DockerReady {
 
 function Get-McpState {
     $containerId = (& docker compose ps -q mcp 2>$null | Out-String).Trim()
-    if (-not $containerId) { return [pscustomobject]@{ Id = ""; Status = "missing"; RestartCount = 0 } }
+    if (-not $containerId) {
+        return [pscustomobject]@{ Id = ""; Status = "missing"; RestartCount = 0; Health = "missing" }
+    }
     $status = (& docker inspect --format "{{.State.Status}}" $containerId 2>$null | Out-String).Trim()
+    $health = (& docker inspect --format "{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}" $containerId 2>$null | Out-String).Trim()
     $restartCountText = (& docker inspect --format "{{.RestartCount}}" $containerId 2>$null | Out-String).Trim()
     $restartCount = 0
     [void][int]::TryParse($restartCountText, [ref]$restartCount)
-    return [pscustomobject]@{ Id = $containerId; Status = $status; RestartCount = $restartCount }
+    return [pscustomobject]@{ Id = $containerId; Status = $status; RestartCount = $restartCount; Health = $health }
 }
 
 function Write-McpReport {
     param([string]$Root, $Report)
     $reportPath = Join-Path $Root "PDP-ONE-MCP-SELF-HEAL-REPORT.json"
     $Report | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $reportPath -Encoding UTF8
+}
+
+function Test-LocalMcpRoute {
+    param([string]$Url)
+    try {
+        $response = Invoke-WebRequest -UseBasicParsing -Uri $Url -TimeoutSec 8
+        $body = ConvertTo-PDPOneResponseText $response.Content
+        return $response.StatusCode -eq 200 -and $body -match 'pdp-one-mcp'
+    } catch {
+        return $false
+    }
+}
+
+function Test-PublicMcpRoute {
+    param([string]$EnvPath, [string]$PathToken)
+    $publicBaseUrl = Get-PDPOneEnvValue -Path $EnvPath -Name "PDP_PUBLIC_BASE_URL"
+    if ([string]::IsNullOrWhiteSpace($publicBaseUrl)) { return $null }
+    return Test-PDPOnePublicHealth -Url "$($publicBaseUrl.TrimEnd('/'))/mcp/$PathToken/healthz" -ExpectedPattern "pdp-one-mcp" -TimeoutSeconds 20
 }
 
 $root = Get-InstallationRoot -RequestedRoot $ProjectRoot
@@ -69,21 +91,39 @@ if ($deploymentOperation.Active) {
 
 if (-not (Test-DockerReady)) { exit 0 }
 Set-Location $root
+$envPath = Assert-PDPOneConfiguration -ProjectRoot $root
+$mcpPathToken = Get-PDPOneEnvValue -Path $envPath -Name "PDP_MCP_PATH_TOKEN"
+$localMcpHealthUrl = "http://127.0.0.1:8080/mcp/$mcpPathToken/healthz"
+$confirmedPublicFailure = $false
 
 $state = Get-McpState
-if ($state.Status -eq "running") {
+if ($state.Status -eq "running" -and $state.Health -eq "healthy") {
     Start-Sleep -Seconds ([Math]::Max(3, $StableSeconds))
     $second = Get-McpState
-    if ($second.Status -eq "running" -and $second.RestartCount -eq $state.RestartCount) { exit 0 }
+    if ($second.Status -eq "running" -and $second.Health -eq "healthy" -and $second.RestartCount -eq $state.RestartCount) {
+        if (Test-LocalMcpRoute -Url $localMcpHealthUrl) {
+            $publicProbe = Test-PublicMcpRoute -EnvPath $envPath -PathToken $mcpPathToken
+            if ($null -eq $publicProbe -or $publicProbe.Success) { exit 0 }
+            Start-Sleep -Seconds 10
+            $publicProbe = Test-PublicMcpRoute -EnvPath $envPath -PathToken $mcpPathToken
+            if ($null -ne $publicProbe -and $publicProbe.Success) { exit 0 }
+            $confirmedPublicFailure = $true
+        }
+    }
 }
 
 $report = [ordered]@{
     operation = "mcp-self-heal"
     started_at = [DateTime]::UtcNow.ToString("o")
     initial_status = $state.Status
+    initial_health = $state.Health
     initial_restart_count = $state.RestartCount
     deployment_in_progress = $false
     import_check = "pending"
+    local_route_health = "failed"
+    public_route_health = $(if ($confirmedPublicFailure) { "degraded_observed" } else { "not_checked" })
+    route_repair_performed = $false
+    container_recreated = $false
     final_status = "failed"
     completed_at = $null
     local_image_build_performed = $false
@@ -96,20 +136,64 @@ try {
     & docker compose config --quiet
     if ($LASTEXITCODE -ne 0) { throw "Docker Compose configuration is invalid." }
 
+    # The frequent five-minute watchdog must never turn a public-only transient
+    # into a disruptive outage. If Docker + local token-bound MCP are healthy,
+    # observe a confirmed public failure and leave the stable route untouched.
+    # Stable Startup / explicit connectivity repair owns public-route recovery.
+    if ($state.Status -eq "running" -and $state.Health -eq "healthy" -and $confirmedPublicFailure -and (Test-LocalMcpRoute -Url $localMcpHealthUrl)) {
+        $report.import_check = "not_required_container_healthy"
+        $report.local_route_health = "healthy"
+        $report.public_route_health = "degraded_observed"
+        $report.final_status = "healthy_local_public_degraded_observed"
+        $report.completed_at = [DateTime]::UtcNow.ToString("o")
+        Write-McpReport -Root $root -Report $report
+        exit 0
+    }
+
+    # If the process/container itself is healthy but the LOCAL route is broken,
+    # route repair is appropriate. Do not recreate a healthy MCP container.
+    if ($state.Status -eq "running" -and $state.Health -eq "healthy") {
+        $report.import_check = "not_required_container_healthy"
+        $report.route_repair_performed = $true
+        $connectivity = & (Join-Path $PSScriptRoot "Repair-PDPOneConnectivity.ps1") -ProjectRoot $root -RepairAttempts 2
+        if ($null -ne $connectivity -and [string]$connectivity.status -eq "succeeded" -and (Test-LocalMcpRoute -Url $localMcpHealthUrl)) {
+            $report.local_route_health = "healthy"
+            $report.public_route_health = [string]$connectivity.public_mcp_health
+            $report.final_status = "healthy_after_route_repair"
+            $report.completed_at = [DateTime]::UtcNow.ToString("o")
+            Write-McpReport -Root $root -Report $report
+            exit 0
+        }
+        throw "MCP container is healthy but the token-bound MCP route remains unavailable after route repair."
+    }
+
     & docker compose run --rm --no-deps --no-build --pull never --entrypoint python mcp -c "import server_procurement"
     if ($LASTEXITCODE -ne 0) { throw "Existing MCP image import verification failed." }
     $report.import_check = "passed"
 
     & docker compose --profile tunnel up --detach --no-deps --no-build --pull never --force-recreate mcp
     if ($LASTEXITCODE -ne 0) { throw "MCP container recreation failed." }
+    $report.container_recreated = $true
 
     $deadline = (Get-Date).AddMinutes(2)
     do {
         $current = Get-McpState
-        if ($current.Status -eq "running") {
+        if ($current.Status -eq "running" -and $current.Health -eq "healthy") {
             Start-Sleep -Seconds ([Math]::Max(5, $StableSeconds))
             $confirmed = Get-McpState
-            if ($confirmed.Status -eq "running" -and $confirmed.RestartCount -eq $current.RestartCount) {
+            if ($confirmed.Status -eq "running" -and $confirmed.Health -eq "healthy" -and $confirmed.RestartCount -eq $current.RestartCount) {
+                if (-not (Test-LocalMcpRoute -Url $localMcpHealthUrl)) {
+                    $report.route_repair_performed = $true
+                    $connectivity = & (Join-Path $PSScriptRoot "Repair-PDPOneConnectivity.ps1") -ProjectRoot $root -RepairAttempts 2
+                    if ($null -eq $connectivity -or [string]$connectivity.status -ne "succeeded") {
+                        throw "MCP container recovered but the token-bound route could not be repaired."
+                    }
+                    $report.public_route_health = [string]$connectivity.public_mcp_health
+                }
+                if (-not (Test-LocalMcpRoute -Url $localMcpHealthUrl)) {
+                    throw "MCP container is healthy but its local token-bound route is still unavailable."
+                }
+                $report.local_route_health = "healthy"
                 $report.final_status = "healthy"
                 $report.completed_at = [DateTime]::UtcNow.ToString("o")
                 Write-McpReport -Root $root -Report $report
@@ -119,10 +203,10 @@ try {
         Start-Sleep -Seconds 3
     } while ((Get-Date) -lt $deadline)
 
-    throw "MCP container did not remain running."
+    throw "MCP container did not become Docker-healthy and stable."
 } catch {
     $report.completed_at = [DateTime]::UtcNow.ToString("o")
-    $report.error = $_.Exception.Message
+    $report.error = ConvertTo-PDPOneRedactedText $_.Exception.Message
     Write-McpReport -Root $root -Report $report
     exit 1
 }
