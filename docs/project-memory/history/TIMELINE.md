@@ -165,3 +165,15 @@ This timeline preserves historical evolution. A later event may supersede an ear
 - Branch: `docs/project-memory-bootstrap-20260817`.
 - Scope: project-memory/governance/docs/automation specification only; no DB/runtime mutation.
 - Canonical memory creation started.
+
+## 2026-08-17 — MCP end-to-end stability incident resolved (Session #61 / PR66)
+
+- Intermittent real Connected MCP failures were reproduced while web/API/PostgreSQL remained healthy.
+- PR66 introduced service/Docker/token-bound MCP health, Streamable HTTP proxy hardening, exact `mcp==1.28.1`, stateful JSON POST responses, and non-disruptive handling of public-only MCP degradation.
+- First accepted-health deployment `cf99960c...` still reproduced the intermittent error; runtime acceptance failed and merge was withheld.
+- Second deployment `f364f056...` (request `2dcba6e7-3371-48ec-b1cf-12ef1e2d8f23`) was healthy but a multi-minute Connected MCP outage occurred; acceptance failed and merge remained blocked.
+- Third exact deployed head `ee4095e2d9afca030e4bda4eff9608d6a1e8138b`, deployment `mcp-stability-hysteresis-ee4095e2-20260817`, request `a05290f2-a168-483d-a26c-7781eff977b7`, succeeded/healthy; independent health `457e3555-3fab-44f3-8c8f-f29e4362f084` succeeded/healthy.
+- Final acceptance crossed >11 minutes and more than two five-minute watchdog periods, with recorded 8/8 plus 6/6 additional Connected MCP reads and no reproduced network error outside deployment restart.
+- PostgreSQL remained connected; contracts=10 and receivables=3 remained unchanged; deployment queue remained pending=0.
+- PR66 merged as `7cc0c025cec69dbe161acb56cedf832f63867c38`; the exact deployed application remains the accepted PR head `ee4095e2...`, not the merge SHA.
+- Permanent evidence: `history/incidents/INC-2026-08-17-MCP-INTERMITTENT-CONNECTION.md` and `history/sessions/2026-08-17-mcp-end-to-end-stability.md`.
