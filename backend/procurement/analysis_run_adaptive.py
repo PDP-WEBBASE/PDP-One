@@ -23,6 +23,7 @@ from .models_analysis_runs import ProcurementAnalysisRun, ProcurementAnalysisRun
 
 
 ADMISSION_OVERLAP = timedelta(minutes=10)
+REANALYSIS_RECONCILE_INTERVAL = timedelta(minutes=10)
 SAFE_CLAIM_LIMIT = 50
 GLOBAL_ACTIVE_CLAIM_CAP = 400
 
@@ -32,6 +33,27 @@ def _admission_since(run: ProcurementAnalysisRun):
     parsed = parse_datetime(raw) if raw else None
     base = parsed or run.started_at or run.created_at
     return base - ADMISSION_OVERLAP
+
+
+def _should_reconcile_reanalysis(run: ProcurementAnalysisRun, now) -> bool:
+    raw = str((run.metadata or {}).get("last_reanalysis_reconciliation_at") or "")
+    parsed = parse_datetime(raw) if raw else None
+    return parsed is None or parsed <= now - REANALYSIS_RECONCILE_INTERVAL
+
+
+def _maybe_reconcile_reanalysis(run: ProcurementAnalysisRun, now) -> int:
+    """Scan exact-valid reanalysis at a bounded cadence, not on every package."""
+
+    if not _should_reconcile_reanalysis(run, now):
+        return 0
+    reconciled = reconcile_redundant_reanalysis(run, actor="adaptive-analysis")
+    run.metadata = {
+        **(run.metadata or {}),
+        "last_reanalysis_reconciliation_at": now.isoformat(),
+        "last_reanalysis_reconciliation_skipped": reconciled,
+    }
+    run.save(update_fields=["metadata", "updated_at"])
+    return reconciled
 
 
 @transaction.atomic
@@ -183,10 +205,7 @@ def claim_newest_run_items(
             payload={"count": expired, "worker": worker_key},
         )
 
-    reconciled = reconcile_redundant_reanalysis(
-        run,
-        actor="adaptive-analysis",
-    )
+    reconciled = _maybe_reconcile_reanalysis(run, now)
     if reconciled:
         run = finalize_run_if_exhausted(run, actor="adaptive-analysis")
         if run.status in {
