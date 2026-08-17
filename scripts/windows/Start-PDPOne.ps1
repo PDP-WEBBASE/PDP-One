@@ -29,10 +29,13 @@ $report = [ordered]@{
     rancher_policy_report = $null
     local_health = "pending"
     local_api_health = "pending"
+    local_mcp_health = "pending"
     public_health = "pending"
     public_api_health = "pending"
+    public_mcp_health = "pending"
     public_health_method = $null
     public_api_health_method = $null
+    public_mcp_health_method = $null
     local_dns_degraded = $false
     token_continuity = "pending"
     diagnostics = $null
@@ -75,11 +78,12 @@ try {
     Start-PDPOneRancherDesktop -TimeoutSeconds $DockerTimeoutSeconds
     $report.docker = "ready"
 
-    $null = Assert-PDPOneConfiguration -ProjectRoot $ProjectRoot
+    $envPath = Assert-PDPOneConfiguration -ProjectRoot $ProjectRoot
     if (-not (Test-PDPOneTokenContinuity -ProjectRoot $ProjectRoot)) {
         throw "The MCP path token changed outside the approved rotation workflow. Startup was stopped."
     }
     $report.token_continuity = "verified"
+    $mcpPathToken = Get-PDPOneEnvValue -Path $envPath -Name "PDP_MCP_PATH_TOKEN"
 
     & docker compose config --quiet
     if ($LASTEXITCODE -ne 0) { throw "Docker Compose configuration is invalid." }
@@ -104,19 +108,30 @@ try {
     }
     $report.local_api_health = "healthy"
 
-    if ($OpenLocalPage) {
-        Start-Process "http://localhost:8080" | Out-Null
+    $localMcpHealthUrl = "http://127.0.0.1:8080/mcp/$mcpPathToken/healthz"
+    if (-not (Wait-PDPOneUrl -Url $localMcpHealthUrl -TimeoutSeconds 30)) {
+        Write-Host "The local web/API path is healthy but the token-bound MCP route is not. Recreating nginx and Tailscale once ..." -ForegroundColor Yellow
+        & docker compose --profile tunnel up --detach --no-build --pull never --force-recreate nginx tailscale
+        if ($LASTEXITCODE -ne 0) { throw "The nginx/Tailscale MCP-route repair could not be started." }
+        if (-not (Wait-PDPOneUrl -Url $localMcpHealthUrl -TimeoutSeconds 60)) {
+            throw "PDP One local token-bound MCP health route did not become ready after route repair."
+        }
     }
+    $report.local_mcp_health = "healthy"
+
+    if ($OpenLocalPage) { Start-Process "http://localhost:8080" | Out-Null }
 
     $repairAttempts = $(if ($ForceTunnelRepair) { 3 } else { 2 })
     $connectivity = & (Join-Path $PSScriptRoot "Repair-PDPOneConnectivity.ps1") -ProjectRoot $ProjectRoot -RepairAttempts $repairAttempts
     if ($null -eq $connectivity -or [string]$connectivity.status -ne "succeeded") {
-        throw "The local application is healthy, but the stable public Tailscale route and API could not be verified."
+        throw "The local application is healthy, but the stable public Tailscale web/API/MCP routes could not be verified."
     }
     $report.public_health = "healthy"
     $report.public_api_health = "healthy"
+    $report.public_mcp_health = "healthy"
     $report.public_health_method = [string]$connectivity.public_health_method
     $report.public_api_health_method = [string]$connectivity.public_api_health_method
+    $report.public_mcp_health_method = [string]$connectivity.public_mcp_health_method
     $report.local_dns_degraded = [bool]$connectivity.local_dns_degraded
 
     & powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "Test-PDPOne.ps1") -SkipChatGPTToolCheck
@@ -127,10 +142,8 @@ try {
     $reportDir = Join-Path $ProjectRoot "work\reports"
     Write-PDPOneJsonFile -Path (Join-Path $reportDir "startup-latest.json") -Value $report
     Write-PDPOneJsonFile -Path (Join-Path $ProjectRoot "PDP-ONE-LAST-STARTUP-REPORT.json") -Value $report
-    Write-Host "PDP One web shell, session API, public route, data and Docker volumes are healthy. Kubernetes is disabled." -ForegroundColor Green
-    if ($report.disk_guard_warning) {
-        Write-Host "Disk cleanup reported a warning, but startup was allowed to continue." -ForegroundColor Yellow
-    }
+    Write-Host "PDP One web shell, session API, token-bound MCP route, data and Docker volumes are healthy. Kubernetes is disabled." -ForegroundColor Green
+    if ($report.disk_guard_warning) { Write-Host "Disk cleanup reported a warning, but startup was allowed to continue." -ForegroundColor Yellow }
     if ($report.local_dns_degraded) {
         Write-Host "The public route is healthy through public IPv4 resolution. The local browser was opened on localhost so Windows DNS settings do not need to change." -ForegroundColor Yellow
     }
