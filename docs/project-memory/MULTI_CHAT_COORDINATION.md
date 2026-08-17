@@ -1,12 +1,20 @@
 # PDP One — Multi-Chat Coordination
 
-PDP One may be changed by more than one ChatGPT conversation at the same time. GitHub is the shared coordination plane.
+PDP One may be changed by more than one ChatGPT Conversation at the same time. GitHub is the shared coordination plane.
 
-## Session lifecycle
+## Conversation activation versus Work Session
 
-An operational chat begins only after the user activates `PDPONE START`.
+A new ChatGPT Conversation enters PDP One mutation mode only after its first `PDPONE START`.
 
-After Context Sync and before its first project write, create a GitHub Session Issue with:
+After successful START Context Sync, that **Conversation remains activated** for later PDP One requests without repeating the keyword. This activation persists across multiple sequential GitHub Work Sessions in the same Conversation.
+
+A **Work Session** is a scoped GitHub Issue/branch/PR workstream. It is not the same thing as Conversation activation.
+
+`PDPONE END` explicitly deactivates the Conversation after applicable memory/session closure. Closing one Work Session alone does not deactivate it.
+
+## Work Session lifecycle
+
+After activation and before the first write of each new material workstream, create a GitHub Session Issue with:
 
 - Session ID
 - start time
@@ -25,7 +33,7 @@ After Context Sync and before its first project write, create a GitHub Session I
 - blockers/conflicts
 - next action
 
-Issue #59 is the first bootstrap example of this protocol.
+If dedicated labels are unavailable, open Issues whose titles start with `[PDP SESSION]` are the mandatory discovery fallback.
 
 ## Soft lock
 
@@ -42,36 +50,64 @@ lock_scope:
 
 It is a governance lock rather than an OS/Git lock. Other sessions must inspect it before writing.
 
-## Mandatory context checkpoints
+## Initial START versus later checkpoints
 
-### START
-Before designing/implementing:
-- read canonical memory
-- read `main`
-- read active session issues
-- read open PRs
-- refresh relevant runtime/automation state
+### Initial START — once per Conversation
+Before the first PDP One mutation work in that Conversation:
+- read compact canonical Tier-0/Tier-1 memory;
+- read current `main`;
+- read active Session Issues;
+- read relevant open PRs;
+- refresh only relevant Runtime/Automation state;
+- establish the Conversation baseline.
 
-### PRE-WRITE
-Immediately before significant code/config/schema/automation change:
-- refresh `main`
-- refresh active work
-- ensure scope remains clear
+Do not load raw historical archives by default.
 
-### PRE-DEPLOY
-Before any deploy:
-- refresh `main`
-- compare branch base/head
-- inspect concurrent deployment work
-- verify exact commit/images/agent state
-- stop on unresolved deployment overlap
+### PRE-WRITE / PRE-DEPLOY / PRE-MERGE
+After activation, these are **Delta Sync checkpoints**. Follow `coordination/DELTA_SYNC_PROTOCOL.md`.
 
-### PRE-MERGE
-Immediately before merge:
-- refresh `main`
-- inspect all active sessions and PRs
-- verify deployment/health evidence when deployment was required
-- reconcile changes made by other sessions since START
+At each checkpoint:
+- compare previous baseline `main` with current `main`;
+- check active Session Issue heartbeats;
+- check relevant PR head SHAs/changed files;
+- refresh only the live facts needed for the risk boundary;
+- load only changed context that overlaps or materially affects current scope.
+
+Do not reload full Project Memory merely because a checkpoint occurs.
+
+## Cheap cross-chat change detection
+
+A conversation can detect other-chat work without rereading history by checking:
+
+- current `main` SHA;
+- open `[PDP SESSION]` Issues and their latest phase/heartbeat;
+- relevant open PR head SHAs and changed filenames;
+- deployment/automation/runtime state only when the current request depends on it.
+
+If these relevant fingerprints have not changed, reuse the cached Conversation context.
+
+## When another chat changes `main`
+
+If `main` changed after the last baseline:
+
+1. compare previous baseline SHA → new `main`;
+2. identify the responsible commit/PR/session;
+3. inspect changed filenames;
+4. read only changes intersecting the current scope or shared dependencies;
+5. reconcile/rebase/test if required;
+6. advance the baseline to the new `main`.
+
+Unrelated changes do not require loading their full domain history.
+
+## When another chat changes unmerged work
+
+If `main` did not change but another active Session/PR did:
+
+1. inspect that Issue heartbeat and new PR head/changed filenames;
+2. compare its soft lock against the current Work Session;
+3. load only overlap/dependency-relevant information;
+4. continue if unrelated;
+5. resolve overlap before conflicting writes/deploys/merges.
 
 ## Concurrency result
 
@@ -101,6 +137,7 @@ Always treat these as potential conflicts:
 - same runtime configuration/resource
 - same connector/parser
 - same global analysis Context
+- same core governance/safety file
 
 ## Deployment lock
 
@@ -136,24 +173,24 @@ Update the Session Issue after meaningful milestones, especially:
 - merge
 - blocker/next action
 
-This allows a second chat to see an in-progress change before the first chat finishes.
+Keep heartbeat text compact. Link exact PR/commit/request/evidence instead of copying long logs.
 
-## `main` changes during a session
+## Full context reload is exceptional
 
-If `main` changed after START:
+A broader reload is appropriate only when:
 
-1. identify the new commits/PR/session;
-2. read the relevant change;
-3. compare it with your scope;
-4. reconcile/rebase as required;
-5. rerun relevant tests;
-6. repeat PRE-DEPLOY/PRE-MERGE checks.
+- core governance/safety/source-precedence semantics changed;
+- memory schema changed incompatibly;
+- a major architecture/domain redesign invalidated cached assumptions;
+- the baseline cannot be reliably reconciled;
+- the relevant delta is too large to safely patch selectively;
+- the user explicitly requests full resync/audit.
 
-Do not deploy or merge from stale context.
+Even then, historical source archives remain lazy-loaded unless relevant.
 
 ## Interrupted chats
 
-If a chat ends unexpectedly, leave its Issue open with the latest known:
+If a Work Session ends unexpectedly, leave its Issue open with the latest known:
 
 - commit/branch
 - CI state
@@ -162,8 +199,10 @@ If a chat ends unexpectedly, leave its Issue open with the latest known:
 - blocker
 - next action
 
-A new activated chat may resume it only after new Context Sync and conflict check.
+A new Conversation may resume it only after its own `PDPONE START`, Context Sync and conflict check.
 
-## Closing a session
+## Closing a Work Session
 
-A successful session must produce/update a permanent Session Log in `docs/project-memory/history/sessions/`, sync relevant decisions/timeline/current state/registries, then close the active Issue. `PDPONE END` is the explicit user command for this closure workflow.
+A successful Work Session must produce/update a permanent Session Log in `docs/project-memory/history/sessions/`, sync only relevant decisions/timeline/current state/registries/domain summaries, then close the active Issue.
+
+The Conversation remains activated for later PDP One requests unless the user explicitly sends `PDPONE END`.
