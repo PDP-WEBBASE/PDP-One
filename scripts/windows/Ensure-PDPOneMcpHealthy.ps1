@@ -63,6 +63,13 @@ function Test-LocalMcpRoute {
     }
 }
 
+function Test-PublicMcpRoute {
+    param([string]$EnvPath, [string]$PathToken)
+    $publicBaseUrl = Get-PDPOneEnvValue -Path $EnvPath -Name "PDP_PUBLIC_BASE_URL"
+    if ([string]::IsNullOrWhiteSpace($publicBaseUrl)) { return $null }
+    return Test-PDPOnePublicHealth -Url "$($publicBaseUrl.TrimEnd('/'))/mcp/$PathToken/healthz" -ExpectedPattern "pdp-one-mcp" -TimeoutSeconds 20
+}
+
 $root = Get-InstallationRoot -RequestedRoot $ProjectRoot
 $deploymentOperation = Read-PDPOneDeploymentOperation -AgentRoot $AgentRoot -RemoveStale
 if ($deploymentOperation.Active) {
@@ -87,13 +94,21 @@ Set-Location $root
 $envPath = Assert-PDPOneConfiguration -ProjectRoot $root
 $mcpPathToken = Get-PDPOneEnvValue -Path $envPath -Name "PDP_MCP_PATH_TOKEN"
 $localMcpHealthUrl = "http://127.0.0.1:8080/mcp/$mcpPathToken/healthz"
+$confirmedPublicFailure = $false
 
 $state = Get-McpState
 if ($state.Status -eq "running" -and $state.Health -eq "healthy") {
     Start-Sleep -Seconds ([Math]::Max(3, $StableSeconds))
     $second = Get-McpState
     if ($second.Status -eq "running" -and $second.Health -eq "healthy" -and $second.RestartCount -eq $state.RestartCount) {
-        if (Test-LocalMcpRoute -Url $localMcpHealthUrl) { exit 0 }
+        if (Test-LocalMcpRoute -Url $localMcpHealthUrl) {
+            $publicProbe = Test-PublicMcpRoute -EnvPath $envPath -PathToken $mcpPathToken
+            if ($null -eq $publicProbe -or $publicProbe.Success) { exit 0 }
+            Start-Sleep -Seconds 10
+            $publicProbe = Test-PublicMcpRoute -EnvPath $envPath -PathToken $mcpPathToken
+            if ($null -ne $publicProbe -and $publicProbe.Success) { exit 0 }
+            $confirmedPublicFailure = $true
+        }
     }
 }
 
@@ -106,6 +121,7 @@ $report = [ordered]@{
     deployment_in_progress = $false
     import_check = "pending"
     local_route_health = "failed"
+    public_route_health = $(if ($confirmedPublicFailure) { "failed_confirmed" } else { "not_checked" })
     route_repair_performed = $false
     container_recreated = $false
     final_status = "failed"
@@ -120,15 +136,14 @@ try {
     & docker compose config --quiet
     if ($LASTEXITCODE -ne 0) { throw "Docker Compose configuration is invalid." }
 
-    # If the process/container itself is healthy, repair only the route first.
-    # Do not recreate a healthy MCP container merely because nginx/Tailscale is stale.
     if ($state.Status -eq "running" -and $state.Health -eq "healthy") {
         $report.import_check = "not_required_container_healthy"
         $report.route_repair_performed = $true
         $connectivity = & (Join-Path $PSScriptRoot "Repair-PDPOneConnectivity.ps1") -ProjectRoot $root -RepairAttempts 2
         if ($null -ne $connectivity -and [string]$connectivity.status -eq "succeeded" -and (Test-LocalMcpRoute -Url $localMcpHealthUrl)) {
             $report.local_route_health = "healthy"
-            $report.final_status = "healthy_after_route_repair"
+            $report.public_route_health = [string]$connectivity.public_mcp_health
+            $report.final_status = $(if ($confirmedPublicFailure) { "healthy_after_public_route_repair" } else { "healthy_after_route_repair" })
             $report.completed_at = [DateTime]::UtcNow.ToString("o")
             Write-McpReport -Root $root -Report $report
             exit 0
@@ -157,6 +172,7 @@ try {
                     if ($null -eq $connectivity -or [string]$connectivity.status -ne "succeeded") {
                         throw "MCP container recovered but the token-bound route could not be repaired."
                     }
+                    $report.public_route_health = [string]$connectivity.public_mcp_health
                 }
                 if (-not (Test-LocalMcpRoute -Url $localMcpHealthUrl)) {
                     throw "MCP container is healthy but its local token-bound route is still unavailable."
