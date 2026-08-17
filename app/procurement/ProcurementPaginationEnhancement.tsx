@@ -34,7 +34,7 @@ const RECOMMENDED_PATH = `${API_PREFIX}recommended-notices/`;
 const DIRECT_PATH = `${API_PREFIX}direct-opportunities/`;
 const TOP_LABELS = new Set(["داشبورد مدیریتی", "مناقصات", "استعلامات", "ارجاعات مستقیم", "مدیریت زیرسامانه"]);
 const WORKFLOW_LABELS = new Set([
-  "مناقصات ۳ روز اخیر", "استعلامات ۳ روز اخیر", "کل ارجاعات مستقیم",
+  "کل مناقصات", "مناقصات ۳ روز اخیر", "کل استعلامات", "استعلامات ۳ روز اخیر", "کل ارجاعات مستقیم",
   "پیشنهادی", "منتخب", "ارسال‌شده", "نتایج",
 ]);
 const fa = new Intl.NumberFormat("fa-IR");
@@ -157,7 +157,7 @@ function configureNoticeRequest(url: URL, top: string, workflow: string, filters
   url.searchParams.set("resolved_notice_type", top === "مناقصات" ? "tender" : "inquiry");
   url.searchParams.set("ordering", "-publication_sort,-last_seen_at,-id");
 
-  if (workflow === "مناقصات ۳ روز اخیر" || workflow === "استعلامات ۳ روز اخیر" || !workflow) {
+  if (workflow === "مناقصات ۳ روز اخیر" || workflow === "استعلامات ۳ روز اخیر") {
     url.searchParams.set("recent_days", "3");
   } else if (workflow === "پیشنهادی") {
     url.searchParams.set("actionable", "true");
