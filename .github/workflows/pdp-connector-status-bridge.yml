@@ -1,0 +1,93 @@
+name: PDP One Connector-readable Gate Status
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+  actions: read
+  contents: read
+  statuses: write
+
+concurrency:
+  group: pdp-status-bridge-${{ github.event.pull_request.head.sha }}
+  cancel-in-progress: true
+
+jobs:
+  mirror-gates:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Mirror exact-head workflow conclusions to commit statuses
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const sha = context.payload.pull_request.head.sha;
+            const required = [
+              { workflow: 'PDP One CI', context: 'pdp-one-ci' },
+              { workflow: 'Build immutable PDP One images', context: 'pdp-images' },
+              { workflow: 'PDP One Memory Governance', context: 'pdp-memory' },
+            ];
+
+            for (const gate of required) {
+              await github.rest.repos.createCommitStatus({
+                owner,
+                repo,
+                sha,
+                state: 'pending',
+                context: gate.context,
+                description: `Waiting for ${gate.workflow}`.slice(0, 140),
+              });
+            }
+
+            const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+            let selected = new Map();
+
+            for (let attempt = 0; attempt < 160; attempt += 1) {
+              const response = await github.rest.actions.listWorkflowRunsForRepo({
+                owner,
+                repo,
+                head_sha: sha,
+                event: 'pull_request',
+                per_page: 100,
+              });
+
+              selected = new Map();
+              for (const gate of required) {
+                const candidates = response.data.workflow_runs
+                  .filter((run) => run.name === gate.workflow && run.head_sha === sha)
+                  .sort((a, b) => b.id - a.id);
+                if (candidates.length > 0) selected.set(gate.workflow, candidates[0]);
+              }
+
+              const allCompleted = required.every((gate) => {
+                const run = selected.get(gate.workflow);
+                return run && run.status === 'completed';
+              });
+              if (allCompleted) break;
+              await sleep(15000);
+            }
+
+            let failed = false;
+            for (const gate of required) {
+              const run = selected.get(gate.workflow);
+              const success = Boolean(run && run.status === 'completed' && run.conclusion === 'success');
+              if (!success) failed = true;
+              const state = success ? 'success' : 'failure';
+              const conclusion = run ? `${run.status}/${run.conclusion || 'none'}` : 'not-found';
+              await github.rest.repos.createCommitStatus({
+                owner,
+                repo,
+                sha,
+                state,
+                context: gate.context,
+                description: `${gate.workflow}: ${conclusion}`.slice(0, 140),
+                target_url: run?.html_url,
+              });
+            }
+
+            if (failed) {
+              core.setFailed('One or more required exact-head PDP One workflow gates did not complete successfully.');
+            }
