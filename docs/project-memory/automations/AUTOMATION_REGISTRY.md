@@ -2,82 +2,102 @@
 
 > Desired policy is versioned in GitHub. Actual enabled/schedule/prompt state must be read from ChatGPT Automations before mutation.
 
-Bootstrap verification: 2026-08-17.
+Last live verification for this change: **2026-08-17 ~22:20 +03:30**.
 
-## Hyper Turbo analysis lanes
+## Hyper Turbo analysis lanes — adaptive package-cycle v2
 
-Shared purpose: consume the active procurement analysis run through atomic claim/import workflow, with newest-first/adaptive-admission backend behavior, AI Draft outputs and human review.
+Shared purpose: consume the active procurement analysis run through atomic Claim → semantic analysis → Import cycles while preserving `newest_first`, adaptive admission, AI Draft output and human review.
 
-| Logical ID | Worker identity | Live state at bootstrap | Schedule | Run condition in live prompt | Max claims/run | Claim request | Notes |
-|---|---|---|---|---|---:|---|---|
-| PDP-AUTO-ANALYSIS-HYPER-LANE-01 | `pdp-hyper-lane-1` | **enabled** | hourly | active run; if none may start incremental; <1000 uses reduced max claims | 4 normally / 2 under 1000 | limit 500, lease 3600 | only lane allowed to create a new incremental run |
-| PDP-AUTO-ANALYSIS-HYPER-LANE-02 | `pdp-hyper-lane-2` | **enabled** | hourly | remaining >=1000 | 4 | limit 500, lease 3600 | never create/cancel/restart run |
-| PDP-AUTO-ANALYSIS-HYPER-LANE-03 | `pdp-hyper-lane-3` | **DISABLED** | hourly config | remaining >=5000 | 4 | limit 500, lease 3600 | desired historical policy expected it active above threshold; drift |
-| PDP-AUTO-ANALYSIS-HYPER-LANE-04 | `pdp-hyper-lane-4` | **enabled** | hourly | remaining >=5000 | 4 | limit 500, lease 3600 | auxiliary |
-| PDP-AUTO-ANALYSIS-HYPER-LANE-05 | `pdp-hyper-lane-5` | **DISABLED** | hourly config | remaining >=10000 | 4 | limit 500, lease 3600 | desired historical policy expected it active above threshold; drift |
-| PDP-AUTO-ANALYSIS-HYPER-LANE-06 | `pdp-hyper-lane-6` | **enabled** | hourly | remaining >=10000 | 4 | limit 500, lease 3600 | auxiliary |
-| PDP-AUTO-ANALYSIS-HYPER-LANE-07 | `pdp-hyper-lane-7` | **enabled** | hourly | remaining >=20000 | 4 | limit 500, lease 3600 | auxiliary |
-| PDP-AUTO-ANALYSIS-HYPER-LANE-08 | `pdp-hyper-lane-8` | **enabled** | hourly | remaining >=20000 | 4 | limit 500, lease 3600 | auxiliary |
+### Core capacity contract
 
-### Current drift
+- Safe package size remains **50** records.
+- Backend global active-claim cap remains **400** records.
+- One worker may own only **one in-flight package** at a time.
+- A worker may claim another package **immediately after its prior package imports successfully with no unresolved integrity errors**.
+- Throughput scales by repeated safe package cycles; it must **not** scale by reserving one giant 10k/20k claim.
+- Backend `get_procurement_analysis_run_status.statistics.throughput.policy` is the desired capacity source for each live run.
+- Targets are acceptance goals, not guarantees. Actual imported/hour, completed delta/hour, lease expiry, errors and backlog net delta decide success.
 
-Historical PR58 desired capacity policy described 8 lanes when remaining >=20,000. Live bootstrap remaining was 39,293 but lanes 3 and 5 were disabled.
+## Adaptive capacity targets
 
-`AUTOMATION_DRIFT: OPEN`
+| Effective Remaining | Desired lanes | Target/hour | Package size | Max packages/lane/run at normal health |
+|---:|---:|---:|---:|---:|
+| >=50,000 | 8 | 20,000 | 50 | 50 |
+| 40,000–49,999 | 8 | 10,000 | 50 | 25 |
+| 20,000–39,999 | 8 | 7,500 | 50 | 19 |
+| 10,000–19,999 | 6 | 4,000 | 50 | 14 |
+| 5,000–9,999 | 4 | 2,000 | 50 | 10 |
+| 1,000–4,999 | 2 | 1,000 | 50 | 10 |
+| 1–999 | 1 | 400 | 50 | 8 |
+| 0 | 0 | 0 | — | 0 |
 
-This bootstrap **does not** enable/disable live tasks. Schedule mutation requires a separate activated `PDPONE START` session that refreshes run state, live task state, active sessions and relevant performance evidence.
+The backend may reduce `max_packages_per_lane` when recent lease-expiry/error evidence indicates backpressure.
 
-## Shared safety contract for Hyper Turbo
+## Logical lanes
 
-- Read active run before claiming.
-- Backend provides fresh adaptive admission and `newest_first`; do not recreate a local keyword queue.
-- Preserve `run_id`, claim token, content hash and Context hash integrity.
-- Analyze all items in the claim semantically using current PDP Context.
-- Import each claim as AI Draft; require human review.
-- Only claim again after successful import/no unresolved items.
-- Do not auto-select/publish opportunities.
-- Do not create contract/receivable/payment/financial records.
-- Do not delete records.
-- Do not modify Context/Prompt/keywords/qualifications/company history inside routine lane execution.
-- Auxiliary lanes do not create/cancel/restart runs.
+| Logical ID | Worker identity | Schedule | Lane number | Special rule |
+|---|---|---|---:|---|
+| PDP-AUTO-ANALYSIS-HYPER-LANE-01 | `pdp-hyper-lane-1` | hourly :00 | 1 | only lane allowed to create an incremental run when no active run exists |
+| PDP-AUTO-ANALYSIS-HYPER-LANE-02 | `pdp-hyper-lane-2` | hourly :05 | 2 | auxiliary; never create/cancel/restart run |
+| PDP-AUTO-ANALYSIS-HYPER-LANE-03 | `pdp-hyper-lane-3` | hourly :10 | 3 | auxiliary |
+| PDP-AUTO-ANALYSIS-HYPER-LANE-04 | `pdp-hyper-lane-4` | hourly :15 | 4 | auxiliary |
+| PDP-AUTO-ANALYSIS-HYPER-LANE-05 | `pdp-hyper-lane-5` | hourly :20 | 5 | auxiliary |
+| PDP-AUTO-ANALYSIS-HYPER-LANE-06 | `pdp-hyper-lane-6` | hourly :25 | 6 | auxiliary |
+| PDP-AUTO-ANALYSIS-HYPER-LANE-07 | `pdp-hyper-lane-7` | hourly :30 | 7 | auxiliary |
+| PDP-AUTO-ANALYSIS-HYPER-LANE-08 | `pdp-hyper-lane-8` | hourly :35 | 8 | auxiliary |
 
-## Historical desired adaptive capacity policy
+Live verification immediately before Session #80 implementation found **all eight lanes enabled**. This supersedes the bootstrap-day cached observation that lanes 3 and 5 were disabled; the historical drift remains preserved in older evidence.
 
-| Remaining backlog | Desired lane set | Intent |
-|---|---|---|
-| >=20,000 | 1–8 | Hyper Turbo |
-| 10,000–19,999 | 1–6 | aggressive |
-| 5,000–9,999 | 1–4 | fast |
-| 1,000–4,999 | 1–2 | moderate-fast |
-| <1,000 | lane 1 reduced | maintenance |
+## Lane execution contract
 
-This table is a desired historical policy. Actual task enablement must be verified live.
+Every lane execution must:
 
-## Older ChatGPT tasks preserved as historical state
+1. Read `get_procurement_analysis_run_status`.
+2. If no active run exists, only Lane 1 may call `start_incremental_analysis(include_expired=false)`; auxiliary lanes exit.
+3. Read `statistics.throughput.policy`. Exit when `effective_remaining=0` or the lane number is greater than `desired_lanes`.
+4. Loop no more than the current policy's `max_packages_per_lane`.
+5. For each loop, call `claim_procurement_analysis_work` with that lane's worker ID, `limit=50`, `lease_seconds=3600`.
+6. If count=0, stop. Never open a second package while one claim is unresolved.
+7. Analyze every claimed record **semantically** against the active PDP Context. Keywords are context/search guidance only, never deterministic scoring.
+8. Use a semantic fast pass for clear non-fit records while preserving structured reasoning. Recommended, urgent, ambiguous, needs-information or score>=60 records are detailed/deep-analysis candidates.
+9. Preserve run item ID, claim token, Notice ID, Content Hash and Context Hash exactly.
+10. Import the complete package in one `import_procurement_analysis_results(..., dry_run=false)` call.
+11. Take the next package only after the prior Import is successful and has no unresolved rejected/invalid-hash/invalid-context/error items.
+12. Re-read status/policy periodically during long executions and obey lower backpressure/desired-lane values.
+13. Finish with packages, claimed, imported/completed, errors, remaining and effective remaining.
 
-The Automation service also contains disabled older/test tasks, including:
+If ChatGPT execution/runtime limits prevent the theoretical package count, stop only at a clean imported checkpoint; never reserve speculative future packages.
 
-- one-time `تحلیل کامل PDP One`
-- PDP One 24h/48h checks
-- older GitHub scheduled-write tests
-- old tender-analysis task
-- Google Drive capability tests
-- old Pars-Namad daily task
+## Effective backlog rule
 
-These are historical Automation evidence. Their disabled presence must not be confused with the active Hyper Turbo architecture or deleted merely for tidiness.
+The historical active run was created with `include_previously_analyzed=true`. Backend v2 distinguishes raw Remaining from Effective Remaining. An open `explicit_reanalysis` row may be marked `SKIPPED` only when an exact current-content/current-Context valid draft or compact result already exists and human review did not request revision. The Notice, prior result and audit history are preserved.
+
+## Shared safety contract
+
+- Results remain **AI Drafts requiring human review**.
+- AI Recommended is not human Selected.
+- Do not auto-select/publish/submit opportunities.
+- Do not create final contract/receivable/payment/financial records.
+- Do not delete business records or analysis history.
+- Do not change Context/Prompt/keywords/qualifications/company history in routine lane execution.
+- Do not cancel/restart the healthy persistent run to change capacity.
+- Do not bypass claim/content/context integrity.
+- Do not rotate tokens, deploy code or perform Docker/volume operations.
+
+## Model execution architecture
+
+This v2 change keeps the current **ChatGPT + PDP One MCP** analysis path. It does **not** introduce a separate OpenAI API key/provider or server-side model billing path. A future dedicated server-side model worker pool is a separate architecture/change decision and must not be assumed to exist.
 
 ## Automation change protocol
 
 Before changing any live Task:
 
-1. require `PDPONE START`;
+1. require active PDP One conversation mutation mode;
 2. read this registry and `AUTOMATION_RUNTIME_CONTEXT.md`;
 3. read actual live Automation(s);
-4. read active analysis run/Context if relevant;
-5. check active GitHub session locks;
-6. compare desired vs actual state and identify drift;
-7. make only the requested change;
-8. verify live Task after mutation;
-9. update registry/spec/runtime context and Session Issue immediately.
-
-Do not use a historical task prompt as the only policy source when GitHub has a newer active spec.
+4. read active analysis run/Context and backend throughput policy;
+5. check active GitHub session/automation locks;
+6. deploy and verify backend support before changing prompts that depend on it;
+7. mutate only the governed Lane prompts/schedules needed;
+8. verify live Task state after mutation;
+9. record meaningful throughput/drift evidence, not every routine run payload.
