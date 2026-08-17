@@ -5,7 +5,7 @@ param(
     [string]$ProjectRoot = "",
     [int]$RepairAttempts = 2,
     [int]$PublicCheckTimeoutSeconds = 35,
-    [int]$TransientConfirmDelaySeconds = 5
+    [int]$TransientConfirmDelaySeconds = 10
 )
 
 $ErrorActionPreference = "Stop"
@@ -63,7 +63,7 @@ function Get-FunnelStatusText {
 }
 
 function Restart-PDPOnePublicRoute {
-    Write-Host "Recreating nginx and Tailscale after confirmed public-route failure ..." -ForegroundColor Yellow
+    Write-Host "Recreating nginx and Tailscale after a repeatedly confirmed full public-route failure ..." -ForegroundColor Yellow
     $repair = Invoke-PDPOneConnectivityDockerCompose -Arguments @("--profile", "tunnel", "up", "--detach", "--no-build", "--pull", "never", "--force-recreate", "nginx", "tailscale") -FailureMessage "The nginx/Tailscale route could not be recreated." -IgnoreFailure -Quiet
     Start-Sleep -Seconds 12
     return $repair.ExitCode -eq 0
@@ -82,6 +82,21 @@ function Test-PublicPdpEndpoints {
     }
 }
 
+function Complete-PDPOneConnectivityResult {
+    param([string]$BaseUrl, $Checks, [string]$McpState)
+    Set-PDPOneEnvValue -Path $envPath -Name "PDP_PUBLIC_BASE_URL" -Value $BaseUrl
+    $result.status = "succeeded"
+    $result.public_base_url = $BaseUrl
+    $result.public_health_method = $Checks.Health.Method
+    $result.public_api_health_method = $Checks.ApiHealth.Method
+    $result.public_mcp_health_method = $Checks.McpHealth.Method
+    $result.public_api_health = $(if ($Checks.ApiHealth.Success) { "healthy" } else { "failed" })
+    $result.public_mcp_health = $McpState
+    $result.local_dns_degraded = [bool]($Checks.Health.LocalDnsDegraded -or $Checks.ApiHealth.LocalDnsDegraded -or $Checks.McpHealth.LocalDnsDegraded)
+    $result.completed_at = (Get-Date).ToUniversalTime().ToString('o')
+    return [pscustomobject]$result
+}
+
 $result = [ordered]@{
     status = "failed"
     provider = "Tailscale Funnel (Docker)"
@@ -95,6 +110,7 @@ $result = [ordered]@{
     public_mcp_health = "failed"
     local_dns_degraded = $false
     transient_failure_rechecked = $false
+    public_confirmation_count = 0
     repair_attempts = 0
     completed_at = $null
 }
@@ -157,37 +173,41 @@ for ($attempt = 1; $attempt -le [Math]::Max(1, $RepairAttempts); $attempt++) {
 
     $candidateUrl = $urlMatch.Value.TrimEnd('/')
     $checks = Test-PublicPdpEndpoints -BaseUrl $candidateUrl
+    $result.public_confirmation_count = 1
 
-    # A single network/DNS/Tailscale miss must not immediately recreate the route.
-    # Confirm the same failure after a short delay before taking disruptive action.
+    # Require three observations before any disruptive public-route repair.
+    # A short external/DNS/Funnel wobble must not be amplified into a restart.
     if (-not $checks.Success) {
         $result.transient_failure_rechecked = $true
-        Start-Sleep -Seconds ([Math]::Max(2, $TransientConfirmDelaySeconds))
-        $checks = Test-PublicPdpEndpoints -BaseUrl $candidateUrl
+        foreach ($confirm in 1..2) {
+            Start-Sleep -Seconds ([Math]::Max(5, $TransientConfirmDelaySeconds))
+            $checks = Test-PublicPdpEndpoints -BaseUrl $candidateUrl
+            $result.public_confirmation_count++
+            if ($checks.Success) { break }
+        }
     }
 
     if ($checks.Success) {
-        Set-PDPOneEnvValue -Path $envPath -Name "PDP_PUBLIC_BASE_URL" -Value $candidateUrl
-        $result.status = "succeeded"
-        $result.public_base_url = $candidateUrl
-        $result.public_health_method = $checks.Health.Method
-        $result.public_api_health_method = $checks.ApiHealth.Method
-        $result.public_mcp_health_method = $checks.McpHealth.Method
-        $result.public_api_health = "healthy"
-        $result.public_mcp_health = "healthy"
-        $result.local_dns_degraded = [bool]($checks.Health.LocalDnsDegraded -or $checks.ApiHealth.LocalDnsDegraded -or $checks.McpHealth.LocalDnsDegraded)
-        $result.completed_at = (Get-Date).ToUniversalTime().ToString('o')
-        return [pscustomobject]$result
+        return Complete-PDPOneConnectivityResult -BaseUrl $candidateUrl -Checks $checks -McpState "healthy"
+    }
+
+    # If public web + API are healthy while only the public MCP probe is
+    # degraded, the Funnel and local nginx->MCP path are still intact. Do NOT
+    # recreate nginx/Tailscale; preserve established ChatGPT connections and
+    # let a later cycle observe whether the external MCP path recovered.
+    if ($checks.Health.Success -and $checks.ApiHealth.Success -and -not $checks.McpHealth.Success) {
+        Write-Host "Public web/API remain healthy while only the MCP probe is degraded; preserving the existing Funnel route." -ForegroundColor Yellow
+        return Complete-PDPOneConnectivityResult -BaseUrl $candidateUrl -Checks $checks -McpState "degraded"
     }
 
     if (-not $checks.Health.Success) {
-        Write-Host "Funnel is configured but the public nginx health endpoint failed twice." -ForegroundColor Yellow
-    } elseif (-not $checks.ApiHealth.Success) {
-        Write-Host "The public nginx health endpoint works, but the public session API failed twice." -ForegroundColor Yellow
+        Write-Host "The public nginx health endpoint remained unavailable after three observations." -ForegroundColor Yellow
     } else {
-        Write-Host "Web/API are public, but the token-bound public MCP health route failed twice." -ForegroundColor Yellow
+        Write-Host "Public nginx is reachable but the public session API remained unavailable after three observations." -ForegroundColor Yellow
     }
 
+    # Only a repeatedly confirmed full web/API public-route failure is allowed
+    # to recreate nginx/Tailscale.
     if ($attempt -lt $RepairAttempts) { [void](Restart-PDPOnePublicRoute) }
 }
 
