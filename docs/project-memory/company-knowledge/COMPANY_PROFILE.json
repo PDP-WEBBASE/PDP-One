@@ -1,0 +1,43 @@
+{
+  "schema_version": "pdp-company-profile-v1",
+  "source": {
+    "file": "attachments/PDP-G-14-company-resume.pdf",
+    "sha256": "2a8fe53332602c8f1dbf36abfb1abf2e5de79a7a91ed48b6722ec3b9ee527c93",
+    "pages": 66,
+    "historical_resume_snapshot": true
+  },
+  "company": {
+    "name_fa": "مهندسین مشاور طرح و برنامه پارس",
+    "brand": "PDP",
+    "registration_number": "252878",
+    "established_year_jalali": 1384,
+    "established_city": "تهران"
+  },
+  "resume_certificate_categories": [
+    "گواهی صلاحیت خدمات مشاور",
+    "گواهی کانون مشاوران اعتباری و سرمایه گذاری بانکی",
+    "گواهی سیستم مدیریت کیفیت",
+    "عضویت در جامعه مهندسان مشاور",
+    "پروانه فنی مهندسی صمت"
+  ],
+  "resume_staff_snapshot": {
+    "doctorate": 8,
+    "masters": 18,
+    "bachelors": 25
+  },
+  "core_activity_groups": [
+    "ساختمان",
+    "شهرسازی و طراحی شهری",
+    "تاسیسات شهری",
+    "امکان سنجی"
+  ],
+  "representative_projects": [
+    {"name":"منطقه آزاد قصرشیرین","scale":"7223 هکتار","source_pages":[10,11]},
+    {"name":"منطقه ویژه اقتصادی رفسنجان","scale":"2000 هکتار","source_pages":[14]},
+    {"name":"پردیس اداری خدماتی رفاهی منطقه ویژه اقتصادی رفسنجان","source_pages":[15,16]},
+    {"name":"دانشگاه خواجه نصیرالدین طوسی","resume_caption":"24 هکتار / 360 هزار مترمربع ابنیه","source_pages":[18,19]},
+    {"name":"شهرک خورشیدی بافت","scale":"190 هکتار","source_pages":[22]},
+    {"name":"شهرک خورشیدی حدید","scale":"200 هکتار","source_pages":[23]}
+  ],
+  "verification_rule": "For current bid eligibility, reverify current certificates, staffing and exact resume page evidence; this JSON is derived from the historical resume source."
+}
