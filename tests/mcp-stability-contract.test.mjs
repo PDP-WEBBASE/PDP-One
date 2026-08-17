@@ -37,6 +37,7 @@ test("Windows startup and self-heal validate token-bound MCP health end to end",
   assert.match(startup, /local_mcp_health/);
   assert.match(startup, /public_mcp_health/);
   assert.match(startup, /mcp\/\$mcpPathToken\/healthz/);
+  assert.match(startup, /Ensure-PDPOneMcpHealthy\.ps1/);
 
   assert.match(repair, /Test-PublicPdpEndpoints/);
   assert.match(repair, /TransientConfirmDelaySeconds/);
