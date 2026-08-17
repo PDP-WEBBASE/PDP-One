@@ -1,0 +1,89 @@
+{
+  "schema_version": "pdp-current-state-v1",
+  "verified_at": "2026-08-17T15:44:11+03:30",
+  "warning": "Cached view only; refresh relevant live sources before sensitive actions.",
+  "github": {
+    "repository": "PDP-WEBBASE/PDP-One",
+    "main_commit": "b99dfedc43c64c00b536bcb625d62499d7f1a4c3",
+    "open_prs": [45, 46],
+    "bootstrap_issue": 59,
+    "bootstrap_branch": "docs/project-memory-bootstrap-20260817"
+  },
+  "runtime": {
+    "service": "PDP One",
+    "database": "connected",
+    "trial_mode": true,
+    "contracts": 10,
+    "receivables": 3,
+    "analysis_drafts": 1219,
+    "analysis_review": {
+      "total": 1219,
+      "pending_review": 1218,
+      "reviewed": 1,
+      "recommended": 339,
+      "urgent": 19
+    },
+    "general_analysis_reports": 9
+  },
+  "deployment_agent": {
+    "configured": true,
+    "queue_available": true,
+    "pending_requests": 0,
+    "completed_responses": 268,
+    "arbitrary_shell_allowed": false,
+    "low_disk_space": false,
+    "disk_free_bytes": 999762956288
+  },
+  "deployment_identity": {
+    "exact_commit": "d2d70c67f5e1e3290a6a165b953118e4e7f90c9f",
+    "deployment_id": "analysis-hyper-turbo-d2d70c67-20260812-r2",
+    "request_id": "49dc7f7e-a978-41fc-a869-c8f7f5c1cefd",
+    "status": "succeeded",
+    "health": "healthy",
+    "change_management_mode": "development_fast"
+  },
+  "analysis_run": {
+    "id": "755ad573-0bdd-4437-9b3e-0f6f09a64b96",
+    "status": "running",
+    "run_type": "full_pending_analysis",
+    "context_snapshot": "4612b6a6-ed18-4350-a636-f2a3e4ee26d9",
+    "context_version": 3,
+    "context_hash": "67564111125cee3ee86a3f0709e18161fdc2298e1e832ef573999b01598beadf",
+    "include_expired": true,
+    "include_previously_analyzed": true,
+    "total": 51632,
+    "completed": 12326,
+    "remaining": 39293,
+    "pending": 22603,
+    "claimed": 5968,
+    "retry": 10722,
+    "failed": 0,
+    "poison": 13,
+    "recommended": 338,
+    "not_recommended": 11988,
+    "needs_information": 740,
+    "urgent_drafts": 15,
+    "priority_policy": "newest_first",
+    "adaptive_admission": true,
+    "draft_only": true,
+    "human_review_required": true
+  },
+  "automations": {
+    "hyper_turbo": {
+      "lane_1": "enabled",
+      "lane_2": "enabled",
+      "lane_3": "disabled",
+      "lane_4": "enabled",
+      "lane_5": "disabled",
+      "lane_6": "enabled",
+      "lane_7": "enabled",
+      "lane_8": "enabled",
+      "drift_status": "AUTOMATION_DRIFT"
+    }
+  },
+  "activation": {
+    "write_keyword": "PDPONE START",
+    "read_only_status_command": "PDPONE STATUS",
+    "end_command": "PDPONE END"
+  }
+}
