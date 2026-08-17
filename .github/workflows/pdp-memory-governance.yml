@@ -17,6 +17,39 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Validate canonical memory machine files
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import csv
+          import json
+          from pathlib import Path
+
+          json_files = [
+              Path('docs/project-memory/MANIFEST.json'),
+              Path('docs/project-memory/CURRENT_STATE.json'),
+              Path('docs/project-memory/sources/SOURCE_CATALOG.json'),
+              Path('docs/project-memory/automations/AUTOMATION_REGISTRY.json'),
+              Path('docs/project-memory/company-knowledge/COMPANY_PROFILE.json'),
+          ]
+          for path in json_files:
+              with path.open('r', encoding='utf-8') as fh:
+                  json.load(fh)
+              print(f'JSON PASS: {path}')
+
+          coverage = Path('docs/project-memory/sources/TRANSFER_V10_COVERAGE_MATRIX.csv')
+          with coverage.open('r', encoding='utf-8', newline='') as fh:
+              rows = list(csv.DictReader(fh))
+          if len(rows) != 69:
+              raise SystemExit(f'Coverage matrix must contain exactly 69 source rows, found {len(rows)}')
+          if any(row.get('qa_status') != 'PASS' for row in rows):
+              raise SystemExit('Coverage matrix contains non-PASS source rows')
+          if len({row['source_path'] for row in rows}) != 69:
+              raise SystemExit('Coverage matrix contains duplicate source_path entries')
+          print('Transfer v10 coverage PASS: 69/69 unique source rows')
+          PY
+
       - name: Validate PDP project-memory linkage
         shell: bash
         env:
