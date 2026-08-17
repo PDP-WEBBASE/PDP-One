@@ -21,6 +21,12 @@ def _actor(request) -> str:
     return getattr(request.user, "username", "") or "unknown"
 
 
+def _truthy(value) -> bool:
+    if isinstance(value, bool):
+        return value
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
 @api_view(["POST"])
 @permission_classes([IsAuthenticated])
 def claim_analysis_work_adaptive(request, run_id):
@@ -32,7 +38,7 @@ def claim_analysis_work_adaptive(request, run_id):
     worker_id = str(request.data.get("worker_id") or _actor(request))
     lease_seconds = int(request.data.get("lease_seconds") or 3600)
     try:
-        if bool(request.data.get("renew_only", False)):
+        if _truthy(request.data.get("renew_only", False)):
             return Response(
                 {
                     **renew_worker_claim(
