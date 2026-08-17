@@ -169,6 +169,57 @@ def _expire_stale_claims(run: ProcurementAnalysisRun, now) -> int:
 
 
 @transaction.atomic
+def renew_worker_claim(
+    run_id: str,
+    *,
+    worker_id: str,
+    lease_seconds: int = 3600,
+    actor: str = "adaptive-analysis",
+) -> dict:
+    """Extend only the caller worker's still-active claim package.
+
+    Expired claims are never resurrected. The worker identity must match the
+    active claim owner, and the extension remains bounded to the same maximum
+    lease duration used by normal claims.
+    """
+
+    run = ProcurementAnalysisRun.objects.select_for_update().get(pk=run_id)
+    now = timezone.now()
+    worker_key = worker_id[:120]
+    extension_seconds = max(60, min(int(lease_seconds), 3600))
+    new_expiry = now + timedelta(seconds=extension_seconds)
+    active = run.items.filter(
+        status=ProcurementAnalysisRunItem.Status.CLAIMED,
+        claimed_by=worker_key,
+        claim_expires_at__gte=now,
+    )
+    renewed = active.update(claim_expires_at=new_expiry, updated_at=now)
+    if renewed:
+        run.heartbeat_at = now
+        run.save(update_fields=["heartbeat_at", "updated_at"])
+        AuditEvent.objects.create(
+            actor=actor,
+            action="procurement.analysis_run.claim_lease_renewed",
+            target_type="procurement_analysis_run",
+            target_id=str(run.id),
+            payload={
+                "worker": worker_key,
+                "renewed_items": renewed,
+                "lease_seconds": extension_seconds,
+                "new_expiry": new_expiry.isoformat(),
+            },
+        )
+    return {
+        "run_id": str(run.id),
+        "worker_id": worker_key,
+        "renewed_items": renewed,
+        "lease_seconds": extension_seconds,
+        "claim_expires_at": new_expiry.isoformat() if renewed else None,
+        "expired_claims_resurrected": False,
+    }
+
+
+@transaction.atomic
 def claim_newest_run_items(
     run_id: str,
     *,
