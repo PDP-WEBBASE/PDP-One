@@ -108,7 +108,7 @@ class AnalysisContextAttachment(TimestampedModel):
         null=True,
         blank=True,
         on_delete=models.SET_NULL,
-        related_name="procurement_analysis_context_files_uploaded",
+        related_name="procurement_analysis_context_files",
     )
 
     class Meta:
