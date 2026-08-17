@@ -121,7 +121,7 @@ $report = [ordered]@{
     deployment_in_progress = $false
     import_check = "pending"
     local_route_health = "failed"
-    public_route_health = $(if ($confirmedPublicFailure) { "failed_confirmed" } else { "not_checked" })
+    public_route_health = $(if ($confirmedPublicFailure) { "degraded_observed" } else { "not_checked" })
     route_repair_performed = $false
     container_recreated = $false
     final_status = "failed"
@@ -136,6 +136,22 @@ try {
     & docker compose config --quiet
     if ($LASTEXITCODE -ne 0) { throw "Docker Compose configuration is invalid." }
 
+    # The frequent five-minute watchdog must never turn a public-only transient
+    # into a disruptive outage. If Docker + local token-bound MCP are healthy,
+    # observe a confirmed public failure and leave the stable route untouched.
+    # Stable Startup / explicit connectivity repair owns public-route recovery.
+    if ($state.Status -eq "running" -and $state.Health -eq "healthy" -and $confirmedPublicFailure -and (Test-LocalMcpRoute -Url $localMcpHealthUrl)) {
+        $report.import_check = "not_required_container_healthy"
+        $report.local_route_health = "healthy"
+        $report.public_route_health = "degraded_observed"
+        $report.final_status = "healthy_local_public_degraded_observed"
+        $report.completed_at = [DateTime]::UtcNow.ToString("o")
+        Write-McpReport -Root $root -Report $report
+        exit 0
+    }
+
+    # If the process/container itself is healthy but the LOCAL route is broken,
+    # route repair is appropriate. Do not recreate a healthy MCP container.
     if ($state.Status -eq "running" -and $state.Health -eq "healthy") {
         $report.import_check = "not_required_container_healthy"
         $report.route_repair_performed = $true
@@ -143,7 +159,7 @@ try {
         if ($null -ne $connectivity -and [string]$connectivity.status -eq "succeeded" -and (Test-LocalMcpRoute -Url $localMcpHealthUrl)) {
             $report.local_route_health = "healthy"
             $report.public_route_health = [string]$connectivity.public_mcp_health
-            $report.final_status = $(if ($confirmedPublicFailure) { "healthy_after_public_route_repair" } else { "healthy_after_route_repair" })
+            $report.final_status = "healthy_after_route_repair"
             $report.completed_at = [DateTime]::UtcNow.ToString("o")
             Write-McpReport -Root $root -Report $report
             exit 0
