@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { CSSProperties, FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import ConnectorHealthBanner from "./ConnectorHealthBanner";
+import { emitProcurementUiSync, PROCUREMENT_UI_SYNC_EVENT, ProcurementUiSyncDetail } from "./procurementUiSync";
 import styles from "./workspace-v4.module.css";
 
 type Tab = "dashboard" | "tenders" | "inquiries" | "direct" | "management";
@@ -72,6 +73,7 @@ type ApiSource = {
   id: string;
   name: string;
   enabled: boolean;
+  status?: string;
   connectors: ApiConnector[];
 };
 
@@ -215,7 +217,7 @@ function allLabel(tab: Tab) {
 function noticeMatches(item: ApiNotice, view: WorkflowView) {
   const stage = item.case_stage || "";
   if (view === "all") return isRecentNotice(item.first_seen_at);
-  if (view === "recommended") return item.is_recommended;
+  if (view === "recommended") return item.is_recommended && !stage;
   if (view === "selected") return selectedNoticeStages.has(stage);
   if (view === "submitted") return submittedNoticeStages.has(stage);
   return resultNoticeStages.has(stage);
@@ -255,6 +257,13 @@ async function fetchCollection<T>(path: string, maxPages = 20): Promise<T[]> {
   return items;
 }
 
+async function fetchRecord<T>(path: string): Promise<T> {
+  const response = await fetch(path, { credentials: "include", headers: { Accept: "application/json" } });
+  if (response.status === 401 || response.status === 403) throw new Error("unauthorized");
+  if (!response.ok || !(response.headers.get("content-type") || "").includes("application/json")) throw new Error(`api-${response.status}`);
+  return response.json() as Promise<T>;
+}
+
 async function csrfToken() {
   const response = await fetch(`${API_BASE}/auth/session/`, { credentials: "include", headers: { Accept: "application/json" } });
   if (!response.ok) throw new Error("session-unavailable");
@@ -289,6 +298,7 @@ export default function ProcurementWorkspaceV13() {
   const [schedule, setSchedule] = useState<ScheduleState>({ enabled:false, cadence:"daily", dailyTime:"07:30", intervalHours:1, lookbackDays:7 });
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState("");
+  const [selectingNoticeIds, setSelectingNoticeIds] = useState<Set<string>>(() => new Set());
   const [refresh, setRefresh] = useState(0);
   const [detail, setDetail] = useState<DetailItem>(null);
   const [directModal, setDirectModal] = useState(false);
@@ -353,6 +363,63 @@ export default function ProcurementWorkspaceV13() {
   }, [refresh]);
 
   useEffect(() => {
+    const updateDashboard = () => {
+      void fetchRecord<DashboardPayload>(`${PROCUREMENT_API}/dashboard/`).then(setDashboard).catch(() => undefined);
+    };
+    const updateNotice = (id: string) => {
+      void fetchRecord<ApiNotice>(`${PROCUREMENT_API}/notices/${id}/`).then((updated) => {
+        setNotices((current) => current.map((item) => item.id === updated.id ? updated : item));
+      }).catch(() => undefined);
+    };
+    const updateDirect = (id: string) => {
+      void fetchRecord<ApiDirectOpportunity>(`${PROCUREMENT_API}/direct-opportunities/${id}/`).then((updated) => {
+        setDirectReferrals((current) => current.map((item) => item.id === updated.id ? updated : item));
+      }).catch(() => undefined);
+    };
+    const updateManagement = () => {
+      void Promise.all([
+        fetchCollection<ApiSource>(`${PROCUREMENT_API}/sources/`),
+        fetchCollection<ApiExtractionRun>(`${PROCUREMENT_API}/extraction-runs/?ordering=-created_at`),
+        fetchCollection<ApiAutomationSettings>(`${PROCUREMENT_API}/automation-settings/`),
+      ]).then(([sourceItems, runItems, automationItems]) => {
+        setSources(sourceItems);
+        setExtractionRuns(runItems);
+        const currentAutomation = automationItems[0] || null;
+        setAutomation(currentAutomation);
+        if (currentAutomation) {
+          setSchedule((current) => ({
+            ...current,
+            enabled: currentAutomation.enabled,
+            cadence: currentAutomation.cadence,
+            dailyTime: currentAutomation.daily_time?.slice(0,5) || "07:30",
+            intervalHours: Math.max(1, Math.round(currentAutomation.interval_minutes / 60)),
+          }));
+        }
+      }).catch(() => undefined);
+    };
+    const updateBulkWorkspace = () => {
+      void Promise.all([
+        fetchCollection<ApiNotice>(`${PROCUREMENT_API}/notices/?ordering=-last_seen_at`),
+        fetchCollection<ApiDirectOpportunity>(`${PROCUREMENT_API}/direct-opportunities/?ordering=-last_activity_at`),
+      ]).then(([noticeItems, directItems]) => {
+        setNotices(noticeItems);
+        setDirectReferrals(directItems);
+      }).catch(() => undefined);
+    };
+    const handleSync = (event: Event) => {
+      const detail = (event as CustomEvent<ProcurementUiSyncDetail>).detail;
+      if (!detail) return;
+      if (detail.bulkWorkspace) updateBulkWorkspace();
+      if (detail.noticeId && detail.source !== "workspace-v13") updateNotice(detail.noticeId);
+      if (detail.directId && detail.source !== "workspace-v13") updateDirect(detail.directId);
+      if (detail.dashboard) updateDashboard();
+      if (detail.management) updateManagement();
+    };
+    window.addEventListener(PROCUREMENT_UI_SYNC_EVENT, handleSync);
+    return () => window.removeEventListener(PROCUREMENT_UI_SYNC_EVENT, handleSync);
+  }, []);
+
+  useEffect(() => {
     if (tab !== "management" || mode !== "live" || managementLoadVersion.current === refresh) return;
     managementLoadVersion.current = refresh;
     let active = true;
@@ -402,7 +469,7 @@ export default function ProcurementWorkspaceV13() {
         setExtractionRuns((current) => current.map((run) => run.id === updated.id ? updated : run));
         if (updated.status !== "queued" && updated.status !== "running") {
           window.clearInterval(timer);
-          setRefresh((value) => value + 1);
+          emitProcurementUiSync({ source:"workspace-v13", bulkWorkspace:true, dashboard:true, management:true });
         }
       } catch {
       }
@@ -438,7 +505,7 @@ export default function ProcurementWorkspaceV13() {
       (!directTypeFilter || item.opportunity_type === directTypeFilter);
   }), [directReferrals, directView, search, provinceFilter, importanceFilter, urgencyFilter, directTypeFilter]);
 
-  const recommendedCount = notices.filter((item) => item.is_recommended).length + directReferrals.filter((item) => recommendedDirectStages.has(item.stage)).length;
+  const recommendedCount = notices.filter((item) => item.is_recommended && !item.case_stage).length + directReferrals.filter((item) => recommendedDirectStages.has(item.stage)).length;
   const selectedCount = notices.filter((item) => selectedNoticeStages.has(item.case_stage || "")).length + directReferrals.filter((item) => selectedDirectStages.has(item.stage)).length;
   const submittedCount = notices.filter((item) => submittedNoticeStages.has(item.case_stage || "")).length + directReferrals.filter((item) => item.stage === "submitted").length;
   const urgentCount = notices.filter((item) => ["critical", "high"].includes(urgency(item.submission_deadline).tone) && !resultNoticeStages.has(item.case_stage || "")).length;
@@ -535,10 +602,15 @@ export default function ProcurementWorkspaceV13() {
         headers: { "Content-Type": "application/json", "X-CSRFToken": token, Accept: "application/json" },
         body: JSON.stringify({ enabled: !connector.enabled }),
       });
-      const payload = await response.json();
+      const payload = await response.json() as ApiConnector & { detail?: string };
       if (!response.ok) throw new Error(payload.detail || "تغییر وضعیت Connector انجام نشد.");
+      setSources((current) => current.map((source) => source.id !== sourceId ? source : {
+        ...source,
+        enabled: payload.enabled ? true : source.enabled,
+        connectors: source.connectors.map((candidate) => candidate.id === payload.id ? payload : candidate),
+      }));
       notify(`${connector.notice_type_label} ${sourceById.get(sourceId) || "منبع"} ${payload.enabled ? "فعال" : "غیرفعال"} شد.`);
-      setRefresh((value) => value + 1);
+      emitProcurementUiSync({ source:"workspace-v13", dashboard:true });
     } catch (error) {
       notify(error instanceof Error ? error.message : "تغییر وضعیت Connector انجام نشد.");
     } finally {
@@ -567,12 +639,12 @@ export default function ProcurementWorkspaceV13() {
         headers: { "Content-Type": "application/json", "X-CSRFToken": token, Accept: "application/json" },
         body: JSON.stringify(body),
       });
-      const payload = await response.json();
+      const payload = await response.json() as ApiExtractionRun & { detail?: string };
       if (response.status === 401 || response.status === 403) throw new Error("برای اجرای استخراج باید با حساب مدیر وارد شوید.");
-      if (!response.ok) throw new Error(payload.detail || Object.values(payload).flat().join(" ") || "درخواست استخراج ثبت نشد.");
+      if (!response.ok) throw new Error(payload.detail || "درخواست استخراج ثبت نشد.");
+      setExtractionRuns((current) => [payload, ...current.filter((item) => item.id !== payload.id)]);
       notify(modeValue === "incremental" ? "استخراج افزایشی واقعی در صف اجرا قرار گرفت." : `استخراج واقعی ${fa.format(schedule.lookbackDays)} روز گذشته در صف قرار گرفت.`);
       setManagementView("reports");
-      setRefresh((value) => value + 1);
     } catch (error) {
       notify(error instanceof Error ? error.message : "درخواست استخراج ثبت نشد.");
     } finally {
@@ -614,7 +686,10 @@ export default function ProcurementWorkspaceV13() {
   }
 
   async function selectNotice(item: ApiNotice) {
-    setBusy(`select-${item.id}`);
+    if (selectingNoticeIds.has(item.id) || item.case_stage) return;
+    const previous = item;
+    setSelectingNoticeIds((current) => new Set(current).add(item.id));
+    setNotices((current) => current.map((candidate) => candidate.id === item.id ? { ...candidate, case_stage:"selected", case_stage_label:"منتخب" } : candidate));
     try {
       const token = await csrfToken();
       const response = await fetch(`${PROCUREMENT_API}/cases/`, {
@@ -623,14 +698,24 @@ export default function ProcurementWorkspaceV13() {
         headers: { "Content-Type": "application/json", "X-CSRFToken": token, Accept: "application/json" },
         body: JSON.stringify({ notice: item.id, stage: "selected" }),
       });
-      const payload = await response.json();
+      const payload = await response.json() as { stage?: string; stage_label?: string; detail?: string; [key: string]: unknown };
       if (!response.ok) throw new Error(payload.detail || Object.values(payload).flat().join(" ") || "انتخاب پرونده انجام نشد.");
+      setNotices((current) => current.map((candidate) => candidate.id === item.id ? {
+        ...candidate,
+        case_stage: String(payload.stage || "selected"),
+        case_stage_label: String(payload.stage_label || "منتخب"),
+      } : candidate));
       notify("فراخوان به پرونده‌های منتخب اضافه شد.");
-      setRefresh((value) => value + 1);
+      emitProcurementUiSync({ source:"workspace-v13", noticeId:item.id, dashboard:true });
     } catch (error) {
+      setNotices((current) => current.map((candidate) => candidate.id === previous.id ? previous : candidate));
       notify(error instanceof Error ? error.message : "انتخاب پرونده انجام نشد.");
     } finally {
-      setBusy("");
+      setSelectingNoticeIds((current) => {
+        const next = new Set(current);
+        next.delete(item.id);
+        return next;
+      });
     }
   }
 
@@ -655,11 +740,12 @@ export default function ProcurementWorkspaceV13() {
           stage: "new",
         }),
       });
-      const payload = await response.json();
-      if (!response.ok) throw new Error(payload.detail || Object.values(payload).flat().join(" ") || "ثبت ارجاع مستقیم انجام نشد.");
+      const payload = await response.json() as ApiDirectOpportunity & { detail?: string };
+      if (!response.ok) throw new Error(payload.detail || "ثبت ارجاع مستقیم انجام نشد.");
+      setDirectReferrals((current) => [payload, ...current.filter((item) => item.id !== payload.id)]);
       setDirectModal(false);
       notify("ارجاع مستقیم در پایگاه‌داده ثبت شد.");
-      setRefresh((value) => value + 1);
+      emitProcurementUiSync({ source:"workspace-v13", directId:payload.id, dashboard:true });
     } catch (error) {
       notify(error instanceof Error ? error.message : "ثبت ارجاع مستقیم انجام نشد.");
     } finally {
@@ -736,7 +822,7 @@ export default function ProcurementWorkspaceV13() {
           <label>فوریت<select style={inputStyle} value={urgencyFilter} onChange={(event) => setUrgencyFilter(event.target.value)}>{urgencyOptions}</select></label>
           <div style={{display:"flex",alignItems:"end",gap:7}}><button className={styles.secondaryButton} onClick={resetFilters}>پاک‌کردن</button><b>{fa.format(filteredNotices.length)}</b></div>
         </div>
-        <div className={styles.recordList}>{filteredNotices.length ? filteredNotices.map((item,index) => { const u=urgency(item.submission_deadline); return <article className={styles.record} style={compactRecordStyle} key={item.id}>
+        <div className={styles.recordList}>{filteredNotices.length ? filteredNotices.map((item,index) => { const u=urgency(item.submission_deadline); const selecting=selectingNoticeIds.has(item.id); return <article className={styles.record} style={compactRecordStyle} key={item.id}>
           <div>
             <div className={styles.recordTop}>
               <small><b>ردیف {fa.format(index+1)}</b>{item.reference_code && noticeView !== "all" && noticeView !== "recommended" && <> · <span className={styles.codeBadge}>{item.reference_code}</span></>} · انتشار {formatDate(item.published_date)}</small>
@@ -750,7 +836,7 @@ export default function ProcurementWorkspaceV13() {
             <h3 style={{margin:"4px 0 2px",fontSize:17}}>{item.title}</h3><p>{item.employer_name || "کارفرما نامشخص"}</p>
             <div className={styles.facts} style={{marginTop:5,gap:5}}>{item.province && <span>{item.province}</span>}<span>{u.remaining}</span><span>پردازش: {item.processing_status_label}</span>{(item.submission_document_count || 0) > 0 && <span>{fa.format(item.submission_document_count || 0)} سند</span>}</div>
           </div>
-          <div className={styles.decision} style={compactDecisionStyle}><span className={styles.stage}>{item.case_stage_label || (item.is_recommended ? "پیشنهادی" : allLabel(tab))}</span><dl style={{margin:0}}><div style={{padding:"2px 0"}}><dt>مسئول</dt><dd>{item.case_responsible_username || "تعیین نشده"}</dd></div></dl>{!item.case_stage && <div className={styles.actions}><button className={styles.primaryButton} style={{padding:"6px 9px"}} disabled={busy === `select-${item.id}`} onClick={() => selectNotice(item)}>{busy === `select-${item.id}` ? "در حال ثبت..." : "انتخاب"}</button></div>}</div>
+          <div className={styles.decision} style={compactDecisionStyle}><span className={styles.stage}>{item.case_stage_label || (item.is_recommended ? "پیشنهادی" : allLabel(tab))}</span><dl style={{margin:0}}><div style={{padding:"2px 0"}}><dt>مسئول</dt><dd>{item.case_responsible_username || "تعیین نشده"}</dd></div></dl>{!item.case_stage && <div className={styles.actions}><button className={styles.primaryButton} style={{padding:"6px 9px"}} disabled={selecting} onClick={() => selectNotice(item)}>{selecting ? "در حال ثبت..." : "انتخاب"}</button></div>}</div>
         </article>; }) : <div className={styles.empty}>رکورد واقعی مطابق این فیلتر وجود ندارد.</div>}</div>
       </section>}
 
