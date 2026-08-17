@@ -118,6 +118,27 @@ class AnalysisThroughputControllerTests(TestCase):
         self.assertEqual(item.analysis_reason, "already_valid_current_analysis")
         self.assertIsNotNone(item.completed_at)
 
+    def test_reanalysis_reconciliation_scan_is_throttled_between_package_claims(self):
+        notice = self._notice("فراخوان برای کنترل cadence reconciliation")
+        run = self._active_reanalysis_run()
+        item = run.items.get(notice=notice)
+        self._draft(run, notice, item.notice_content_hash)
+
+        self.assertEqual(
+            claim_newest_run_items(str(run.id), worker_id="throttle-worker", limit=1),
+            [],
+        )
+        run.refresh_from_db()
+        first_scan = run.metadata.get("last_reanalysis_reconciliation_at")
+        self.assertTrue(first_scan)
+
+        self.assertEqual(
+            claim_newest_run_items(str(run.id), worker_id="throttle-worker", limit=1),
+            [],
+        )
+        run.refresh_from_db()
+        self.assertEqual(run.metadata.get("last_reanalysis_reconciliation_at"), first_scan)
+
     def test_human_needs_revision_is_not_skipped(self):
         notice = self._notice("فراخوان نیازمند اصلاح انسانی")
         run = self._active_reanalysis_run()
@@ -146,7 +167,6 @@ class AnalysisThroughputControllerTests(TestCase):
             started_at=timezone.now() - timedelta(days=1),
             finished_at=timezone.now() - timedelta(days=1),
         )
-        # Build the active run first so its canonical basis hash is available.
         run = self._active_reanalysis_run()
         active_item = run.items.get(notice=notice)
         ProcurementAnalysisRunItem.objects.create(
