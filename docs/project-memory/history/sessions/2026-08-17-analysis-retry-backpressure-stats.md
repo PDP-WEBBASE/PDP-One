@@ -10,6 +10,8 @@ Activation: `PDPONE START`
 
 Started: 2026-08-17 19:59 +03:30
 
+Status: **RUNTIME ACCEPTED — PRE-MERGE FINALIZATION**
+
 ## User intent
 
 Continue PR67 to make procurement analysis operationally sustainable: stop the Hyper Turbo retry/lease-expiry storm, keep newest-first analysis, expose exact tender/inquiry/total statistics, deploy the exact candidate only after all gates pass, verify runtime health and data integrity, and merge only after PRE-MERGE coordination.
@@ -52,40 +54,74 @@ PR66 was deployed and required runtime acceptance over more than two five-minute
 
 PR66 was then merged to main as `7cc0c025cec69dbe161acb56cedf832f63867c38` (`Merge PR #66: MCP end-to-end stability hardening`). PR67 was refreshed with a true two-parent merge commit so the candidate contains both the accepted PR66 stability changes and the PR67 analysis changes. The combined pre-final-memory head was `5ba1be16b6a1614d74cb2157d961ff303d53f56a`; the PR diff against the new main remained exactly eight PR67 files.
 
+After Session #61 final Project Memory was merged as PR76 (`991b3a59461ad563671e98025e52a8b4fc5146fb`), PR67 was refreshed again without changing its application code. The post-PR76 head before this final evidence update was `a01b4ace96a5a3482ab8da6e508d7f73939274db`. The delta from the accepted deployed application commit `072a27a5...` to that head was Project Memory/documentation only.
+
 ## Deployment history before final combined candidate
 
 - Exact head `c3ed9e74bcb4370dfcbac1673dd341f8d003a39a` passed CI, Memory Governance and immutable Backend/MCP/Web images.
 - First deployment record `analysis-retry-stats-c3ed9e74-20260817` ended failed while independent health was healthy; no merge occurred.
 - Controlled redeploy `analysis-retry-stats-c3ed9e74-20260817-r2`, request `7dffa4e3-c34f-4452-9393-25e03b27ef46`, succeeded / healthy.
 - Independent health request `72c3dbcc-9060-465c-8e12-59debf292cc6` succeeded / healthy.
-- That deployment is historical evidence only because PR67 was subsequently hardened and then refreshed on top of merged PR66. Final acceptance must use the exact final combined head.
+- That deployment is historical evidence only because PR67 was subsequently hardened and then refreshed on top of merged PR66.
 
-## Safety constraints
+## Accepted final application deployment
 
-- Do not cancel or restart the active procurement analysis run.
-- Do not delete healthy drafts or completed results.
-- Do not perform destructive PostgreSQL/business-data changes; only ordinary analysis claim/import state transitions of the existing workflow are allowed.
-- No destructive Docker volume, WSL, Rancher or filesystem recovery action.
-- No MCP token rotation or Tailscale identity change.
-- No local application-image build.
-- Development-fast deployment only after CI, Memory Governance and immutable images succeed on the exact final candidate head.
-- Once a deployment request ID is accepted, never duplicate that deployment write.
+The required post-PR66 exact application deployment was completed before final documentation refresh:
 
-## Validation lineage
+- accepted application commit: `072a27a5af74d5170900c61f8162d6c4f6069a9f`;
+- deployment ID: `analysis-retry-stats-072a27a5-20260817`;
+- deployment request: `8b806cac-4689-4c2b-9abf-67664084494c` → `succeeded / healthy`;
+- independent health request: `e51ccca8-4cd9-4f09-8a5e-8dc646407f2f` → `succeeded / healthy`;
+- exact-head CI run for `072a27a5...`: `32050466625` → success;
+- exact-head immutable images run: `32050466643` → success;
+- Memory Governance: success.
 
-- Original head `9136c42f...`: CI and immutable images passed; Memory Governance failed only for missing Session/Issue/Memory linkage.
-- Session Issue #68, PR metadata and this Project Memory log resolved the governance gap.
-- Hardened pre-PR66-refresh head `e028da31bd3d7c384ba26fcc6a9b4820c7065237`: PDP One CI #713 success, Memory Governance success, immutable Backend/MCP/Web image run #109 success.
-- After PR66 merged, PR67 was refreshed onto main; all gates must be re-evaluated on the exact new combined code+memory head before deployment.
+No second application deployment is required for subsequent documentation-only synchronization.
 
-## Final runtime acceptance plan
+## Final live runtime verification
 
-1. Run CI, Memory Governance and immutable image builds on the exact final combined head.
-2. PRE-DEPLOY Delta Sync against current main, open sessions/PRs and live PDP state.
-3. Exact-commit deployment through the signed Deployment Agent; do not duplicate the request.
-4. Independent deployment health check.
-5. Read `get_procurement_analysis_run_status` and verify its new `statistics` payload: tender/inquiry/total counts, retry diagnostics and claim policy (`safe_claim_limit=50`, `global_active_claim_cap=400`, one active package per worker).
-6. Verify PostgreSQL connectivity and contracts=10 / receivables=3 remain unchanged.
-7. Verify the active analysis run ID is unchanged and was not cancelled/restarted.
-8. PRE-MERGE Delta Sync; merge exact PR head only if no new overlap blocks it.
-9. Record final deployment/health/statistics evidence and close Issue #68 without forcing an unnecessary second application deployment for documentation-only evidence.
+Read-only Connected MCP verification after the accepted deployment confirmed:
+
+- active analysis run remains `755ad573-0bdd-4437-9b3e-0f6f09a64b96`; it was not cancelled or restarted;
+- PostgreSQL remains connected;
+- contracts remain 10;
+- receivables remain 3;
+- split statistics are exposed through the existing `get_procurement_analysis_run_status` path;
+- `claim_policy.safe_claim_limit = 50`;
+- `claim_policy.global_active_claim_cap = 400`;
+- `claim_policy.one_active_package_per_worker = true`;
+- `priority_policy = newest_first` and adaptive admission remain active;
+- snapshot at finalization: total 54,386; completed 12,964; remaining 41,409; pending 23,022; claimed 100; retry 18,287; failed 0; poison 13;
+- attempted by ChatGPT: tender 7,737; inquiry 23,627; total 31,364;
+- completed: tender 4,676; inquiry 8,288; total 12,964;
+- display drafts: tender 582; inquiry 804; total 1,386;
+- display recommended: tender 262; inquiry 159; total 421;
+- active worker item counts at snapshot: `pdp-hyper-lane-2=50`, `pdp-hyper-lane-3=50`;
+- `claim_lease_expired` remained historical backlog at 18,264; the new policy limits new concurrent active claims rather than deleting historical retry state.
+
+These values are timestamped runtime evidence, not permanent counters.
+
+## Concurrency after runtime acceptance
+
+Session #74 / PR75 is a separate frontend-only workstream. A stale PR75 deployment-slot claim was corrected after authoritative recheck showed PR67 runtime acceptance had already completed. PR75 old-base deployment is blocked until PR67 merges; PR75 must then refresh onto the resulting main before its own deployment so it cannot remove the accepted PR67 backend changes.
+
+## Safety constraints preserved
+
+- The active analysis run was not cancelled or restarted.
+- Healthy drafts and completed results were not deleted.
+- No destructive PostgreSQL/business-data change or schema migration was performed.
+- No destructive Docker volume, WSL, Rancher or filesystem recovery action occurred.
+- No MCP token rotation or Tailscale identity change occurred.
+- No local application-image build occurred.
+- No deployment write was duplicated after an accepted Request ID.
+
+## Final merge readiness
+
+At the pre-final-memory head `a01b4ace96a5a3482ab8da6e508d7f73939274db`, PDP One CI run `32051714744`, immutable image run `32051714552`, and Memory Governance run `32051714543` all succeeded. This final evidence update is documentation-only and must rerun exact-head gates before merge; it does not require or justify a second application deployment.
+
+Remaining steps:
+
+1. exact-head gates for this documentation-only evidence commit;
+2. PRE-MERGE Delta/Concurrency Sync;
+3. merge PR67 only if still clean;
+4. close Issue #68 as completed after merge identity is recorded in the Issue.
