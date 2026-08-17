@@ -19,7 +19,13 @@ type GuardWindow = Window & {
 };
 
 const FETCH_FAILURE_EVENT = "pdp-procurement-fetch-failure";
-const TRANSIENT_HTTP_STATUSES = new Set([502, 503, 504]);
+const RECOVERABLE_HTTP_STATUSES = new Set([500, 502, 503, 504]);
+const AUTOMATION_SETTINGS_PATH = "/api/v1/procurement/automation-settings/";
+const MANAGEMENT_COLLECTION_PATHS = new Set([
+  "/api/v1/procurement/extraction-runs/",
+  "/api/v1/procurement/sources/",
+  AUTOMATION_SETTINGS_PATH,
+]);
 
 const labelToSection: Record<string, AnalysisSection> = {
   "نقش و Prompt": "prompts",
@@ -58,11 +64,16 @@ function sessionRequest(value: string) {
   return parsedRequestUrl(value)?.pathname === "/api/v1/auth/session/";
 }
 
-// Extraction history can be several megabytes. It must not prevent the tender
-// and inquiry workspace from opening after Windows or Rancher startup.
-function optionalStartupCollection(value: string) {
+function automationSettingsCollection(value: string) {
+  return parsedRequestUrl(value)?.pathname === AUTOMATION_SETTINGS_PATH;
+}
+
+// Management collections must be independently recoverable. A slow extraction
+// history or a transient source/settings endpoint must not blank the other
+// management panels or make the schedule editor unusable.
+function optionalManagementCollection(value: string) {
   const parsed = parsedRequestUrl(value);
-  return parsed?.pathname === "/api/v1/procurement/extraction-runs/";
+  return Boolean(parsed && MANAGEMENT_COLLECTION_PATHS.has(parsed.pathname));
 }
 
 function displayRequestUrl(value: string) {
@@ -78,11 +89,64 @@ function emitFetchFailure(detail: FetchFailure) {
   window.dispatchEvent(new CustomEvent<FetchFailure>(FETCH_FAILURE_EVENT, { detail }));
 }
 
-function emptyCollectionResponse() {
-  return new Response(JSON.stringify({ count: 0, next: null, previous: null, results: [] }), {
+function defaultAutomationSettings() {
+  return {
+    id: "default",
+    key: "default",
+    enabled: false,
+    cadence: "daily",
+    interval_minutes: 60,
+    daily_time: "11:00:00",
+    timezone_name: "Asia/Tehran",
+    analysis_delay_minutes: 0,
+    scheduled_task_enabled: true,
+    next_extraction_at: null,
+  };
+}
+
+function fallbackCollectionResponse(requestUrl: string) {
+  const results = automationSettingsCollection(requestUrl) ? [defaultAutomationSettings()] : [];
+  return new Response(JSON.stringify({ count: results.length, next: null, previous: null, results }), {
     status: 200,
     headers: { "Content-Type": "application/json" },
   });
+}
+
+async function normalizeAutomationSettingsResponse(response: Response) {
+  try {
+    const payload = await response.clone().json() as unknown;
+    const normalize = (item: Record<string, unknown>) => ({
+      ...item,
+      daily_time: item.daily_time || "11:00:00",
+      timezone_name: item.timezone_name || "Asia/Tehran",
+    });
+
+    if (Array.isArray(payload)) {
+      const normalized = payload.length
+        ? payload.map((item) => normalize(item as Record<string, unknown>))
+        : [defaultAutomationSettings()];
+      return new Response(JSON.stringify(normalized), {
+        status: response.status,
+        statusText: response.statusText,
+        headers: response.headers,
+      });
+    }
+
+    if (payload && typeof payload === "object" && Array.isArray((payload as { results?: unknown[] }).results)) {
+      const collection = payload as { results: unknown[]; [key: string]: unknown };
+      const results = collection.results.length
+        ? collection.results.map((item) => normalize(item as Record<string, unknown>))
+        : [defaultAutomationSettings()];
+      return new Response(JSON.stringify({ ...collection, count: results.length, results }), {
+        status: response.status,
+        statusText: response.statusText,
+        headers: response.headers,
+      });
+    }
+  } catch {
+    return response;
+  }
+  return response;
 }
 
 async function recoverBrowserSession(nativeFetch: typeof window.fetch) {
@@ -124,7 +188,7 @@ function ensureProcurementFetchGuard() {
     const method = (init?.method || (input instanceof Request ? input.method : "GET")).toUpperCase();
     const isSessionRequest = method === "GET" && sessionRequest(requestUrl);
     const maxAttempts = isSessionRequest ? 1 : method === "GET" ? 2 : 1;
-    const mayDegrade = method === "GET" && optionalStartupCollection(requestUrl);
+    const mayDegrade = method === "GET" && optionalManagementCollection(requestUrl);
     let lastError: unknown = null;
 
     for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
@@ -145,7 +209,7 @@ function ensureProcurementFetchGuard() {
 
       try {
         const response = await nativeFetch(input, { ...init, signal: controller.signal });
-        if (method === "GET" && TRANSIENT_HTTP_STATUSES.has(response.status)) {
+        if (method === "GET" && RECOVERABLE_HTTP_STATUSES.has(response.status)) {
           if (attempt < maxAttempts) {
             await wait(1_500);
             continue;
@@ -156,7 +220,10 @@ function ensureProcurementFetchGuard() {
             status: response.status,
             at: Date.now(),
           });
-          if (mayDegrade) return emptyCollectionResponse();
+          if (mayDegrade) return fallbackCollectionResponse(requestUrl);
+        }
+        if (method === "GET" && automationSettingsCollection(requestUrl) && response.ok) {
+          return normalizeAutomationSettingsResponse(response);
         }
         return response;
       } catch (error) {
@@ -178,7 +245,7 @@ function ensureProcurementFetchGuard() {
           reason: timedOut ? "timeout" : "network",
           at: Date.now(),
         });
-        if (mayDegrade && retryable) return emptyCollectionResponse();
+        if (mayDegrade && retryable) return fallbackCollectionResponse(requestUrl);
         throw lastError;
       } finally {
         window.clearTimeout(timeout);
@@ -186,7 +253,7 @@ function ensureProcurementFetchGuard() {
       }
     }
 
-    if (mayDegrade) return emptyCollectionResponse();
+    if (mayDegrade) return fallbackCollectionResponse(requestUrl);
     throw lastError instanceof Error ? lastError : new Error("procurement-fetch-failed");
   };
 }
@@ -198,8 +265,8 @@ function failureText(failure: FetchFailure) {
 }
 
 function failureLead(failure: FetchFailure) {
-  return failure.url.startsWith("/api/v1/procurement/extraction-runs/")
-    ? "گزارش استخراج موقتاً بارگذاری نشد؛ سایر بخش‌های زیرسامانه فعال‌اند."
+  return optionalManagementCollection(failure.url)
+    ? "بخشی از اطلاعات مدیریت موقتاً بارگذاری نشد؛ سایر تنظیمات و عملیات قابل استفاده‌اند."
     : "بارگذاری زیرسامانه کامل نشد.";
 }
 
