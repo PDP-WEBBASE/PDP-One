@@ -22,6 +22,7 @@ from .views_analysis_runs import (
     start_full_pending_analysis,
     start_incremental_analysis,
 )
+from .views_analysis_statistics import analysis_statistics
 from .views_automation import ProcurementAutomationSettingsViewSet
 from .views_case_actions import ProcurementCaseViewSet
 from .views_case_followup import case_follow_up, follow_up_summary, follow_up_users
@@ -77,6 +78,7 @@ urlpatterns = [
     path("analysis/runs/queue-summary/", analysis_run_queue_summary, name="analysis-run-queue-summary"),
     path("analysis/runs/current/", current_analysis_run, name="analysis-run-current"),
     path("analysis/runs/history/", analysis_run_history, name="analysis-run-history"),
+    path("analysis/runs/statistics/", analysis_statistics, name="analysis-run-statistics"),
     path("analysis/runs/full-pending/start/", start_full_pending_analysis, name="analysis-run-full-start"),
     path("analysis/runs/incremental/start/", start_incremental_analysis, name="analysis-run-incremental-start"),
     path("analysis/runs/<uuid:run_id>/", analysis_run_status, name="analysis-run-status"),
