@@ -1,0 +1,101 @@
+name: PDP One Memory Governance
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, edited, ready_for_review]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  memory-governance:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Validate canonical memory machine files
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import csv
+          import json
+          from pathlib import Path
+
+          json_files = [
+              Path('docs/project-memory/MANIFEST.json'),
+              Path('docs/project-memory/CURRENT_STATE.json'),
+              Path('docs/project-memory/sources/SOURCE_CATALOG.json'),
+              Path('docs/project-memory/automations/AUTOMATION_REGISTRY.json'),
+              Path('docs/project-memory/company-knowledge/COMPANY_PROFILE.json'),
+          ]
+          for path in json_files:
+              with path.open('r', encoding='utf-8') as fh:
+                  json.load(fh)
+              print(f'JSON PASS: {path}')
+
+          coverage = Path('docs/project-memory/sources/TRANSFER_V10_COVERAGE_MATRIX.csv')
+          with coverage.open('r', encoding='utf-8', newline='') as fh:
+              rows = list(csv.DictReader(fh))
+          if len(rows) != 69:
+              raise SystemExit(f'Coverage matrix must contain exactly 69 source rows, found {len(rows)}')
+          if any(row.get('qa_status') != 'PASS' for row in rows):
+              raise SystemExit('Coverage matrix contains non-PASS source rows')
+          if len({row['source_path'] for row in rows}) != 69:
+              raise SystemExit('Coverage matrix contains duplicate source_path entries')
+          print('Transfer v10 coverage PASS: 69/69 unique source rows')
+          PY
+
+      - name: Validate PDP project-memory linkage
+        shell: bash
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+
+          git diff --name-only "$BASE_SHA" "$HEAD_SHA" > /tmp/pdp-changed-files.txt
+          echo "Changed files:"
+          cat /tmp/pdp-changed-files.txt
+
+          governance_only=true
+          while IFS= read -r path; do
+            case "$path" in
+              PDP-ONE-START-HERE.md|docs/project-memory/*|.github/ISSUE_TEMPLATE/*|.github/pull_request_template.md|.github/workflows/pdp-memory-governance.yml)
+                ;;
+              *)
+                governance_only=false
+                ;;
+            esac
+          done < /tmp/pdp-changed-files.txt
+
+          if [[ "$governance_only" == "true" ]]; then
+            echo "Governance/documentation-only PR: memory linkage gate PASS."
+            exit 0
+          fi
+
+          body="${PR_BODY:-}"
+          if ! grep -Eiq 'PDP Session:[[:space:]]*[^[:space:]]+' <<<"$body"; then
+            echo "ERROR: code/runtime PR must identify a PDP Session in the PR body."
+            exit 1
+          fi
+          if ! grep -Eiq 'Active-work Issue:[[:space:]]*[^[:space:]]+' <<<"$body"; then
+            echo "ERROR: code/runtime PR must identify its active-work/session Issue."
+            exit 1
+          fi
+          if ! grep -Eiq 'Memory update included:[[:space:]]*(yes|no|n/a)' <<<"$body"; then
+            echo "ERROR: PR body must declare Memory update included: yes/no/N/A."
+            exit 1
+          fi
+
+          if ! grep -Eq '^docs/project-memory/|^PDP-ONE-START-HERE.md$' /tmp/pdp-changed-files.txt; then
+            echo "ERROR: code/runtime PR must include a Project Memory update, or be split/reframed through an explicitly governed exception."
+            exit 1
+          fi
+
+          echo "PDP Project Memory linkage PASS."

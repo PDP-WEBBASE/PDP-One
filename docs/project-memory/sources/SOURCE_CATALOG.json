@@ -1,0 +1,41 @@
+{
+  "schema_version": "pdp-source-catalog-v1",
+  "transfer_v10": {
+    "source_id": "SRC-TRANSFER-V10",
+    "name": "PDPOne-Transfer-Package-v10.0-2026-07-31",
+    "type": "immutable_historical_source_package",
+    "zip_sha256": "fac51cd0ee4999b53fcae613c0ca6186a7e3fdcb4e7f99f1c0e606b71a62fff4",
+    "file_count": 69,
+    "extracted_bytes": 11318119,
+    "checksum_inventory_covered": 68,
+    "checksum_passed": 68,
+    "current_state_authority": false,
+    "coverage_matrix": "docs/project-memory/sources/TRANSFER_V10_COVERAGE_MATRIX.csv"
+  },
+  "primary_groups": {
+    "project_state": ["00-PDPOne-Transfer-Package-README.md", "01-PDPOne-Executive-Summary.md", "05-PDPOne-Current-Technical-State.md", "14-PDPOne-Complete-Project-Dossier.md", "project-state.json", "transfer-manifest.json"],
+    "decisions_history": ["03-PDPOne-Decision-Log.md", "15-PDPOne-Conversation-Chronology.md", "20-PDPOne-Conversation-Evidence-Index.md", "42-PDPOne-Contradiction-And-Supersession-Register.md", "decision-register.csv", "evidence-register.csv"],
+    "implementation_incidents": ["04-PDPOne-Implementation-History.md", "09-PDPOne-Issues-And-Lessons.md", "10-PDPOne-Backlog-And-Roadmap.md", "22-PDPOne-Immediate-Next-Actions.md", "issues-register.csv"],
+    "deployment_release": ["38-PDPOne-Deployment-Gates-And-Release-History.md", "44-PDPOne-Release-v1.1.0-trial-Baseline.md", "45-PDPOne-V25-Operational-Baseline.md", "deployment-register.csv"],
+    "procurement": ["33-PDPOne-Procurement-Current-State.md", "35-PDPOne-Connector-Registry-And-Test-Matrix.md", "connector-register.csv", "evidence/connector-acceptance-summary.json", "attachments/11_KEYWORD_POLICY_AND_LISTS.md"],
+    "backup_recovery": ["17-PDPOne-Backup-And-Restore.md", "11-PDPOne-Recovery-And-Restart-Guide.md", "backup-register.csv", "backup-and-restore/PDP-ONE-PORTABLE-BACKUP-REPORT.json"],
+    "design_intent": ["attachments/PDPOne-Master-Design-And-Implementation-Prompt.txt", "attachments/PDPOne-Transfer-Prompt-Fast-Original-Core-v4.0.txt", "13-PDPOne-New-Chat-Master-Prompt.md"],
+    "company": ["attachments/PDP-G-14-company-resume.pdf"]
+  },
+  "company_resume": {
+    "sha256": "2a8fe53332602c8f1dbf36abfb1abf2e5de79a7a91ed48b6722ec3b9ee527c93",
+    "pages": 66,
+    "binary_embedded_in_bootstrap": false,
+    "derived_knowledge": "docs/project-memory/company-knowledge/COMPANY_PROFILE.md"
+  },
+  "post_transfer_sources": {
+    "github_prs": [54, 55, 56, 57, 58],
+    "runtime_sources": ["get_system_status", "get_deployment_status", "get_procurement_analysis_run_status", "get_deployment_report"],
+    "automation_source": "ChatGPT Automations live task state"
+  },
+  "rules": {
+    "historical_snapshot_is_current_truth": false,
+    "missing_raw_chat_may_be_inferred": false,
+    "source_and_derived_knowledge_both_retained": true
+  }
+}
