@@ -4,7 +4,7 @@ from django.contrib.auth import get_user_model
 from django.test import TestCase
 from django.utils import timezone
 
-from procurement.analysis_run_adaptive import claim_newest_run_items
+from procurement.analysis_run_adaptive import claim_newest_run_items, renew_worker_claim
 from procurement.analysis_run_service import create_or_resume_run, initialize_run
 from procurement.analysis_throughput import adaptive_throughput_policy
 from procurement.models import ProcurementNotice
@@ -138,6 +138,40 @@ class AnalysisThroughputControllerTests(TestCase):
         )
         run.refresh_from_db()
         self.assertEqual(run.metadata.get("last_reanalysis_reconciliation_at"), first_scan)
+
+    def test_active_worker_can_renew_lease_without_claiming_more_work(self):
+        self._notice("فراخوان برای تمدید lease")
+        run = self._active_reanalysis_run()
+        claimed = claim_newest_run_items(str(run.id), worker_id="lease-worker", limit=1, lease_seconds=300)
+        self.assertEqual(len(claimed), 1)
+        old_expiry = claimed[0].claim_expires_at
+
+        renewal = renew_worker_claim(
+            str(run.id),
+            worker_id="lease-worker",
+            lease_seconds=3600,
+            actor=self.user.username,
+        )
+
+        self.assertEqual(renewal["renewed_items"], 1)
+        self.assertFalse(renewal["expired_claims_resurrected"])
+        claimed[0].refresh_from_db()
+        self.assertGreater(claimed[0].claim_expires_at, old_expiry)
+        self.assertEqual(run.items.filter(status=ProcurementAnalysisRunItem.Status.CLAIMED).count(), 1)
+
+    def test_renewal_does_not_resurrect_expired_or_other_worker_claims(self):
+        self._notice("فراخوان برای کنترل renewal منقضی")
+        run = self._active_reanalysis_run()
+        claimed = claim_newest_run_items(str(run.id), worker_id="lease-owner", limit=1, lease_seconds=300)
+        self.assertEqual(len(claimed), 1)
+
+        wrong_worker = renew_worker_claim(str(run.id), worker_id="other-worker", lease_seconds=3600)
+        self.assertEqual(wrong_worker["renewed_items"], 0)
+
+        run.items.filter(pk=claimed[0].pk).update(claim_expires_at=timezone.now() - timedelta(seconds=1))
+        expired = renew_worker_claim(str(run.id), worker_id="lease-owner", lease_seconds=3600)
+        self.assertEqual(expired["renewed_items"], 0)
+        self.assertFalse(expired["expired_claims_resurrected"])
 
     def test_human_needs_revision_is_not_skipped(self):
         notice = self._notice("فراخوان نیازمند اصلاح انسانی")
