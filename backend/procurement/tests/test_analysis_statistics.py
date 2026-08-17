@@ -2,6 +2,7 @@ from datetime import timedelta
 
 from django.contrib.auth import get_user_model
 from django.test import TestCase
+from django.urls import reverse
 from django.utils import timezone
 
 from procurement.analysis_run_service import create_or_resume_run, initialize_run
@@ -79,3 +80,12 @@ class ProcurementAnalysisStatisticsTests(TestCase):
         self.assertEqual(stats["active_run"]["retry_diagnostics"]["claim_lease_expired"], 1)
         self.assertEqual(stats["claim_policy"]["safe_claim_limit"], 50)
         self.assertTrue(stats["claim_policy"]["one_active_package_per_worker"])
+
+        self.client.force_login(self.user)
+        response = self.client.get(reverse("analysis-run-current"))
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("statistics", response.json())
+        self.assertEqual(
+            response.json()["statistics"]["active_run"]["in_run"],
+            {"tender": 1, "inquiry": 1, "total": 2},
+        )
