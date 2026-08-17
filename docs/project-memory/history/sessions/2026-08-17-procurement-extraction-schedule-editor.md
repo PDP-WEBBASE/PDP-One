@@ -23,7 +23,6 @@ Therefore the existing live schedule must not be silently replaced during deploy
 - `saveAutomation()` aborted whenever browser state `automation` was null, even if the database record actually existed.
 - Save depended on the UUID of a settings record first being loaded into browser state.
 - The local schedule fallback was daily `07:30`, not the required `11:00`.
-- `ProcurementWorkspaceV14` is in the active V23→…→V15→V14→V13 render chain and its fetch guard also affects management collection behavior.
 
 ## Implementation
 
@@ -39,10 +38,10 @@ Therefore the existing live schedule must not be silently replaced during deploy
 
 - Schedule save no longer depends on a UUID already loaded into local React state.
 - The fallback form is inactive + daily + 11:00 + 1 hour.
-- Sources, extraction history and automation settings load independently; a failure in one management collection does not blank the others.
-- V14 treats management collection GET failures as independently recoverable and supplies a non-activating daily-11 fallback for unavailable automation-settings reads.
+- Sources, extraction history and automation settings load independently through `Promise.allSettled`; a failure in one management request does not prevent successful sibling requests from populating their panels.
 - After a successful save, the UI uses the actual server response and shows the stored enabled state and next extraction time when available.
 - Saving only persists schedule settings. It does **not** invoke an extraction run; the separate `استخراج اکنون` button remains explicit.
+- `ProcurementWorkspaceV14.tsx` is intentionally left byte-identical to canonical `main`; this repair does not broaden the global fetch-guard behavior.
 
 ## Tests added
 
@@ -56,9 +55,14 @@ Therefore the existing live schedule must not be silently replaced during deploy
 
 ## Concurrency
 
-A same-branch commit `53edc15105c1ddc8beeab62543125f19aaa9dfc8` appeared after the Work Session started and modified `ProcurementWorkspaceV14.tsx` in the same functional area. No separate open `[PDP SESSION]` Issue was found. Its diff was inspected and intentionally integrated because V14 is an active wrapper for V13 and the change complements the requested resilience behavior.
+Two same-branch commits appeared while this Conversation was implementing the work:
 
-Concurrency Check: `OVERLAP → INTEGRATED`.
+1. `53edc15105c1ddc8beeab62543125f19aaa9dfc8` temporarily broadened `ProcurementWorkspaceV14.tsx` fetch-guard behavior into the schedule scope.
+2. `9ad64051450f9772fa190dae85ecef5d1eb3e8f1` explicitly reverted that broadening with message `chore: keep schedule fix scoped to V13 and API`.
+
+No separate open `[PDP SESSION]` Issue was found for that work. The final branch was reconciled by restoring `ProcurementWorkspaceV14.tsx` to the exact blob on `main` (`3a35373000b8379767ca04e6fe69ca4d57d5b34e`). The accepted functional scope is therefore V13 + automation-settings API/tests only.
+
+Concurrency Check: `OVERLAP → RECONCILED / SCOPE RESTORED`.
 
 ## Safety
 
@@ -72,10 +76,10 @@ Concurrency Check: `OVERLAP → INTEGRATED`.
 
 ## Acceptance status
 
-Implementation head before this memory entry: `6a1646d6f00f913056171760c90f4de04fb88599`.
+Functional implementation head before memory/governance-only follow-up commits: `6a1646d6f00f913056171760c90f4de04fb88599`.
 
-- PDP One CI / immutable image workflows: pending final exact-head result after this memory-only commit.
 - Memory Governance initially blocked PR78 because the PR body lacked the required machine-readable Session/Issue/Memory linkage and the code PR had no Project Memory file. This session log and corrected PR metadata resolve that governance defect rather than bypassing the gate.
+- Final exact-head CI / immutable image / Memory Governance: pending after the governance/scoping follow-up commits.
 - Exact runtime deployment/health: pending.
 - Merge: pending.
 
