@@ -4,6 +4,7 @@
 - Date: 2026-08-17
 - Activation: `PDPONE START`
 - GitHub Issue: #59
+- Pull Request: #60
 - Branch: `docs/project-memory-bootstrap-20260817`
 - Starting main: `b99dfedc43c64c00b536bcb625d62499d7f1a4c3`
 - User request: implement the approved canonical Project Memory / live-source / full historical ingestion / multi-chat / automation governance design.
@@ -24,9 +25,7 @@ Result: **PASS with recorded non-blocking drift**.
 
 ## Transfer v10 audit
 
-Source package:
-
-`PDPOne-Transfer-Package-v10.0-2026-07-31`
+Source package: `PDPOne-Transfer-Package-v10.0-2026-07-31`
 
 - ZIP SHA-256: `fac51cd0ee4999b53fcae613c0ca6186a7e3fdcb4e7f99f1c0e606b71a62fff4`
 - ZIP files: 69
@@ -43,45 +42,52 @@ Transfer v10's explicit limitation remains: full raw historical chats are unavai
 Canonical memory captures:
 
 - Transfer DEC-001..013 and supersession history
+- row-level historical Decision, Deployment, Issue/Lesson, Evidence, Backup, Connector, Unverified, GitHub-state and Access records
 - Implementation ACT lineage including V18/V20/V21/V22/V23/V24/V25
-- Issues/lessons and deployment failures/ambiguities
+- deployment failures/ambiguities and build/version-proof lessons
 - historical backup/recovery/startup/connectivity evolution
 - connector acceptance/product decisions
 - GitHub/release/runtime identity separation
-- company résumé/capability source index
-- keyword semantic-analysis policy
-- historical Master Design enterprise domains
+- full historical Keyword Policy reference plus active semantic-analysis interpretation
+- company résumé/capability source index with page provenance
+- historical Master Design enterprise-domain intent
 - post-transfer current-chat PR54–PR58 lineage
 - Hyper Turbo/adaptive admission/newest-first/atomic claim decisions
-- current `PDPONE START` governance decisions
+- current `PDPONE START` and multi-chat governance decisions
 
 ## Files created
 
-Core:
+### Core memory
 - `PDP-ONE-START-HERE.md`
 - `docs/project-memory/README.md`
 - `MANIFEST.json`
 - `CURRENT_STATE.md/.json`
-- Project Charter / Architecture / Operational Topology / Business Rules / Guardrails / Change Protocol / Multi-Chat Coordination / System-of-Record / Backlog / Gaps / Open Questions / Glossary
+- Project Charter / Architecture / Operational Topology / Business Rules / UI and Workflows / Guardrails / Change Protocol / Multi-Chat Coordination / System-of-Record / Backlog / Gaps / Open Questions / Glossary
 
-Source/history:
+### Source/history
 - Source Catalog MD/JSON
 - 69/69 Transfer v10 Coverage Matrix with SHA/status
+- Transfer-v10 row-level Structured Registers
 - Decision Register
 - Timeline
 - Current Chat Coverage Matrix
 - this Session Log
 
-Domain:
-- procurement overview, analysis engine, extraction/connectors, recommendation policy, workflow, direct opportunities
+### Domain
+- procurement overview, analysis engine, extraction/connectors, recommendation policy, workflow, direct opportunities, full Keyword Policy reference
 - infrastructure resource registry, backup/recovery, startup/self-heal, Deployment Agent, MCP/ChatGPT
 - company profile MD/JSON and résumé page index
-- Automation Registry MD/JSON, Runtime Context, Hyper Turbo desired spec
+- Automation Registry MD/JSON, Runtime Context and Hyper Turbo desired specification
 
-GitHub governance:
+### GitHub governance
 - PDP Session Issue template
 - PR template
-- Project Memory governance workflow with JSON/CSV coverage validation and future code-change memory linkage checks
+- Project Memory governance workflow with canonical JSON validation, exactly 69 unique PASS Transfer rows, and future code-change memory-linkage enforcement
+- active-work discovery fallback when dedicated `pdp-*` labels are unavailable
+
+## Dedicated-label limitation
+
+At bootstrap, the repository did not have `pdp-session` / `pdp-active-work` labels and the connected GitHub capability did not expose label creation. The operational fallback is mandatory discovery of **all open Issues titled `[PDP SESSION]` plus all open PRs**. This is documented in `coordination/ACTIVE_WORK_DISCOVERY.md`; absence of labels must never disable concurrency checks.
 
 ## Mutations intentionally NOT performed
 
@@ -101,22 +107,55 @@ Reason: this bootstrap is documentation/governance/CI-control only; live Automat
 - only open `[PDP SESSION]` was Issue #59.
 - Concurrency: CLEAR.
 
-## PR / CI / Merge
+## PR / validation evidence
 
-- PR: **pending at this point; update before session closure**.
-- PR head: **pending final branch head**.
-- Memory governance CI: **pending**.
-- Existing repository CI: **pending**.
-- Application deploy: **not required by scope**.
-- Merge commit: **pending**.
+PR: **#60 — ایجاد حافظه تاریخی و Control Plane چندچتی PDP One**.
+
+Stable validation head before this session-log finalization commit:
+
+`5516930fa5722d3d0807d0b41606214f5545e09d`
+
+Gates on that exact head:
+
+- PDP One Memory Governance run **#6**, workflow run `32031900682`: **success**.
+  - canonical JSON parse: PASS
+  - Transfer Coverage Matrix: exactly 69 unique rows: PASS
+  - all source rows `qa_status=PASS`: PASS
+  - project-memory linkage validation: PASS
+- PDP One CI run **#680**, workflow run `32031900562`: **success**.
+  - secret/destructive-operation guard: success
+  - Windows PowerShell parsing/compatibility: success
+  - frontend install/lint/tests: success
+  - Python syntax/migrations: success
+  - signed deployment queue tests: success
+  - backend tests: success
+  - controlled source-package build steps: success
+- Immutable image build run **#76**, workflow run `32031900797`: **success** for Backend, MCP and Web.
+  - Images were produced automatically by repository workflow and are **not deployed** for this documentation/governance change.
+
+Application deployment: **not required by scope**.
+
+This session-log finalization commit changes the branch head only to record the above evidence; final PR merge requires the same gates to pass again on the resulting final head.
 
 ## Follow-up preserved
 
-- Automation Drift lanes 3/5 disabled.
+- Automation Drift: lanes 3 and 5 disabled.
 - stale open PR45/PR46 disposition.
-- optional future immutable binary Transfer-v10 archive/release asset.
+- optional future immutable binary Transfer-v10 archive/Release asset.
 - actual Hyper Turbo throughput measurement.
+- optional creation of dedicated `pdp-session` / `pdp-active-work` labels through a capability/UI that supports label creation.
+
+## PRE-MERGE requirement
+
+Before PR60 merge:
+
+1. confirm final-head Memory Governance and repository CI are green;
+2. re-read `main` and ensure branch is not stale;
+3. search all open `[PDP SESSION]` Issues and open PRs;
+4. verify no new overlapping session/change appeared;
+5. merge without application deployment;
+6. record final merge evidence in Issue #59 and close the live Session Issue.
 
 ## Definition of Done
 
-This session is not complete until PR/CI/merge evidence is recorded, Project Memory is on `main`, Issue #59 is finalized/closed, and no contradictory concurrent change appeared during PRE-MERGE sync.
+The bootstrap is complete only when PR60 is merged to `main`, final checks are green, no contradictory concurrent change exists, and Issue #59 records the terminal result. The PR itself is the permanent GitHub source for the exact merge commit; deployed runtime remains the independently verified pre-existing exact application commit because this PR does not deploy application code.
