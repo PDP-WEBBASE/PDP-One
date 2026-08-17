@@ -3,100 +3,118 @@
 - Date: 2026-08-17
 - Session: `PDP-SESSION-20260817-MCP-STABILITY`
 - Issue: #61
-- PR: #66
-- Status: **Mitigation implementation in progress — two runtime acceptances failed**
+- Runtime PR: #66
+- Status: **Resolved / live accepted**
+- Resolved at: 2026-08-17 ~20:55 Asia/Tehran
 
-## Symptom reproduced
+## Symptom
 
-During read-only diagnosis, PDP One MCP connectivity alternated between success and failure:
+Connected ChatGPT MCP calls intermittently alternated between success and `mcp_network_error / Connection failed` while PostgreSQL, web/API and the Deployment Agent remained healthy in surrounding checks. The failure was therefore a ChatGPT-facing MCP/public-route stability incident rather than a persistent database/backend outage.
 
-1. a governed MCP read succeeded;
-2. an immediately following read failed with `mcp_network_error / Connection failed`;
-3. a subsequent read succeeded again.
+## Root causes and architecture gaps
 
-At reproduced failures, PostgreSQL/web/API and the signed deployment queue were healthy in surrounding checks. The incident is therefore an intermittent ChatGPT-facing MCP/public-route failure rather than a persistent database/backend outage.
+The incident exposed multiple layers that had to be corrected together:
 
-## Original architecture gaps
+1. the MCP watchdog originally treated a running/stable container as sufficient health;
+2. Stable Startup/public repair did not prove the token-bound MCP route end to end;
+3. the Nginx Streamable HTTP route used a 300-second read timeout;
+4. the MCP SDK dependency was not exact-pinned;
+5. request-scoped SSE responses increased dependence on long-lived response streams;
+6. most importantly, the five-minute self-heal loop could amplify a short **public-only MCP probe miss** into a disruptive nginx/Tailscale recreation even when Docker, local MCP, public web and public API were healthy.
 
-- MCP watchdog treated container state/restart count as sufficient health.
-- Stable Startup checked public web/API but not token-bound MCP.
-- public-route repair could amplify transient external failures into nginx/Tailscale recreation.
-- Nginx Streamable HTTP timeout was 300 seconds.
-- MCP SDK dependency was not exact-pinned.
+The final accepted mitigation therefore treats public-only MCP degradation as observational and non-disruptive rather than a reason to recreate the stable Funnel route.
 
-Historical PR45/PR46 contain useful incident lineage but are obsolete baselines and are not directly merged.
+## Mitigation lineage
 
-## First mitigation and runtime acceptance — FAILED
+### First mitigation — health/route observability
 
-PR66 first added end-to-end MCP `/healthz`, Docker health, token-bound local/public health, 3600-second Streamable HTTP proxy timeouts with buffering/cache disabled, Startup/public checks, route-first self-heal, exact `mcp==1.28.1`, and regression tests.
+PR66 added explicit MCP `/healthz`, Docker MCP health, token-bound local/public health, 3600-second proxy timeouts, disabled MCP proxy buffering/cache, Stable Startup checks, route-first self-heal, exact `mcp==1.28.1`, and regression tests.
 
-Exact first deployment:
+First exact deployment:
 
 - commit: `cf99960c7b1155c9c9f0a04fff70f40b40ed7460`
 - deployment: `mcp-stability-cf99960c-20260817`
-- deployment request: `b1f0d773-0c1c-4d9d-b177-dae91ed59ad8`
+- deploy request: `b1f0d773-0c1c-4d9d-b177-dae91ed59ad8`
 - independent health request: `73037eb8-553f-4aac-b190-75b111c64df4`
-- deployment result: healthy
-- independent health: healthy
-- business baseline: PostgreSQL connected, contracts 10, receivables 3
 
-After several successful real MCP calls, a connected `get_system_status` call again failed with `mcp_network_error / Connection failed`, followed by a successful call. PR66 was correctly left unmerged.
+Deployment/health passed, but a later real Connected MCP call reproduced the intermittent network failure. Acceptance failed and PR66 remained unmerged.
 
-## Second mitigation — stateful JSON POST responses
+### Second mitigation — stateful JSON responses
 
-The pinned FastMCP v1.28.1 implementation creates its Streamable HTTP session manager lazily and supports `json_response`/`stateless_http` settings. PR66 therefore configured:
+FastMCP v1.28.1 was configured before `mcp.run()` with:
 
-- `mcp.settings.json_response = True` before `mcp.run()` so POST tool responses are short-lived JSON instead of request-scoped SSE response streams;
-- `mcp.settings.stateless_http = False` so the guarded stateful session model remains enabled.
+- `mcp.settings.json_response = True`;
+- `mcp.settings.stateless_http = False`.
 
-Exact second deployment:
+This preserved stateful Streamable HTTP while making POST tool responses short-lived JSON instead of request-scoped SSE response streams.
+
+Second exact deployment:
 
 - commit: `f364f0564379a3cd3c16c07e6d0f3a925f881c0b`
 - deployment: `mcp-stability-json-f364f056-20260817`
-- deployment request: `2dcba6e7-3371-48ec-b1cf-12ef1e2d8f23`
-- deployment result: healthy
+- deploy request: `2dcba6e7-3371-48ec-b1cf-12ef1e2d8f23`
 - independent health request: `2717cbf7-3d9a-4e8d-9597-3d860b011148`
-- independent health result: healthy
 
-During the independent health window, the Connected MCP route became unavailable for several minutes and then recovered while the layered health request itself completed successfully. `Test-PDPOne.ps1` does not recreate services/routes, so the drop was not caused by that health command. This second acceptance also failed and PR66 remained unmerged.
+Deployment/health passed, but Connected MCP became unavailable for several minutes during acceptance and later recovered. Acceptance failed again and PR66 remained unmerged.
 
-## Third mitigation — prevent self-heal from amplifying public-only transients
+### Third mitigation — non-disruptive self-heal hysteresis
 
-Source audit identified a high-risk feedback loop in the scheduled self-heal architecture:
+The accepted final policy is:
 
-- `PDP One MCP Self Heal` runs every five minutes;
-- when Docker + local token-bound MCP are healthy, the watchdog still probes the public MCP route;
-- two failed public observations could send a healthy local installation into `Repair-PDPOneConnectivity.ps1`;
-- that repair path could recreate nginx/Tailscale, turning a short external probe miss into a multi-minute ChatGPT disconnect.
+- if Docker health and the local token-bound MCP route are healthy, a confirmed **public-only** MCP probe failure is recorded as `degraded_observed` and the watchdog exits without recreating nginx, Tailscale or MCP;
+- public connectivity repair uses three observations before disruptive action;
+- if public web + session API are healthy while only public MCP is degraded, preserve the existing Funnel route and return `public_mcp_health=degraded`;
+- nginx/Tailscale recreation is reserved for repeatedly confirmed full public web/API route failure or genuine local route/service failure;
+- Stable Startup treats public-MCP-only degradation as a warning while preserving the healthy local MCP/web/API/data path;
+- no token rotation, Tailscale identity reset, DB mutation, Docker volume operation or local application build is part of the fix.
 
-PR66 now changes the policy:
+## Final exact deployment and acceptance
 
-1. The five-minute MCP watchdog treats a confirmed **public-only** MCP failure as observational degradation. If Docker health and local token-bound MCP are healthy, it writes `healthy_local_public_degraded_observed` and exits without route/container recreation.
-2. Public connectivity repair now requires three observations before disruptive action.
-3. If public web + session API are healthy and only the public MCP probe is degraded, the existing Funnel route is preserved and the result is returned as `public_mcp_health=degraded`.
-4. nginx/Tailscale recreation remains available only for repeatedly confirmed full public web/API route failure, or for local route/service failures where repair is actually warranted.
-5. Stable Startup accepts the non-disruptive MCP-only degraded observation as a warning while keeping local MCP, web/API, data and token continuity healthy.
-6. No token rotation, local image build, Docker volume operation, DB mutation, or Tailscale identity reset is introduced.
+Accepted exact production commit:
 
-## Concurrency coordination
+`ee4095e2d9afca030e4bda4eff9608d6a1e8138b`
 
-A second active Session #68 / PR67 began while PR66 was in acceptance. PR66 and PR67 have no changed-file overlap but share the same old base, so exact deployments could overwrite each other's runtime changes. Session #68 was explicitly instructed to hold PR67 deployment until PR66 completes/merges; PR67 must then refresh onto the new main and rerun its gates before deployment.
+Deployment evidence:
 
-## Acceptance still required
+- deployment ID: `mcp-stability-hysteresis-ee4095e2-20260817`
+- deploy request: `a05290f2-a168-483d-a26c-7781eff977b7`
+- deploy result: `succeeded / healthy`
+- independent health request: `457e3555-3fab-44f3-8c8f-f29e4362f084`
+- independent health result: `succeeded / healthy`
+- change-management mode: `development_fast`
+- automatic rollback: not used / not available in development-fast
 
-Before closing this incident:
+Live Connected MCP acceptance:
 
-- third-mitigation exact-head CI + Windows PowerShell 5.1 success;
-- immutable Backend/MCP/Web images success;
-- PRE-DEPLOY concurrency sync;
-- third exact-commit deployment;
-- independent layered health;
-- extended repeated **real Connected MCP calls across multiple watchdog periods** with zero `mcp_network_error`;
-- contracts remain 10 and receivables remain 3;
-- PRE-MERGE sync;
-- merge only the accepted exact PR head;
-- final Project Memory/session synchronization.
+- acceptance window: **more than 11 minutes**;
+- spanned more than two five-minute watchdog periods;
+- initial post-health real reads: PASS;
+- checkpoint after >5 minutes: **6/6** Connected MCP reads PASS;
+- final checkpoint after >10 minutes: **8/8** Connected MCP reads PASS;
+- zero `mcp_network_error` / `Connection failed` outside the expected deployment restart window;
+- final PostgreSQL state: connected;
+- contracts: **10**;
+- receivables: **3**;
+- Deployment Agent pending requests: **0**.
 
-## Safety
+The final runtime PR was merged only after this acceptance passed.
 
-No token rotation, database mutation, Docker volume change, Tailscale identity reset, Rancher reset, WSL destructive action, or local application image build is authorized by this incident.
+## Merge identity
+
+- exact deployed PR66 head: `ee4095e2d9afca030e4bda4eff9608d6a1e8138b`
+- PR66 merge SHA: `7cc0c025cec69dbe161acb56cedf832f63867c38`
+
+These are intentionally separate identities. Production was accepted on the exact PR head; the merge commit is the canonical GitHub lineage after acceptance.
+
+## Concurrency resolution
+
+Session #68 / PR67 overlapped in deployment timing but not MCP source files. Because exact deployment replaces the full image set, PR67 was placed in SEQUENCE/HOLD while PR66 completed live acceptance. After PR66 merge, PR67 must refresh onto the new `main`, rerun exact-head CI + immutable images, and only then perform a new PRE-DEPLOY sync/deployment. Old-base PR67 heads must not be deployed over the accepted PR66 runtime.
+
+## Permanent safety constraints
+
+- No automatic MCP token rotation during startup/recovery.
+- No Tailscale identity reset as a troubleshooting reflex.
+- No Rancher Factory Reset / WSL unregister / VHDX deletion.
+- No Docker volume prune or business-data mutation.
+- No local application image build.
+- Real Connected MCP traffic remains a required post-deployment acceptance layer; `/healthz` alone is not sufficient proof of ChatGPT-facing stability.
