@@ -264,6 +264,16 @@ async function fetchRecord<T>(path: string): Promise<T> {
   return response.json() as Promise<T>;
 }
 
+async function fetchAutomationSettings(): Promise<ApiAutomationSettings | null> {
+  try {
+    return await fetchRecord<ApiAutomationSettings>(`${PROCUREMENT_API}/automation-settings/default/`);
+  } catch (error) {
+    if (!(error instanceof Error) || error.message !== "api-404") throw error;
+    const items = await fetchCollection<ApiAutomationSettings>(`${PROCUREMENT_API}/automation-settings/`);
+    return items[0] || null;
+  }
+}
+
 async function csrfToken() {
   const response = await fetch(`${API_BASE}/auth/session/`, { credentials: "include", headers: { Accept: "application/json" } });
   if (!response.ok) throw new Error("session-unavailable");
@@ -274,6 +284,16 @@ async function csrfToken() {
 function connectorSummaryNumber(run: ApiExtractionRun, connector: ApiConnector, key: string, fallback: number) {
   const value = run.summary?.connectors?.[connector.key]?.[key];
   return typeof value === "number" ? value : fallback;
+}
+
+function scheduleFromAutomation(current: ScheduleState, settings: ApiAutomationSettings): ScheduleState {
+  return {
+    ...current,
+    enabled: settings.enabled,
+    cadence: settings.cadence,
+    dailyTime: settings.daily_time?.slice(0, 5) || "11:00",
+    intervalHours: Math.max(1, Math.round(settings.interval_minutes / 60)),
+  };
 }
 
 export default function ProcurementWorkspaceV13() {
@@ -295,7 +315,7 @@ export default function ProcurementWorkspaceV13() {
   const [sources, setSources] = useState<ApiSource[]>([]);
   const [extractionRuns, setExtractionRuns] = useState<ApiExtractionRun[]>([]);
   const [automation, setAutomation] = useState<ApiAutomationSettings | null>(null);
-  const [schedule, setSchedule] = useState<ScheduleState>({ enabled:false, cadence:"daily", dailyTime:"07:30", intervalHours:1, lookbackDays:7 });
+  const [schedule, setSchedule] = useState<ScheduleState>({ enabled:false, cadence:"daily", dailyTime:"11:00", intervalHours:1, lookbackDays:7 });
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState("");
   const [selectingNoticeIds, setSelectingNoticeIds] = useState<Set<string>>(() => new Set());
@@ -377,24 +397,11 @@ export default function ProcurementWorkspaceV13() {
       }).catch(() => undefined);
     };
     const updateManagement = () => {
-      void Promise.all([
-        fetchCollection<ApiSource>(`${PROCUREMENT_API}/sources/`),
-        fetchCollection<ApiExtractionRun>(`${PROCUREMENT_API}/extraction-runs/?ordering=-created_at`),
-        fetchCollection<ApiAutomationSettings>(`${PROCUREMENT_API}/automation-settings/`),
-      ]).then(([sourceItems, runItems, automationItems]) => {
-        setSources(sourceItems);
-        setExtractionRuns(runItems);
-        const currentAutomation = automationItems[0] || null;
+      void fetchCollection<ApiSource>(`${PROCUREMENT_API}/sources/`).then(setSources).catch(() => undefined);
+      void fetchCollection<ApiExtractionRun>(`${PROCUREMENT_API}/extraction-runs/?ordering=-created_at`).then(setExtractionRuns).catch(() => undefined);
+      void fetchAutomationSettings().then((currentAutomation) => {
         setAutomation(currentAutomation);
-        if (currentAutomation) {
-          setSchedule((current) => ({
-            ...current,
-            enabled: currentAutomation.enabled,
-            cadence: currentAutomation.cadence,
-            dailyTime: currentAutomation.daily_time?.slice(0,5) || "07:30",
-            intervalHours: Math.max(1, Math.round(currentAutomation.interval_minutes / 60)),
-          }));
-        }
+        if (currentAutomation) setSchedule((current) => scheduleFromAutomation(current, currentAutomation));
       }).catch(() => undefined);
     };
     const updateBulkWorkspace = () => {
@@ -425,34 +432,37 @@ export default function ProcurementWorkspaceV13() {
     let active = true;
 
     async function loadManagementData() {
-      try {
-        const [sourceItems, runItems, automationItems] = await Promise.all([
-          fetchCollection<ApiSource>(`${PROCUREMENT_API}/sources/`),
-          fetchCollection<ApiExtractionRun>(`${PROCUREMENT_API}/extraction-runs/?ordering=-created_at`),
-          fetchCollection<ApiAutomationSettings>(`${PROCUREMENT_API}/automation-settings/`),
-        ]);
-        if (!active) return;
-        const currentAutomation = automationItems[0] || null;
-        setSources(sourceItems);
-        setExtractionRuns(runItems);
+      const [sourceResult, runResult, automationResult] = await Promise.allSettled([
+        fetchCollection<ApiSource>(`${PROCUREMENT_API}/sources/`),
+        fetchCollection<ApiExtractionRun>(`${PROCUREMENT_API}/extraction-runs/?ordering=-created_at`),
+        fetchAutomationSettings(),
+      ]);
+      if (!active) return;
+
+      let failures = 0;
+      if (sourceResult.status === "fulfilled") setSources(sourceResult.value);
+      else failures += 1;
+
+      if (runResult.status === "fulfilled") setExtractionRuns(runResult.value);
+      else failures += 1;
+
+      if (automationResult.status === "fulfilled") {
+        const currentAutomation = automationResult.value;
         setAutomation(currentAutomation);
-        if (currentAutomation) {
-          setSchedule((current) => ({
-            ...current,
-            enabled: currentAutomation.enabled,
-            cadence: currentAutomation.cadence,
-            dailyTime: currentAutomation.daily_time?.slice(0,5) || "07:30",
-            intervalHours: Math.max(1, Math.round(currentAutomation.interval_minutes / 60)),
-          }));
-        }
-      } catch {
-        if (!active) return;
+        if (currentAutomation) setSchedule((current) => scheduleFromAutomation(current, currentAutomation));
+      } else {
+        failures += 1;
+      }
+
+      if (failures) {
         managementLoadVersion.current = -1;
-        setMessage("اطلاعات مدیریت زیرسامانه موقتاً بارگذاری نشد؛ سایر بخش‌ها فعال‌اند.");
+        setMessage(failures === 3
+          ? "اطلاعات مدیریت زیرسامانه موقتاً بارگذاری نشد؛ سایر بخش‌ها فعال‌اند."
+          : "بخشی از اطلاعات مدیریت زیرسامانه موقتاً بارگذاری نشد؛ بخش‌های سالم همچنان قابل استفاده‌اند.");
       }
     }
 
-    loadManagementData();
+    void loadManagementData();
     return () => { active = false; };
   }, [tab, mode, refresh]);
 
@@ -653,31 +663,35 @@ export default function ProcurementWorkspaceV13() {
   }
 
   async function saveAutomation() {
-    if (!automation) {
-      notify("رکورد تنظیمات خودکارسازی در پایگاه‌داده پیدا نشد.");
+    if (schedule.cadence === "daily" && !schedule.dailyTime) {
+      notify("برای برنامه روزانه، ساعت استخراج را تعیین کنید.");
       return;
     }
+    const intervalHours = Number.isFinite(schedule.intervalHours)
+      ? Math.min(168, Math.max(1, Math.round(schedule.intervalHours)))
+      : 1;
     setBusy("automation");
     try {
       const token = await csrfToken();
-      const response = await fetch(`${PROCUREMENT_API}/automation-settings/${automation.id}/`, {
+      const response = await fetch(`${PROCUREMENT_API}/automation-settings/default/`, {
         method: "PATCH",
         credentials: "include",
         headers: { "Content-Type": "application/json", "X-CSRFToken": token, Accept: "application/json" },
         body: JSON.stringify({
           enabled: schedule.enabled,
           cadence: schedule.cadence,
-          interval_minutes: Math.max(1, schedule.intervalHours) * 60,
-          daily_time: schedule.cadence === "daily" ? schedule.dailyTime : automation.daily_time,
-          timezone_name: automation.timezone_name || "Asia/Tehran",
-          analysis_delay_minutes: automation.analysis_delay_minutes,
+          interval_minutes: intervalHours * 60,
+          daily_time: schedule.cadence === "daily" ? schedule.dailyTime : null,
         }),
       });
-      const payload = await response.json();
+      const payload = await response.json() as Partial<ApiAutomationSettings> & { detail?: string } & Record<string, unknown>;
       if (response.status === 401 || response.status === 403) throw new Error("فقط مدیر سیستم اجازه تغییر زمان‌بندی را دارد.");
       if (!response.ok) throw new Error(payload.detail || Object.values(payload).flat().join(" ") || "ذخیره تنظیمات انجام نشد.");
-      setAutomation(payload as ApiAutomationSettings);
-      notify("تنظیمات واقعی استخراج ذخیره شد.");
+      const saved = payload as ApiAutomationSettings;
+      setAutomation(saved);
+      setSchedule((current) => scheduleFromAutomation(current, saved));
+      notify("زمان‌بندی استخراج ذخیره شد. ذخیره تنظیمات، استخراج فوری اجرا نمی‌کند.");
+      emitProcurementUiSync({ source:"workspace-v13", management:true });
     } catch (error) {
       notify(error instanceof Error ? error.message : "ذخیره تنظیمات انجام نشد.");
     } finally {
@@ -865,7 +879,7 @@ export default function ProcurementWorkspaceV13() {
         {managementView === "extraction" && <div style={{display:"grid",gap:14}}>
           <article className={styles.panel}><div className={styles.sectionHeading}><div><span>داده واقعی</span><h2>منابع استخراج</h2></div><small>{fa.format(enabledConnectors.length)} Connector فعال</small></div><div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(260px,1fr))",gap:12}}>{sources.map((source) => <section key={source.id} style={{border:"1px solid #e2e8f0",borderRadius:14,padding:12,background:"#f8fafc"}}><div style={{display:"flex",justifyContent:"space-between",gap:8}}><strong>{source.name}</strong><small>{source.enabled ? "فعال" : "غیرفعال"}</small></div><div style={{display:"grid",gap:8,marginTop:10}}>{source.connectors.map((connector) => <label key={connector.id} style={{display:"flex",alignItems:"center",gap:8,padding:9,borderRadius:10,background:connector.enabled ? "#ecfdf5" : "#fff7ed"}}><input type="checkbox" checked={connector.enabled} disabled={updatingConnector === connector.id} onChange={() => toggleConnector(source.id,connector)} /><span>{connector.notice_type_label}</span><small style={{marginInlineStart:"auto"}}>{updatingConnector === connector.id ? "در حال ذخیره" : connector.status_label}</small></label>)}</div></section>)}</div>{!sources.length && <div className={styles.empty}>هیچ منبعی در پایگاه‌داده ثبت نشده است.</div>}</article>
           <div className={styles.managementGrid}>
-            <article className={styles.panel}><h2>زمان‌بندی استخراج افزایشی</h2><div className={styles.scheduleGrid}><label>وضعیت<select value={schedule.enabled ? "enabled" : "disabled"} onChange={(event) => setSchedule({...schedule,enabled:event.target.value === "enabled"})}><option value="enabled">فعال</option><option value="disabled">غیرفعال</option></select></label><label>نوع برنامه<select value={schedule.cadence} onChange={(event) => setSchedule({...schedule,cadence:event.target.value as "daily" | "hourly"})}><option value="daily">روزانه</option><option value="hourly">ساعتی</option></select></label>{schedule.cadence === "daily" ? <label>ساعت روزانه<input type="time" value={schedule.dailyTime} onChange={(event) => setSchedule({...schedule,dailyTime:event.target.value})} /></label> : <label>هر چند ساعت<input type="number" min="1" max="168" value={schedule.intervalHours} onChange={(event) => setSchedule({...schedule,intervalHours:Number(event.target.value)})} /></label>}</div><p>اجرای روزانه، ساعتی و «استخراج اکنون» افزایشی هستند. وضعیت فعلی: {automation?.enabled ? "فعال" : "غیرفعال"}.</p><div className={styles.actions}><button className={styles.secondaryButton} disabled={busy === "automation"} onClick={saveAutomation}>{busy === "automation" ? "در حال ذخیره..." : "ذخیره زمان‌بندی"}</button><button className={styles.primaryButton} disabled={busy === "extract-incremental" || Boolean(activeRun)} onClick={() => runExtraction("incremental")}>{activeRun ? "استخراج در حال اجراست" : busy === "extract-incremental" ? "در حال ثبت..." : "استخراج اکنون"}</button></div></article>
+            <article className={styles.panel}><h2>زمان‌بندی استخراج افزایشی</h2><div className={styles.scheduleGrid}><label>وضعیت<select value={schedule.enabled ? "enabled" : "disabled"} onChange={(event) => setSchedule({...schedule,enabled:event.target.value === "enabled"})}><option value="enabled">فعال</option><option value="disabled">غیرفعال</option></select></label><label>نوع برنامه<select value={schedule.cadence} onChange={(event) => setSchedule({...schedule,cadence:event.target.value as "daily" | "hourly"})}><option value="daily">روزانه</option><option value="hourly">ساعتی</option></select></label>{schedule.cadence === "daily" ? <label>ساعت روزانه<input type="time" value={schedule.dailyTime} onChange={(event) => setSchedule({...schedule,dailyTime:event.target.value})} /></label> : <label>هر چند ساعت<input type="number" min="1" max="168" value={schedule.intervalHours} onChange={(event) => setSchedule({...schedule,intervalHours:Number(event.target.value)})} /></label>}</div><p>اجرای روزانه، ساعتی و «استخراج اکنون» افزایشی هستند. وضعیت ذخیره‌شده: {automation ? (automation.enabled ? "فعال" : "غیرفعال") : "هنوز دریافت/ثبت نشده"}{automation?.next_extraction_at ? ` · اجرای بعدی: ${formatDateTime(automation.next_extraction_at)}` : ""}.</p><p>تغییرات فقط با «ذخیره زمان‌بندی» اعمال می‌شوند؛ ذخیره کردن، استخراج فوری اجرا نمی‌کند.</p><div className={styles.actions}><button className={styles.secondaryButton} disabled={busy === "automation"} onClick={saveAutomation}>{busy === "automation" ? "در حال ذخیره..." : "ذخیره زمان‌بندی"}</button><button className={styles.primaryButton} disabled={busy === "extract-incremental" || Boolean(activeRun)} onClick={() => runExtraction("incremental")}>{activeRun ? "استخراج در حال اجراست" : busy === "extract-incremental" ? "در حال ثبت..." : "استخراج اکنون"}</button></div></article>
             <article className={styles.panel}><h2>استخراج دستی بازه گذشته</h2><label>تعداد روز گذشته<input type="number" min="1" max="365" value={schedule.lookbackDays} onChange={(event) => setSchedule({...schedule,lookbackDays:Number(event.target.value)})} /></label><p>در این حالت رسیدن به داده مشترک باعث توقف نمی‌شود و کل بازه تعیین‌شده دوباره بررسی می‌شود.</p><button className={styles.primaryButton} disabled={busy === "extract-manual_range" || Boolean(activeRun)} onClick={() => runExtraction("manual_range")}>{activeRun ? "استخراج در حال اجراست" : busy === "extract-manual_range" ? "در حال ثبت..." : "اجرای بازه‌دار"}</button></article>
           </div>
         </div>}
