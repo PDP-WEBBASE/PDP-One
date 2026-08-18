@@ -42,6 +42,7 @@ test("Windows startup and self-heal validate MCP without amplifying public-only 
   const startup = await load("../scripts/windows/Start-PDPOne.ps1");
   const repair = await load("../scripts/windows/Repair-PDPOneConnectivity.ps1");
   const watchdog = await load("../scripts/windows/Ensure-PDPOneMcpHealthy.ps1");
+  const startupTask = await load("../scripts/windows/Register-PDPOneStartupTask.ps1");
 
   assert.match(startup, /local_mcp_health/);
   assert.match(startup, /public_mcp_health/);
