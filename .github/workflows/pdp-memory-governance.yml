@@ -1,17 +1,15 @@
-name: PDP One Memory Governance
+name: PDP One Public Boundary Governance
 
 on:
   pull_request:
     types: [opened, synchronize, reopened, edited, ready_for_review]
 
 permissions:
-  actions: read
   contents: read
-  issues: write
   pull-requests: read
 
 jobs:
-  memory-governance:
+  public-boundary:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -19,196 +17,78 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Validate canonical memory machine files
-        shell: bash
-        run: |
-          set -euo pipefail
-          python - <<'PY'
-          import csv
-          import json
-          from pathlib import Path
-
-          json_files = [
-              Path('docs/project-memory/MANIFEST.json'),
-              Path('docs/project-memory/CURRENT_STATE.json'),
-              Path('docs/project-memory/sources/SOURCE_CATALOG.json'),
-              Path('docs/project-memory/automations/AUTOMATION_REGISTRY.json'),
-              Path('docs/project-memory/company-knowledge/COMPANY_PROFILE.json'),
-          ]
-          for path in json_files:
-              with path.open('r', encoding='utf-8') as fh:
-                  json.load(fh)
-              print(f'JSON PASS: {path}')
-
-          coverage = Path('docs/project-memory/sources/TRANSFER_V10_COVERAGE_MATRIX.csv')
-          with coverage.open('r', encoding='utf-8', newline='') as fh:
-              rows = list(csv.DictReader(fh))
-          if len(rows) != 69:
-              raise SystemExit(f'Coverage matrix must contain exactly 69 source rows, found {len(rows)}')
-          if any(row.get('qa_status') != 'PASS' for row in rows):
-              raise SystemExit('Coverage matrix contains non-PASS source rows')
-          if len({row['source_path'] for row in rows}) != 69:
-              raise SystemExit('Coverage matrix contains duplicate source_path entries')
-          print('Transfer v10 coverage PASS: 69/69 unique source rows')
-          PY
-
-      - name: Validate PDP project-memory linkage
+      - name: Validate public/private repository boundary
         shell: bash
         env:
-          PR_BODY: ${{ github.event.pull_request.body }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
           set -euo pipefail
-
           git diff --name-only "$BASE_SHA" "$HEAD_SHA" > /tmp/pdp-changed-files.txt
           echo "Changed files:"
           cat /tmp/pdp-changed-files.txt
 
-          governance_only=true
-          while IFS= read -r path; do
-            case "$path" in
-              PDP-ONE-START-HERE.md|docs/project-memory/*|.github/ISSUE_TEMPLATE/*|.github/pull_request_template.md|.github/workflows/pdp-memory-governance.yml)
-                ;;
-              *)
-                governance_only=false
-                ;;
-            esac
-          done < /tmp/pdp-changed-files.txt
+          python - <<'PY'
+          import os
+          from pathlib import Path
 
-          if [[ "$governance_only" == "true" ]]; then
-            echo "Governance/documentation-only PR: memory linkage gate PASS."
-            exit 0
-          fi
+          pr_number = int(os.environ['PR_NUMBER'])
+          changed = [line.strip() for line in Path('/tmp/pdp-changed-files.txt').read_text(encoding='utf-8').splitlines() if line.strip()]
 
+          # Transitional exception only for the already-open migration-baseline PRs.
+          # New application PRs must not write canonical private Project Memory here.
+          legacy_memory_prs = {83, 84, 86}
+          memory_changes = [p for p in changed if p.startswith('docs/project-memory/')]
+          if memory_changes and pr_number not in legacy_memory_prs:
+              raise SystemExit(
+                  'Canonical Project Memory has moved to the private control repository. '
+                  'New application PRs must not modify docs/project-memory/**.'
+              )
+
+          forbidden_exact = {
+              '.env',
+              '.env.local',
+              '.env.production',
+              '.env.development',
+              'id_rsa',
+              'id_ed25519',
+          }
+          forbidden_suffixes = ('.pem', '.p12', '.pfx', '.key', '.pdpone')
+          sensitive_paths = []
+          for path in changed:
+              name = Path(path).name.lower()
+              if path in forbidden_exact or name in forbidden_exact or name.endswith(forbidden_suffixes):
+                  sensitive_paths.append(path)
+          if sensitive_paths:
+              raise SystemExit('Sensitive/private file types must not be committed to the public application repository: ' + ', '.join(sensitive_paths))
+
+          # Public workflows must never be wired directly to the private control repository.
+          for workflow in Path('.github/workflows').glob('*.y*ml'):
+              text = workflow.read_text(encoding='utf-8')
+              if 'PDP-One-Control' in text:
+                  raise SystemExit(f'{workflow}: public workflow must not reference the private control repository')
+              if 'pull_request_target:' in text:
+                  raise SystemExit(f'{workflow}: pull_request_target is not allowed in PDP One public workflows')
+
+          print('Public/private repository boundary PASS')
+          PY
+
+      - name: Validate public-safe PR metadata
+        shell: bash
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          set -euo pipefail
           body="${PR_BODY:-}"
-          if ! grep -Eiq 'PDP Session:[[:space:]]*[^[:space:]]+' <<<"$body"; then
-            echo "ERROR: code/runtime PR must identify a PDP Session in the PR body."
+          if grep -Eiq '(PDP_MCP_TOKEN|PDP_MCP_PATH_TOKEN|POSTGRES_PASSWORD|DJANGO_SECRET_KEY|PDP_DEPLOYMENT_AGENT_SIGNING_KEY|Authorization:[[:space:]]*Bearer)' <<<"$body"; then
+            echo "ERROR: PR body appears to contain private credential/configuration material."
             exit 1
           fi
-          if ! grep -Eiq 'Active-work Issue:[[:space:]]*[^[:space:]]+' <<<"$body"; then
-            echo "ERROR: code/runtime PR must identify its active-work/session Issue."
-            exit 1
-          fi
-          if ! grep -Eiq 'Memory update included:[[:space:]]*(yes|no|n/a)' <<<"$body"; then
-            echo "ERROR: PR body must declare Memory update included: yes/no/N/A."
-            exit 1
-          fi
+          echo "Public-safe PR metadata PASS"
 
-          if ! grep -Eq '^docs/project-memory/|^PDP-ONE-START-HERE.md$' /tmp/pdp-changed-files.txt; then
-            echo "ERROR: code/runtime PR must include a Project Memory update, or be split/reframed through an explicitly governed exception."
-            exit 1
-          fi
-
-          echo "PDP Project Memory linkage PASS."
-
-  connector-readable-gates:
-    needs: memory-governance
-    if: always()
-    runs-on: ubuntu-latest
-    timeout-minutes: 35
-    env:
-      MEMORY_RESULT: ${{ needs.memory-governance.result }}
-    steps:
-      - name: Publish exact-head gate evidence to active session issue
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const owner = context.repo.owner;
-            const repo = context.repo.repo;
-            const prNumber = context.payload.pull_request.number;
-            const prBody = context.payload.pull_request.body || '';
-            const activeIssueMatch = prBody.match(/Active-work Issue:\s*#?(\d+)/i);
-            const evidenceIssue = activeIssueMatch ? Number(activeIssueMatch[1]) : prNumber;
-            const sha = context.payload.pull_request.head.sha;
-            const headRef = context.payload.pull_request.head.ref;
-            const eventUpdatedAt = Date.parse(context.payload.pull_request.updated_at || new Date().toISOString());
-            const memorySuccess = process.env.MEMORY_RESULT === 'success';
-            const marker = `<!-- pdp-gate-report:${sha} -->`;
-
-            const upsertEvidence = async (lines) => {
-              const comments = await github.paginate(github.rest.issues.listComments, {
-                owner,
-                repo,
-                issue_number: evidenceIssue,
-                per_page: 100,
-              });
-              const existing = comments.find((comment) => typeof comment.body === 'string' && comment.body.includes(marker));
-              const body = [marker, ...lines].join('\n');
-              if (existing) {
-                await github.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body });
-              } else {
-                await github.rest.issues.createComment({ owner, repo, issue_number: evidenceIssue, body });
-              }
-            };
-
-            await upsertEvidence([
-              '### PDP One exact-head gate report',
-              `- PR: #${prNumber}`,
-              `- Exact head: \`${sha}\``,
-              `- Memory Governance: **${process.env.MEMORY_RESULT}**`,
-              '- PDP One CI: **pending**',
-              '- Build immutable PDP One images: **pending**',
-              '- Overall: **PENDING**',
-            ]);
-
-            const required = [
-              { workflow: 'PDP One CI' },
-              { workflow: 'Build immutable PDP One images' },
-            ];
-            const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-            let selected = new Map();
-
-            for (let attempt = 0; attempt < 140; attempt += 1) {
-              const response = await github.rest.actions.listWorkflowRunsForRepo({
-                owner,
-                repo,
-                branch: headRef,
-                event: 'pull_request',
-                per_page: 100,
-              });
-
-              selected = new Map();
-              for (const gate of required) {
-                const candidates = response.data.workflow_runs
-                  .filter((run) => {
-                    if (run.name !== gate.workflow || run.event !== 'pull_request' || run.head_branch !== headRef) return false;
-                    const prs = Array.isArray(run.pull_requests) ? run.pull_requests : [];
-                    const exactPr = prs.find((pr) => pr.number === prNumber);
-                    if (!exactPr) return false;
-                    if (exactPr.head?.sha) return exactPr.head.sha === sha;
-                    return Date.parse(run.created_at) >= eventUpdatedAt - 60000;
-                  })
-                  .sort((a, b) => b.id - a.id);
-                if (candidates.length > 0) selected.set(gate.workflow, candidates[0]);
-              }
-
-              const allCompleted = required.every((gate) => {
-                const run = selected.get(gate.workflow);
-                return run && run.status === 'completed';
-              });
-              if (allCompleted) break;
-              await sleep(15000);
-            }
-
-            let failed = !memorySuccess;
-            const finalLines = [
-              '### PDP One exact-head gate report',
-              `- PR: #${prNumber}`,
-              `- Exact head: \`${sha}\``,
-              `- Memory Governance: **${process.env.MEMORY_RESULT}**`,
-            ];
-
-            for (const gate of required) {
-              const run = selected.get(gate.workflow);
-              const success = Boolean(run && run.status === 'completed' && run.conclusion === 'success');
-              if (!success) failed = true;
-              const summary = run ? `${run.status}/${run.conclusion || 'none'} (run ${run.id})` : 'not-found';
-              finalLines.push(`- ${gate.workflow}: **${summary}**`);
-            }
-            finalLines.push(`- Overall: **${failed ? 'FAIL' : 'PASS'}**`);
-            await upsertEvidence(finalLines);
-
-            if (failed) {
-              core.setFailed('One or more required exact-head PDP One workflow gates did not complete successfully.');
-            }
+      - name: Boundary summary
+        shell: bash
+        run: |
+          echo "Canonical internal memory and acceptance evidence are maintained outside this public application repository."
+          echo "Exact CI/build/deployment acceptance is coordinated through the private PDP One control plane."
