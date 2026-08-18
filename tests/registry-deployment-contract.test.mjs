@@ -47,7 +47,8 @@ test("development-fast deployment performs only bounded connectivity recovery be
   assert.match(compose, /pdp-funnel-dns-bootstrap-v1\.done/);
   assert.match(compose, /funnel reset/);
   assert.match(compose, /funnel --bg --yes 80/);
-  assert.match(compose, /touch "\$sentinel"/);
+  assert.match(compose, /\$\$\(\(attempt \+ 1\)\)/);
+  assert.match(compose, /touch "\$\$sentinel"/);
   assert.doesNotMatch(compose, /tailscale\s+logout/);
   assert.doesNotMatch(compose, /tailscale\s+down/);
 });
