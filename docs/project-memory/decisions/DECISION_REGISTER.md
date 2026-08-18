@@ -127,8 +127,8 @@ This register preserves decisions across chats. Old decisions are not erased; th
 
 ### DEC-027 — Historical Hyper Turbo capacity design
 - Decision at PR58: backlog >=20k targets 8 lanes; 10k–19,999 targets 6; 5k–9,999 targets 4; 1k–4,999 targets 2; below 1k primary lane with reduced claim count. Only Lane 1 may create an incremental run when no run exists; auxiliary lanes must not cancel/restart runs.
-- Status: **Historical capacity design; superseded for throughput scaling by DEC-042 while its lane-role lineage remains relevant**.
-- Live bootstrap-day observation: lanes 3 and 5 were disabled, leaving six enabled lanes. This observation remains historical evidence; live automation state must always be verified before changes.
+- Status: **Desired policy with current live drift**.
+- Live bootstrap-day observation: lanes 3 and 5 were disabled, leaving six enabled lanes. This observation is historical/cached; live automation state must be verified before changes.
 
 ### DEC-028 — Do not cancel active long-running analysis for unrelated UI work
 - Decision: UI/debug/deployment work must not destroy the active procurement analysis run merely to simplify troubleshooting.
@@ -186,7 +186,7 @@ This register preserves decisions across chats. Old decisions are not erased; th
 
 ### DEC-039 — Persistent per-Conversation context with Delta Sync
 - Decision: initial activation builds one compact Conversation baseline. Subsequent instructions and PRE-WRITE/PRE-DEPLOY/PRE-MERGE checkpoints use lightweight change detection and load only relevant GitHub/Session/PR/Runtime/Automation deltas.
-- If nothing relevant changed, reuse the conversation's already-loaded context. If unrelated changes landed, advance the baseline without loading unrelated history.
+- If nothing relevant changed, reuse cached context. If unrelated changes landed, advance the baseline without loading unrelated history.
 - Full canonical reload is exceptional: core governance/schema/architecture changes, unreconcilable baseline drift, very large relevant deltas, or explicit full-resync request.
 - Protocol: `docs/project-memory/coordination/DELTA_SYNC_PROTOCOL.md`.
 - Status: **Active**.
@@ -206,16 +206,6 @@ This register preserves decisions across chats. Old decisions are not erased; th
 - Allowed hard-navigation/reload exceptions are limited to real route/subsystem navigation, authentication/session recovery, explicit emergency connectivity recovery, or loading a newly deployed client when required.
 - ADR: `docs/project-memory/decisions/ADR-041-WEB-UI-NO-RELOAD.md`.
 - Status: **Active hard UX/architecture rule**.
-
-### DEC-042 — Adaptive package-cycle analysis throughput
-- Decision: preserve bounded in-flight analysis safety (`safe package <=50`, global active-claim cap 400, one in-flight package per worker) and scale backlog clearance through repeated **Claim → semantic analysis → validated Import → next Claim** cycles rather than giant claims.
-- Raw Remaining and Effective Remaining are distinct. An open `explicit_reanalysis` row may be reconciled to `SKIPPED` only when an exact same-content/same-Context valid draft or compact result already exists and human review did not request revision; history is preserved.
-- Capacity goals are adaptive: >=50k effective targets 20k/hour; >=40k 10k/hour; >=20k 7.5k/hour; >=10k 4k/hour; >=5k 2k/hour; >=1k 1k/hour; below 1k 400/hour maintenance. Backend may reduce package cycles under lease-expiry/error backpressure.
-- Every claimed item still receives semantic Context-based analysis; compact fast-pass output is permitted for clear non-fit cases while recommended/urgent/ambiguous/needs-information/high-score records remain detailed/deep-analysis candidates. Keyword-only deterministic scoring remains prohibited.
-- Current execution architecture remains ChatGPT Scheduled Tasks + PDP One MCP. No separate OpenAI API/provider/server-side model worker is introduced by this decision; such a worker pool requires a later explicit cost/security/provider decision.
-- Throughput targets are acceptance goals, not guarantees; only measured imported/completed rate and lease/error/backlog evidence can establish actual sustainable throughput.
-- ADR: `docs/project-memory/decisions/ADR-042-ADAPTIVE-ANALYSIS-THROUGHPUT.md`.
-- Status: **Active design; runtime acceptance pending exact deploy/live Automation update**.
 
 ## Conflict precedence
 
