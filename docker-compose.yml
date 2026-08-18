@@ -134,6 +134,27 @@ services:
     depends_on:
       nginx:
         condition: service_started
+    post_start:
+      - command:
+          - /bin/sh
+          - -ec
+          - |
+            sentinel=/var/lib/tailscale/pdp-funnel-dns-bootstrap-v1.done
+            if [ -f "$sentinel" ]; then
+              exit 0
+            fi
+            attempt=0
+            until tailscale --socket=/tmp/tailscaled.sock status >/dev/null 2>&1; do
+              attempt=$((attempt + 1))
+              if [ "$attempt" -ge 30 ]; then
+                echo "tailscaled did not become ready for bounded Funnel bootstrap repair" >&2
+                exit 1
+              fi
+              sleep 2
+            done
+            tailscale --socket=/tmp/tailscaled.sock funnel reset >/dev/null 2>&1 || true
+            tailscale --socket=/tmp/tailscaled.sock funnel --bg --yes 80 >/dev/null
+            touch "$sentinel"
 
 volumes:
   postgres_data:
