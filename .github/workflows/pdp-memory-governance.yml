@@ -63,12 +63,16 @@ jobs:
           if sensitive_paths:
               raise SystemExit('Sensitive/private file types must not be committed to the public application repository: ' + ', '.join(sensitive_paths))
 
+          # Construct forbidden identifiers so this validator does not flag its own source text.
+          private_control_identifier = 'PDP-One-' + 'Control'
+          forbidden_event = 'pull_request' + '_target:'
+
           # Public workflows must never be wired directly to the private control repository.
           for workflow in Path('.github/workflows').glob('*.y*ml'):
               text = workflow.read_text(encoding='utf-8')
-              if 'PDP-One-Control' in text:
+              if private_control_identifier in text:
                   raise SystemExit(f'{workflow}: public workflow must not reference the private control repository')
-              if 'pull_request_target:' in text:
+              if forbidden_event in text:
                   raise SystemExit(f'{workflow}: pull_request_target is not allowed in PDP One public workflows')
 
           print('Public/private repository boundary PASS')
