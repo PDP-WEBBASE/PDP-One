@@ -23,9 +23,13 @@ test("recommended coverage remains canonical without full background prefetch", 
   assert.match(pagination, /page_size/);
   assert.match(backendView, /latest_effective_recommended_notice_ids/);
   assert.match(backendView, /NoticeAnalysisDraft/);
-  assert.match(backendView, /RowNumber/);
+  assert.match(backendView, /Exists\(newer_draft\)/);
+  assert.match(backendView, /analyzed_at__gt=OuterRef\("analyzed_at"\)/);
+  assert.match(backendView, /created_at__gt=OuterRef\("created_at"\)/);
+  assert.match(backendView, /id__gt=OuterRef\("id"\)/);
+  assert.match(backendView, /has_newer_draft=False/);
   assert.match(backendView, /ReviewStatus\.REJECTED/);
-  assert.match(backendView, /recommendation_rank=1/);
+  assert.match(backendView, /Subquery\(latest_effective_recommended_notice_ids\(\)\)/);
 });
 
 test("recent lists keep the three-day label while the server owns the date filter", () => {
