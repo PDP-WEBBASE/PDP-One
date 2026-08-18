@@ -144,6 +144,8 @@ $report = [ordered]@{
     automatic_rollback_enabled = $false
     production_changed = $false
     health_profile = "short"
+    connectivity_repair_attempted = $false
+    connectivity_repair_succeeded = $false
     active_images = $currentImages
     retained_previous_images = $previousImages
     error = $null
@@ -270,9 +272,33 @@ try {
 
     $publicBase = [string](Get-PDPOneEnvValue -Path $envPath -Name "PDP_PUBLIC_BASE_URL")
     if (-not [string]::IsNullOrWhiteSpace($publicBase)) {
-        $publicHealth = Test-PDPOnePublicHealth -Url ($publicBase.TrimEnd('/') + "/healthz") -TimeoutSeconds 25
+        $publicHealthUrl = $publicBase.TrimEnd('/') + "/healthz"
+        $publicHealth = Test-PDPOnePublicHealth -Url $publicHealthUrl -TimeoutSeconds 25
         if (-not [bool]$publicHealth.Success) {
-            throw "Short public health check failed: $($publicHealth.Detail)"
+            $repairScript = Join-Path $projectRoot "scripts\windows\Repair-PDPOneConnectivity.ps1"
+            if (Test-Path -LiteralPath $repairScript) {
+                $report.stage = "repairing-public-connectivity"
+                $report.connectivity_repair_attempted = $true
+                $report | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $reportPath -Encoding UTF8
+                try {
+                    & powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File $repairScript `
+                        -ProjectRoot $projectRoot `
+                        -RepairAttempts 1 `
+                        -PublicCheckTimeoutSeconds 25 `
+                        -TransientConfirmDelaySeconds 5 `
+                        -DnsPublicationTimeoutSeconds 90 `
+                        -DnsPollIntervalSeconds 10 | Out-Null
+                } catch {
+                    Write-Warning "Bounded public-connectivity repair raised an error; final public health will decide deployment acceptance."
+                }
+                $report.stage = "short-health-check"
+                $publicHealth = Test-PDPOnePublicHealth -Url $publicHealthUrl -TimeoutSeconds 25
+                $report.connectivity_repair_succeeded = [bool]$publicHealth.Success
+                $report | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $reportPath -Encoding UTF8
+            }
+        }
+        if (-not [bool]$publicHealth.Success) {
+            throw "Short public health check failed after bounded connectivity recovery: $($publicHealth.Detail)"
         }
     }
 
