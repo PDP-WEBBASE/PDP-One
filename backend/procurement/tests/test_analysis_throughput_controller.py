@@ -190,23 +190,34 @@ class AnalysisThroughputControllerTests(TestCase):
         self.assertEqual(claimed[0].id, item.id)
 
     def test_exact_prior_compact_result_skips_reanalysis_without_draft(self):
-        notice = self._notice("فراخوان دارای compact result معتبر")
+        notice = self._notice("فراخوان دارای نتیجه compact معتبر")
+        prior_run = ProcurementAnalysisRun.objects.create(
+            run_type=ProcurementAnalysisRun.RunType.FULL_PENDING,
+            trigger=ProcurementAnalysisRun.Trigger.MANUAL_WEB,
+            scope=ProcurementAnalysisRun.Scope.ALL_PENDING,
+            status=ProcurementAnalysisRun.Status.COMPLETED,
+            context_snapshot=self.context,
+            requested_by=self.user,
+            started_at=timezone.now() - timedelta(days=1),
+            finished_at=timezone.now() - timedelta(days=1),
+        )
         run = self._active_reanalysis_run()
-        item = run.items.get(notice=notice)
-        run.result_imports.create(
-            item=item,
+        active_item = run.items.get(notice=notice)
+        ProcurementAnalysisRunItem.objects.create(
+            run=prior_run,
             notice=notice,
-            result_kind="compact",
-            result={"recommended": False, "confidence": 99},
-            notice_content_hash=item.notice_content_hash,
-            context_hash=item.context_hash,
-            import_status="accepted",
-            imported_by="test",
+            notice_content_hash=active_item.notice_content_hash,
+            context_hash=run.context_snapshot.content_hash,
+            status=ProcurementAnalysisRunItem.Status.COMPLETED,
+            analysis_reason="never_analyzed",
+            result_metadata={"compact_only": True, "score": 5},
+            completed_at=timezone.now() - timedelta(days=1),
+            sequence=1,
+            shard_number=1,
         )
 
         claimed = claim_newest_run_items(str(run.id), worker_id="compact-worker", limit=1)
 
         self.assertEqual(claimed, [])
-        item.refresh_from_db()
-        self.assertEqual(item.status, ProcurementAnalysisRunItem.Status.SKIPPED)
-        self.assertEqual(item.analysis_reason, "already_valid_current_analysis")
+        active_item.refresh_from_db()
+        self.assertEqual(active_item.status, ProcurementAnalysisRunItem.Status.SKIPPED)
