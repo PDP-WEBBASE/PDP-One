@@ -6,7 +6,7 @@ param(
     [int]$RepairAttempts = 2,
     [int]$PublicCheckTimeoutSeconds = 35,
     [int]$TransientConfirmDelaySeconds = 10,
-    [int]$DnsPublicationTimeoutSeconds = 120,
+    [int]$DnsPublicationTimeoutSeconds = 60,
     [int]$DnsPollIntervalSeconds = 10
 )
 
@@ -68,7 +68,7 @@ function Wait-PDPOnePublicDnsPublication {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)][string]$HostName,
-        [int]$TimeoutSeconds = 120,
+        [int]$TimeoutSeconds = 60,
         [int]$PollIntervalSeconds = 10
     )
 
