@@ -5,7 +5,9 @@ param(
     [string]$ProjectRoot = "",
     [int]$RepairAttempts = 2,
     [int]$PublicCheckTimeoutSeconds = 35,
-    [int]$TransientConfirmDelaySeconds = 10
+    [int]$TransientConfirmDelaySeconds = 10,
+    [int]$DnsPublicationTimeoutSeconds = 120,
+    [int]$DnsPollIntervalSeconds = 10
 )
 
 $ErrorActionPreference = "Stop"
@@ -62,6 +64,31 @@ function Get-FunnelStatusText {
     return [string]$command.Text
 }
 
+function Wait-PDPOnePublicDnsPublication {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string]$HostName,
+        [int]$TimeoutSeconds = 120,
+        [int]$PollIntervalSeconds = 10
+    )
+
+    $deadline = (Get-Date).AddSeconds([Math]::Max(10, $TimeoutSeconds))
+    do {
+        $addresses = @(Get-PDPOnePublicIPv4Addresses -HostName $HostName)
+        if ($addresses.Count -gt 0) { return $true }
+        Start-Sleep -Seconds ([Math]::Max(2, $PollIntervalSeconds))
+    } while ((Get-Date) -lt $deadline)
+    return $false
+}
+
+function Reset-PDPOneFunnelRegistration {
+    Write-Host "The Funnel hostname is not published in public DNS. Resetting only the Funnel configuration and registering it again ..." -ForegroundColor Yellow
+    $reset = Invoke-PDPOneConnectivityDockerCompose -Arguments @("--profile", "tunnel", "exec", "-T", "tailscale", "tailscale", "--socket=/tmp/tailscaled.sock", "funnel", "reset") -FailureMessage "The stale Funnel configuration could not be reset." -IgnoreFailure -Quiet
+    if ($reset.ExitCode -ne 0) { return $false }
+    $register = Invoke-PDPOneConnectivityDockerCompose -Arguments @("--profile", "tunnel", "exec", "-T", "tailscale", "tailscale", "--socket=/tmp/tailscaled.sock", "funnel", "--bg", "--yes", "80") -FailureMessage "The Funnel could not be registered again." -IgnoreFailure -Quiet
+    return $register.ExitCode -eq 0
+}
+
 function Restart-PDPOnePublicRoute {
     Write-Host "Recreating nginx and Tailscale after a repeatedly confirmed full public-route failure ..." -ForegroundColor Yellow
     $repair = Invoke-PDPOneConnectivityDockerCompose -Arguments @("--profile", "tunnel", "up", "--detach", "--no-build", "--pull", "never", "--force-recreate", "nginx", "tailscale") -FailureMessage "The nginx/Tailscale route could not be recreated." -IgnoreFailure -Quiet
@@ -111,6 +138,8 @@ $result = [ordered]@{
     local_dns_degraded = $false
     transient_failure_rechecked = $false
     public_confirmation_count = 0
+    public_dns_state = "pending"
+    funnel_registration_reset = $false
     repair_attempts = 0
     completed_at = $null
 }
@@ -172,6 +201,33 @@ for ($attempt = 1; $attempt -le [Math]::Max(1, $RepairAttempts); $attempt++) {
     }
 
     $candidateUrl = $urlMatch.Value.TrimEnd('/')
+    $candidateHost = ([Uri]$candidateUrl).Host
+
+    # "Funnel on" is configuration state, not proof that the public hostname
+    # has been published. A stale persisted Funnel configuration can survive a
+    # reboot while public DNS returns NXDOMAIN. Wait for bounded publication,
+    # then reset/re-register only Funnel once per startup run. This preserves
+    # the Tailscale node identity, MCP token, nginx and all application data.
+    if (-not (Wait-PDPOnePublicDnsPublication -HostName $candidateHost -TimeoutSeconds $DnsPublicationTimeoutSeconds -PollIntervalSeconds $DnsPollIntervalSeconds)) {
+        $result.public_dns_state = "unpublished"
+        if (-not $result.funnel_registration_reset) {
+            $result.funnel_registration_reset = $true
+            if (Reset-PDPOneFunnelRegistration) {
+                if (Wait-PDPOnePublicDnsPublication -HostName $candidateHost -TimeoutSeconds $DnsPublicationTimeoutSeconds -PollIntervalSeconds $DnsPollIntervalSeconds) {
+                    $result.public_dns_state = "published_after_funnel_reset"
+                } else {
+                    Write-Host "The Funnel registration was refreshed, but its hostname is still absent from public DNS." -ForegroundColor Yellow
+                }
+            }
+        }
+        if ($result.public_dns_state -eq "unpublished") {
+            Start-Sleep -Seconds 3
+            continue
+        }
+    } else {
+        $result.public_dns_state = "published"
+    }
+
     $checks = Test-PublicPdpEndpoints -BaseUrl $candidateUrl
     $result.public_confirmation_count = 1
 
