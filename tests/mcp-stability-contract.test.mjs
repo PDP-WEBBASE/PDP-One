@@ -76,7 +76,7 @@ test("Windows startup and self-heal validate MCP without amplifying public-only 
   assert.doesNotMatch(repair, /"tailscale", "(?:down|logout|up)"/);
 
   assert.match(startupTask, /RestartCount 1/);
-  assert.match(startupTask, /RestartInterval \\(New-TimeSpan -Minutes 5\\)/);
+  assert.match(startupTask, /RestartInterval \(New-TimeSpan -Minutes 5\)/);
   assert.doesNotMatch(startupTask, /RestartCount 20/);
 
   assert.match(watchdog, /\.State\.Health/);
