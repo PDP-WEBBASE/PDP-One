@@ -16,11 +16,16 @@ jobs:
       - name: Reject secrets and destructive volume operations
         shell: bash
         run: |
-          if rg -n '(ghp_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|sk-[A-Za-z0-9_-]{20,}|tskey-[A-Za-z0-9_-]{20,})' --glob '!package-lock.json' .; then
+          set -euo pipefail
+          command -v grep >/dev/null 2>&1 || {
+            echo 'Required grep command is unavailable; refusing to skip security scans.' >&2
+            exit 2
+          }
+          if grep -R -nE --exclude-dir=.git --exclude=package-lock.json '(ghp_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|sk-[A-Za-z0-9_-]{20,}|tskey-[A-Za-z0-9_-]{20,})' .; then
             echo 'A value resembling a secret was found.' >&2
             exit 1
           fi
-          if rg -n '(docker\s+compose\s+down\s+-v|docker\s+volume\s+rm|docker\s+system\s+prune.*--volumes)' scripts/windows *.bat docker-compose.yml; then
+          if grep -R -nE '(docker[[:space:]]+compose[[:space:]]+down[[:space:]]+-v|docker[[:space:]]+volume[[:space:]]+rm|docker[[:space:]]+system[[:space:]]+prune.*--volumes)' scripts/windows ./*.bat docker-compose.yml; then
             echo 'A forbidden destructive volume operation was found.' >&2
             exit 1
           fi
