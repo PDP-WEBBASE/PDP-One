@@ -32,6 +32,28 @@ test("OCI revision labels are parsed without a quoted Go-template key on Windows
 });
 
 
+test("development-fast deployment performs only bounded connectivity recovery before public-health failure", async () => {
+  const registryDeploy = await readFile(new URL("../scripts/windows/Invoke-PDPOneRegistryFastDeployment.ps1", import.meta.url), "utf8");
+  const compose = await readFile(new URL("../docker-compose.yml", import.meta.url), "utf8");
+
+  assert.match(registryDeploy, /Repair-PDPOneConnectivity\.ps1/);
+  assert.match(registryDeploy, /-RepairAttempts 1/);
+  assert.match(registryDeploy, /-DnsPublicationTimeoutSeconds 90/);
+  assert.match(registryDeploy, /connectivity_repair_attempted/);
+  assert.match(registryDeploy, /connectivity_repair_succeeded/);
+  assert.match(registryDeploy, /Short public health check failed after bounded connectivity recovery/);
+
+  assert.match(compose, /post_start:/);
+  assert.match(compose, /pdp-funnel-dns-bootstrap-v1\.done/);
+  assert.match(compose, /funnel reset/);
+  assert.match(compose, /funnel --bg --yes 80/);
+  assert.match(compose, /\$\$\(\(attempt \+ 1\)\)/);
+  assert.match(compose, /touch "\$\$sentinel"/);
+  assert.doesNotMatch(compose, /tailscale\s+logout/);
+  assert.doesNotMatch(compose, /tailscale\s+down/);
+});
+
+
 test("PDP One caps cache, rotates logs, retains active, previous, and in-flight images, and disables Kubernetes", async () => {
   const guard = await readFile(new URL("../scripts/windows/Invoke-PDPOneDiskGuard.ps1", import.meta.url), "utf8");
   const compose = await readFile(new URL("../docker-compose.yml", import.meta.url), "utf8");
