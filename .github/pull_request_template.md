@@ -1,50 +1,38 @@
-## PDP One change context
+## PDP One application change
 
-- PDP Session:
-- Active-work Issue:
-- User activation: `PDPONE START`
-- Starting main SHA:
-- Exact head SHA:
+- Public change summary:
+- Governed in private PDP One control plane: yes/no
+- Starting application `main` SHA:
+- Exact PR head SHA:
 
 ## Scope
 
 - Affected modules:
 - Affected files:
-- Relevant decisions:
-- Concurrent work checked: yes/no
-- Conflict result: CLEAR / OVERLAP + resolution
+- User-visible behavior:
+- Concurrent application PR overlap checked: yes/no
 
 ## Impact
 
-- Runtime impact: none / describe
-- Database impact: none / describe
-- Migration: none / describe
-- Automation impact: none / describe
-- Security/secrets impact: none / describe
+- Runtime impact: none / public-safe summary
+- Database schema impact: none / public-safe summary
+- Automation impact: none / public-safe summary
+- Security impact: none / public-safe summary
+
+Do **not** put private Session details, private Issue numbers, MCP/private URLs or tokens, runtime credentials, backup locators, company-private knowledge or sensitive incident evidence in this public PR.
 
 ## Verification
 
 - CI:
 - Tests:
 - Immutable images required: yes/no
-- Deployment mode: development_fast / standard / none
-- Exact deployed SHA, if applicable:
-- Deployment ID / request, if applicable:
-- Independent health, if applicable:
-
-## Project Memory
-
-- Memory update included: yes/no/N/A with reason
-- Session log:
-- Timeline updated: yes/no/N/A
-- Decision/ADR updated: yes/no/N/A
-- Current State updated: yes/no/N/A
-- Automation Registry updated: yes/no/N/A
-- Backlog/Gaps updated: yes/no/N/A
+- Exact application head verified: yes/no
+- Runtime/deployment acceptance: tracked privately when applicable
 
 ## Safety
 
-- [ ] No secret/token/private MCP URL committed.
-- [ ] Merge SHA is not represented as deployed exact SHA unless independently proven identical.
+- [ ] No secret/token/private MCP URL or `.env` content committed.
+- [ ] No private-control repository credential/reference is embedded in a public workflow.
 - [ ] No destructive Docker volume / WSL / Rancher reset action is hidden in this PR.
+- [ ] Merge SHA is not represented as deployed exact SHA without independent proof.
 - [ ] AI/financial/contract draft semantics remain governed where applicable.
