@@ -16,10 +16,13 @@ type CacheWindow = Window & {
   __pdpNavigationReadCacheInstalled?: boolean;
   __pdpNavigationReadPreviousFetch?: typeof window.fetch;
   __pdpNavigationReadCache?: Map<string, StoredResponse>;
+  __pdpNavigationForceRefreshUntil?: number;
 };
 
 const API_PREFIX = "/api/v1/procurement/";
 const CACHE_TTL_MS = 5 * 60 * 1000;
+const DYNAMIC_CACHE_TTL_MS = 60 * 1000;
+const FORCE_REFRESH_WINDOW_MS = 2000;
 const MAX_CACHE_ENTRIES = 80;
 const MAX_ENTRY_BYTES = 2 * 1024 * 1024;
 const MUTATING_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
@@ -30,6 +33,16 @@ const SPECIALIZED_LIST_PATHS = new Set([
   `${API_PREFIX}extraction-runs/`,
   `${API_PREFIX}dashboard/`,
 ]);
+const DYNAMIC_PATH_MARKERS = [
+  "/analysis-requests/",
+  "/analysis-drafts/",
+  "/analysis/review-summary/",
+  "/analysis/context/manifest/",
+  "/management-dashboard/",
+  "/run-status/",
+  "/runs/",
+];
+const REFRESH_LABEL = /(بازخوانی|تازه\s*سازی|به\s*روزرسانی|تلاش مجدد|refresh)/i;
 
 function requestMethod(input: RequestInfo | URL, init?: RequestInit) {
   return (init?.method || (input instanceof Request ? input.method : "GET")).toUpperCase();
@@ -95,6 +108,14 @@ function isCacheableProcurementGet(url: URL) {
     && !SPECIALIZED_LIST_PATHS.has(url.pathname);
 }
 
+function ttlForPath(pathname: string) {
+  return DYNAMIC_PATH_MARKERS.some((marker) => pathname.includes(marker)) ? DYNAMIC_CACHE_TTL_MS : CACHE_TTL_MS;
+}
+
+function forceRefreshActive() {
+  return Date.now() <= ((window as CacheWindow).__pdpNavigationForceRefreshUntil || 0);
+}
+
 async function storeJsonResponse(key: string, response: Response) {
   if (!response.ok) return;
   const contentType = response.headers.get("content-type") || "";
@@ -140,9 +161,10 @@ function installNavigationReadCache() {
 
     const key = original.toString();
     const mode = requestCacheMode(input, init);
-    if (mode !== "reload" && mode !== "no-store") {
+    const forceRefresh = mode === "reload" || forceRefreshActive();
+    if (!forceRefresh) {
       const cached = readCache().get(key);
-      if (cached && Date.now() - cached.storedAt <= CACHE_TTL_MS) {
+      if (cached && Date.now() - cached.storedAt <= ttlForPath(original.pathname)) {
         readCache().delete(key);
         readCache().set(key, cached);
         return cachedResponse(cached);
@@ -151,7 +173,7 @@ function installNavigationReadCache() {
     }
 
     const response = await previousFetch(input, init);
-    if (mode !== "no-store") void storeJsonResponse(key, response);
+    void storeJsonResponse(key, response);
     return response;
   };
 }
@@ -166,12 +188,20 @@ export default function ProcurementNavigationReadCache() {
       clearAll();
     };
     const onAnalysisSync = () => clearAnalysisContextEntries();
+    const onClickCapture = (event: MouseEvent) => {
+      const button = (event.target as HTMLElement | null)?.closest("button");
+      if (!button || !REFRESH_LABEL.test((button.textContent || "").trim())) return;
+      (window as CacheWindow).__pdpNavigationForceRefreshUntil = Date.now() + FORCE_REFRESH_WINDOW_MS;
+      clearAll();
+    };
 
     window.addEventListener(PROCUREMENT_UI_SYNC_EVENT, onProcurementSync);
     window.addEventListener(ANALYSIS_CONTEXT_SYNC_EVENT, onAnalysisSync);
+    document.addEventListener("click", onClickCapture, true);
     return () => {
       window.removeEventListener(PROCUREMENT_UI_SYNC_EVENT, onProcurementSync);
       window.removeEventListener(ANALYSIS_CONTEXT_SYNC_EVENT, onAnalysisSync);
+      document.removeEventListener("click", onClickCapture, true);
     };
   }, []);
 
