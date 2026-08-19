@@ -43,7 +43,7 @@ test("PDP One publishes or reuses immutable content-addressed component images o
   assert.match(bake, /pdp-one-web:content-\$\{WEB_FINGERPRINT\}/);
   assert.equal((bake.match(/"org\.opencontainers\.image\.revision"\s+= RELEASE_SHA/g) || []).length, 3);
   assert.equal((bake.match(/"io\.pdpone\.component\.fingerprint"/g) || []).length, 3);
-  assert.equal((bake.match(/"io\.pdpone\.component"/g) || []).length, 6);
+  assert.equal((bake.match(/"io\.pdpone\.component"/g) || []).length, 3);
   assert.match(bake, /cache-from = \["type=gha,scope=pdp-one-backend"\]/);
   assert.match(bake, /cache-to\s+= \["type=gha,mode=max,scope=pdp-one-web"\]/);
   assert.match(bake, /PDP_BUILD_ID\s+= "content-\$\{WEB_FINGERPRINT\}"/);
