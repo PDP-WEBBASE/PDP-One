@@ -137,6 +137,63 @@ class SessionFetcherBase:
         )
 
 
+class HezarehSessionFetcher(SessionFetcherBase):
+    """Use one ordinary public cookie session for a complete Hezareh connector run.
+
+    This does not solve or bypass a CAPTCHA/security challenge. It only avoids
+    presenting every list/detail request as a brand-new browser-less visitor and
+    preserves cookies issued by the public site during normal navigation.
+    """
+
+    HOME_URL = "https://www.hezarehinfo.net/"
+
+    def __init__(self, *, allowed_host: str, timeout_seconds: int, retry_count: int):
+        super().__init__(
+            allowed_host=allowed_host,
+            timeout_seconds=timeout_seconds,
+            retry_count=retry_count,
+        )
+        self.session_initialized = False
+
+    def _ensure_session(self) -> None:
+        if self.session_initialized:
+            return
+        request = Request(
+            self.HOME_URL,
+            headers={
+                "User-Agent": USER_AGENT,
+                "Accept": "text/html,application/xhtml+xml",
+            },
+        )
+        self._fetch(
+            request,
+            expected_content_types={"text/html", "application/xhtml+xml"},
+            safe_url=self.HOME_URL,
+        )
+        self.session_initialized = True
+
+    def _fetch_html(self, url: str) -> FetchedPage:
+        self._ensure_session()
+        request = Request(
+            url,
+            headers={
+                "User-Agent": USER_AGENT,
+                "Accept": "text/html,application/xhtml+xml",
+                "Referer": self.HOME_URL,
+            },
+        )
+        return self._fetch(
+            request,
+            expected_content_types={"text/html", "application/xhtml+xml"},
+        )
+
+    def fetch_list(self, page_number: int, page_url: str) -> FetchedPage:
+        return self._fetch_html(page_url)
+
+    def fetch_detail(self, detail_url: str) -> FetchedPage:
+        return self._fetch_html(detail_url)
+
+
 class SetadEtendFetcher(SessionFetcherBase):
     INDEX_URL = "https://etend.setadiran.ir/etend/index.action"
     WELCOME_URL = "https://etend.setadiran.ir/etend/welcome.action"
@@ -291,6 +348,8 @@ def fetcher_for(connector, *, allowed_host: str):
         "timeout_seconds": connector.timeout_seconds,
         "retry_count": connector.retry_count,
     }
+    if connector.key in {"hezareh_tenders", "hezareh_inquiries"}:
+        return HezarehSessionFetcher(**options)
     if connector.key == "setad_tenders":
         return SetadEtendFetcher(rows=connector.page_size_hint or 30, **options)
     if connector.key == "setad_inquiries":

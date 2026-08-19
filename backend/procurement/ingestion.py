@@ -178,16 +178,27 @@ def ingest_parsed_notice(
         defaults={**source_values, "first_seen_at": now},
     )
     if created:
-        item_status = ExtractionRunItem.Status.NEW
         changed_fields = list(source_values.keys())
+        semantic_changed_fields = changed_fields
+        item_status = ExtractionRunItem.Status.NEW
     else:
+        previous_content_hash = source_notice.content_hash
         changed_fields = _changed_fields(source_notice, source_values)
-        item_status = ExtractionRunItem.Status.UPDATED if changed_fields else ExtractionRunItem.Status.DUPLICATE
+        semantic_changed = previous_content_hash != payload["content_hash"]
+        semantic_changed_fields = changed_fields if semantic_changed else []
+        item_status = (
+            ExtractionRunItem.Status.UPDATED
+            if semantic_changed
+            else ExtractionRunItem.Status.DUPLICATE
+        )
         for field, value in source_values.items():
             setattr(source_notice, field, value)
         source_notice.save(update_fields=SOURCE_FIELDS + ["updated_at"])
 
-    if created or changed_fields:
+    # Source list-page movement and raw capture drift are useful latest-state evidence,
+    # but they are not a semantic notice revision. The stable normalized content hash
+    # is the boundary that determines whether downstream analysis must be invalidated.
+    if created or semantic_changed_fields:
         next_revision = (
             source_notice.revisions.aggregate(maximum=Max("revision_number"))["maximum"] or 0
         ) + 1
@@ -197,7 +208,7 @@ def ingest_parsed_notice(
             content_hash=payload["content_hash"],
             raw_payload=payload["raw_payload"],
             parsed_payload=payload,
-            changed_fields=changed_fields,
+            changed_fields=semantic_changed_fields,
             parser_version=connector.parser_version,
             captured_at=now,
         )
@@ -265,7 +276,7 @@ def ingest_parsed_notice(
             page_number=page_number,
             position=parsed.position,
             status=item_status,
-            changed_fields=changed_fields,
+            changed_fields=semantic_changed_fields,
         )
 
     return source_notice, notice, item_status

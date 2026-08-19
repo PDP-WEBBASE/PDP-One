@@ -72,7 +72,10 @@ class ProcurementSeedTests(TestCase):
         self.assertEqual(tenders.status, ProcurementConnector.Status.ACTIVE)
         self.assertEqual(inquiries.status, ProcurementConnector.Status.ACTIVE)
         self.assertEqual(tenders.parser_version, "setad-etend-json-v1")
-        self.assertEqual(inquiries.parser_version, "setad-eproc-needs-html-v1")
+        self.assertEqual(
+            inquiries.parser_version,
+            "setad-eproc-needs-html-v2-semantic-boundary",
+        )
         self.assertFalse(tenders.requires_browser)
         self.assertFalse(inquiries.requires_browser)
         self.assertFalse(tenders.supports_detail)
