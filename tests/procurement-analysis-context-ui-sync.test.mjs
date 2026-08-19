@@ -19,6 +19,8 @@ test("analysis settings modal is explicit and no longer hijacks section-tab clic
 test("analysis settings render inline inside the extraction and analysis tools flow", () => {
   assert.match(v23, /ProcurementAnalysisContextInlineEnhancement/);
   assert.match(inline, /createPortal/);
+  assert.match(inline, /activeAnalysisTarget/);
+  assert.match(inline, /button\.className/);
   assert.match(inline, /"نقش و Prompt": "prompts"/);
   assert.match(inline, /"کلیدواژه‌ها": "keywords"/);
   assert.match(inline, /"پروفایل، صلاحیت و رزومه": "company"/);
@@ -27,8 +29,9 @@ test("analysis settings render inline inside the extraction and analysis tools f
 });
 
 test("active analysis content has a fast independent bootstrap and version history is deferred", () => {
+  assert.match(manager, /bootstrapActive/);
   assert.match(manager, /\/analysis\/context\/active\//);
-  assert.match(manager, /analysis-contexts\/\?status=draft&ordering=-version&page_size=1/);
+  assert.doesNotMatch(manager, /analysis-contexts\/\?status=draft&ordering=-version&page_size=1/);
   assert.match(manager, /section !== "versions" \|\| versionsLoaded/);
   assert.match(manager, /analysis-contexts\/\?ordering=-version&page_size=50/);
   assert.match(manager, /analysis-contexts\/create-draft\//);
