@@ -43,3 +43,15 @@ test("startup task retries immediately on Windows network connection and keeps a
   assert.match(task, /MultipleInstances IgnoreNew/);
   assert.match(task, /StartWhenAvailable/);
 });
+
+test("deployed startup source self-applies the versioned host task policy once", async () => {
+  const startup = await load("../scripts/windows/Start-PDPOne.ps1");
+
+  assert.match(startup, /startup-task-policy\.version/);
+  assert.match(startup, /2026-08-19-network-recovery-v1/);
+  assert.match(startup, /Register-PDPOneStartupTask\.ps1/);
+  assert.match(startup, /installedPolicyVersion -ne \$startupPolicyVersion/);
+  assert.match(startup, /startup_task_policy = "updated"/);
+  assert.match(startup, /startup_task_policy = "current"/);
+  assert.match(startup, /startup_task_policy_warning/);
+});
