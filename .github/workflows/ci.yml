@@ -1,12 +1,17 @@
 name: PDP One CI
 
 on:
-  push:
-    branches: [main]
   pull_request:
 
 permissions:
   contents: read
+
+# The protected main branch accepts changes through up-to-date PRs. CI therefore
+# validates the exact PR head and does not repeat the same suite after merge.
+# Newer commits on the same PR cancel superseded runs.
+concurrency:
+  group: pdp-one-ci-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
 
 jobs:
   verify:

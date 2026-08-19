@@ -2,23 +2,31 @@ name: Build immutable PDP One images
 
 on:
   pull_request:
-  push:
-    branches: [main]
+    paths-ignore:
+      - ".github/**"
+      - "docs/**"
+      - "**/*.md"
+      - "scripts/windows/**"
+      - "release/**"
+      - "tests/**"
 
 permissions:
   contents: read
   packages: write
 
+# Only the newest head of a PR needs immutable images. Superseded heads are
+# intentionally cancelled so rapid follow-up commits do not keep three stale
+# backend/MCP/web builds running in parallel.
 concurrency:
-  group: pdp-one-images-${{ github.event.pull_request.head.sha || github.sha }}
+  group: pdp-one-images-pr-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
 env:
-  IMAGE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+  IMAGE_SHA: ${{ github.event.pull_request.head.sha }}
 
 jobs:
   build-and-push:
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    if: github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -42,7 +50,7 @@ jobs:
             image: ghcr.io/pdp-webbase/pdp-one-web
             build_args: |
               PDP_DOCKER_REGISTRY=docker.arvancloud.ir/library
-              PDP_BUILD_ID=${{ github.event.pull_request.head.sha || github.sha }}
+              PDP_BUILD_ID=${{ github.event.pull_request.head.sha }}
     steps:
       - name: Check out exact source commit
         uses: actions/checkout@v4
