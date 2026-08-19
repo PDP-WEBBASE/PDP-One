@@ -4,7 +4,9 @@ from django.contrib.auth import get_user_model
 from django.test import TestCase
 from rest_framework.test import APIClient
 
+from procurement.connectors.types import ParsedNotice
 from procurement.http import FetchedPage
+from procurement.ingestion import ingest_parsed_notice
 from procurement.models import ProcurementConnector, ProcurementNotice
 from procurement.models_extraction import ExtractionError, ExtractionRun
 from procurement.tasks import run_extraction
@@ -201,6 +203,65 @@ class ExtractionTaskTests(TestCase):
         self.assertEqual(summary["stop_reason"], "duplicate_page_content")
         self.assertEqual(summary["suspicious_pages"], [2])
         self.assertEqual(run.records_seen, 1)
+
+    def test_incremental_run_stops_after_two_semantically_known_pages(self):
+        connector = ProcurementConnector.objects.get(key="hezareh_tenders")
+        for record_id, old_page in (("KNOWN-1", 8), ("KNOWN-2", 9)):
+            ingest_parsed_notice(
+                connector,
+                ParsedNotice(
+                    source_record_id=record_id,
+                    source_url=f"https://www.hezarehinfo.net/tenders/-%21/page-{old_page}",
+                    detail_url=f"https://www.hezarehinfo.net/tenders/nid{record_id}",
+                    source_declared_type="tender",
+                    content_detected_type="tender",
+                    type_resolution_status="resolved",
+                    title=f"مناقصه شناخته شده {record_id}",
+                    province="تهران",
+                    deadline_raw="1405/06/01",
+                    position=1,
+                ),
+            )
+
+        run = ExtractionRun.objects.create(
+            status=ExtractionRun.Status.QUEUED,
+            include_details=False,
+            page_cap=100,
+        )
+        run.connectors.add(connector)
+
+        def page_html(record_id, total_page):
+            return f"""
+            <div class="table-1"><table class="table table-hover"><tbody>
+              <tr><td>{record_id}</td><td><a href="/tenders/nid{record_id}">مناقصه شناخته شده {record_id}</a></td>
+              <td>استان تهران</td><td></td><td>1405/06/01</td><td></td><td></td></tr>
+            </tbody></table></div>
+            <ul class="pagination"><li><a href="/tenders/-%21/page-{total_page}">{total_page}</a></li></ul>
+            """
+
+        fake_fetcher = Mock()
+        fake_fetcher.fetch_list.side_effect = [
+            self._fetched(
+                "https://www.hezarehinfo.net/tenders/-%21/page-1",
+                page_html("KNOWN-1", 40),
+            ),
+            self._fetched(
+                "https://www.hezarehinfo.net/tenders/-%21/page-2",
+                page_html("KNOWN-2", 40),
+            ),
+        ]
+        with patch("procurement.tasks.fetcher_for", return_value=fake_fetcher):
+            result = run_extraction(str(run.id))
+
+        run.refresh_from_db()
+        summary = run.summary["connectors"]["hezareh_tenders"]
+        self.assertEqual(result["status"], ExtractionRun.Status.SUCCEEDED)
+        self.assertEqual(fake_fetcher.fetch_list.call_count, 2)
+        self.assertEqual(run.records_updated, 0)
+        self.assertEqual(run.records_duplicate, 2)
+        self.assertEqual(summary["known_boundary_pages"], 2)
+        self.assertEqual(summary["stop_reason"], "known_data_boundary_reached")
+        self.assertEqual(summary["completeness"], "complete")
 
     def test_task_cancels_when_all_selected_connectors_are_disabled(self):
         connector = ProcurementConnector.objects.get(key="setad_tenders")
