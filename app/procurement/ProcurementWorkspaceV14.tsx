@@ -20,6 +20,8 @@ type GuardWindow = Window & {
 
 const FETCH_FAILURE_EVENT = "pdp-procurement-fetch-failure";
 const TRANSIENT_HTTP_STATUSES = new Set([502, 503, 504]);
+const FETCH_RECOVERY_ATTEMPTS = 3;
+const FETCH_RECOVERY_DELAY_MS = 2_500;
 
 const labelToSection: Record<string, AnalysisSection> = {
   "نقش و Prompt": "prompts",
@@ -103,6 +105,27 @@ async function recoverBrowserSession(nativeFetch: typeof window.fetch) {
       throw new Error(`session-recovery-${response.status}`);
     }
     return response;
+  } finally {
+    window.clearTimeout(timeout);
+  }
+}
+
+async function probeFailedEndpoint(failure: FetchFailure) {
+  const guardedWindow = window as GuardWindow;
+  const nativeFetch = guardedWindow.__pdpProcurementNativeFetch || window.fetch.bind(window);
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), 10_000);
+  try {
+    const response = await nativeFetch(failure.url, {
+      method: "GET",
+      credentials: "include",
+      cache: "no-store",
+      headers: { Accept: "application/json" },
+      signal: controller.signal,
+    });
+    return response.ok && (response.headers.get("content-type") || "").includes("application/json");
+  } catch {
+    return false;
   } finally {
     window.clearTimeout(timeout);
   }
@@ -208,6 +231,7 @@ export default function ProcurementWorkspaceV14() {
   const [analysisSection, setAnalysisSection] = useState<AnalysisSection | null>(null);
   const [engineOpen, setEngineOpen] = useState(false);
   const [fetchFailure, setFetchFailure] = useState<FetchFailure | null>(null);
+  const [retryingFailure, setRetryingFailure] = useState(false);
 
   useEffect(() => {
     if (analysisSection) return;
@@ -230,6 +254,44 @@ export default function ProcurementWorkspaceV14() {
     window.addEventListener(FETCH_FAILURE_EVENT, handleFailure);
     return () => window.removeEventListener(FETCH_FAILURE_EVENT, handleFailure);
   }, []);
+
+  useEffect(() => {
+    if (!fetchFailure) return;
+    let cancelled = false;
+    const failure = fetchFailure;
+
+    const recover = async () => {
+      for (let attempt = 1; attempt <= FETCH_RECOVERY_ATTEMPTS; attempt += 1) {
+        if (attempt > 1) await wait(FETCH_RECOVERY_DELAY_MS);
+        if (cancelled) return;
+        if (await probeFailedEndpoint(failure)) {
+          if (!cancelled) {
+            setFetchFailure((current) => current?.url === failure.url && current.at === failure.at ? null : current);
+          }
+          return;
+        }
+      }
+    };
+
+    const start = window.setTimeout(() => void recover(), FETCH_RECOVERY_DELAY_MS);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(start);
+    };
+  }, [fetchFailure]);
+
+  const retryFailedEndpoint = async () => {
+    if (!fetchFailure || retryingFailure) return;
+    const failure = fetchFailure;
+    setRetryingFailure(true);
+    try {
+      if (await probeFailedEndpoint(failure)) {
+        setFetchFailure((current) => current?.url === failure.url && current.at === failure.at ? null : current);
+      }
+    } finally {
+      setRetryingFailure(false);
+    }
+  };
 
   return <>
     <ProcurementWorkspaceV13 />
@@ -258,10 +320,11 @@ export default function ProcurementWorkspaceV14() {
       <span><b>{failureLead(fetchFailure)}</b> {failureText(fetchFailure)}: <code dir="ltr">{fetchFailure.url}</code></span>
       <button
         type="button"
-        onClick={() => window.location.reload()}
-        style={{border:0,borderRadius:8,padding:"7px 11px",background:"#991b1b",color:"white",font:"inherit",fontWeight:700,cursor:"pointer"}}
+        onClick={() => void retryFailedEndpoint()}
+        disabled={retryingFailure}
+        style={{border:0,borderRadius:8,padding:"7px 11px",background:"#991b1b",color:"white",font:"inherit",fontWeight:700,cursor:retryingFailure?"wait":"pointer",opacity:retryingFailure ? .72 : 1}}
       >
-        تلاش مجدد
+        {retryingFailure ? "در حال بررسی…" : "تلاش مجدد"}
       </button>
     </aside>}
     <button
