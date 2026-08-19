@@ -2,7 +2,8 @@
 #requires -RunAsAdministrator
 [CmdletBinding()]
 param(
-    [int]$DockerTimeoutSeconds = 300,
+    [int]$DockerTimeoutSeconds = 420,
+    [int]$RancherRecoveryTimeoutSeconds = 420,
     [int]$HealthTimeoutSeconds = 180,
     [switch]$OpenLocalPage,
     [switch]$ForceTunnelRepair
@@ -26,7 +27,10 @@ $report = [ordered]@{
     deployment_id = ""
     protected_target_commit = ""
     docker = "pending"
+    rancher_startup_report = $null
     rancher_policy_report = $null
+    startup_task_policy = "pending"
+    startup_task_policy_warning = $null
     local_health = "pending"
     local_api_health = "pending"
     local_mcp_health = "pending"
@@ -46,6 +50,32 @@ $report = [ordered]@{
 try {
     $ProjectRoot = Get-PDPOneProjectRoot
     Set-Location $ProjectRoot
+
+    # Host-side startup policy is self-healing because registry deployments copy
+    # the exact Windows scripts but the deployment agent does not execute the
+    # task-registration script. Apply a versioned task policy once, then leave
+    # the schedules untouched on ordinary watchdog/network-triggered runs.
+    $startupPolicyVersion = "2026-08-19-network-recovery-v1"
+    $startupPolicyRoot = "C:\ProgramData\PDP-One\maintenance"
+    $startupPolicyPath = Join-Path $startupPolicyRoot "startup-task-policy.version"
+    try {
+        $installedPolicyVersion = ""
+        if (Test-Path -LiteralPath $startupPolicyPath) {
+            $installedPolicyVersion = ([IO.File]::ReadAllText($startupPolicyPath)).Trim()
+        }
+        if ($installedPolicyVersion -ne $startupPolicyVersion) {
+            & powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "Register-PDPOneStartupTask.ps1") -ProjectRoot $ProjectRoot
+            if ($LASTEXITCODE -ne 0) { throw "Stable Windows startup task policy could not be registered." }
+            New-Item -ItemType Directory -Force -Path $startupPolicyRoot | Out-Null
+            [IO.File]::WriteAllText($startupPolicyPath, $startupPolicyVersion, [Text.UTF8Encoding]::new($false))
+            $report.startup_task_policy = "updated"
+        } else {
+            $report.startup_task_policy = "current"
+        }
+    } catch {
+        $report.startup_task_policy = "warning"
+        $report.startup_task_policy_warning = ConvertTo-PDPOneRedactedText $_.Exception.Message
+    }
 
     $deploymentOperation = Read-PDPOneDeploymentOperation -RemoveStale
     if ($deploymentOperation.Active) {
@@ -71,7 +101,10 @@ try {
         $report.disk_guard_warning = ConvertTo-PDPOneRedactedText $_.Exception.Message
     }
 
-    Start-PDPOneRancherDesktop -TimeoutSeconds $DockerTimeoutSeconds
+    $rancherStartupOutput = @(& powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "Start-PDPOneRancherResilient.ps1") -InitialTimeoutSeconds $DockerTimeoutSeconds -RecoveryTimeoutSeconds $RancherRecoveryTimeoutSeconds)
+    if ($LASTEXITCODE -ne 0) { throw "Rancher Desktop/Docker recovery could not establish a ready engine." }
+    if ($rancherStartupOutput.Count -gt 0) { $report.rancher_startup_report = [string]$rancherStartupOutput[-1] }
+
     $policyOutput = @(& powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "Ensure-PDPOneRancherPolicy.ps1") -DockerTimeoutSeconds $DockerTimeoutSeconds)
     if ($LASTEXITCODE -ne 0) { throw "The Rancher policy could not be applied." }
     if ($policyOutput.Count -gt 0) { $report.rancher_policy_report = [string]$policyOutput[-1] }
@@ -147,6 +180,7 @@ try {
         Write-Host "The public MCP probe is temporarily degraded while public web/API and local MCP remain healthy; the existing Funnel route was preserved instead of being recreated." -ForegroundColor Yellow
     }
     if ($report.disk_guard_warning) { Write-Host "Disk cleanup reported a warning, but startup was allowed to continue." -ForegroundColor Yellow }
+    if ($report.startup_task_policy_warning) { Write-Host "Windows startup task policy reported a warning, but PDP One startup continued." -ForegroundColor Yellow }
     if ($report.local_dns_degraded) {
         Write-Host "The public route is healthy through public IPv4 resolution. The local browser was opened on localhost so Windows DNS settings do not need to change." -ForegroundColor Yellow
     }
