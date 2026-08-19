@@ -29,7 +29,7 @@ test("analysis settings render inline inside the extraction and analysis tools f
 test("active analysis content has a fast independent bootstrap and version history is deferred", () => {
   assert.match(manager, /\/analysis\/context\/active\//);
   assert.match(manager, /analysis-contexts\/\?status=draft&ordering=-version&page_size=1/);
-  assert.match(manager, /section === "versions" && !versionsLoaded/);
+  assert.match(manager, /section !== "versions" \|\| versionsLoaded/);
   assert.match(manager, /analysis-contexts\/\?ordering=-version&page_size=50/);
   assert.match(manager, /analysis-contexts\/create-draft\//);
   assert.match(manager, /refreshSnapshot\(draft\.id\)/);
