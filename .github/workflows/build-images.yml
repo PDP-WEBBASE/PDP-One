@@ -29,6 +29,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           ref: ${{ env.RELEASE_SHA }}
+          fetch-depth: 0
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
@@ -78,6 +79,25 @@ jobs:
           fi
           echo "targets=$joined" >> "$GITHUB_OUTPUT"
 
+      - name: Classify component-contract verification
+        id: contract
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          required=false
+          while IFS= read -r path; do
+            case "$path" in
+              .github/workflows/build-images.yml|.github/workflows/component-fingerprint-parity.yml|.dockerignore|infra/docker/pdp-images-bake.hcl|release/component-contexts.json|release/component-image-mode.json|scripts/ci/component-fingerprints.mjs|scripts/ci/Test-ComponentFingerprintParity.ps1|scripts/windows/PDPOne.ReleaseManifest.ps1)
+                required=true
+                break
+                ;;
+            esac
+          done < <(git diff --name-only "$BASE_SHA" "$HEAD_SHA")
+          echo "required=$required" >> "$GITHUB_OUTPUT"
+
       - name: Build and push only missing immutable component images
         if: steps.plan.outputs.targets != ''
         uses: docker/bake-action@v7
@@ -95,6 +115,46 @@ jobs:
             MCP_FINGERPRINT=${{ steps.fingerprints.outputs.mcp_fingerprint }}
             WEB_FINGERPRINT=${{ steps.fingerprints.outputs.web_fingerprint }}
             PDP_DOCKER_REGISTRY=docker.arvancloud.ir/library
+
+      - name: Verify immutable component metadata and repository digests
+        if: steps.contract.outputs.required == 'true'
+        shell: bash
+        env:
+          BACKEND_IMAGE: ${{ steps.plan.outputs.backend_image }}
+          MCP_IMAGE: ${{ steps.plan.outputs.mcp_image }}
+          WEB_IMAGE: ${{ steps.plan.outputs.web_image }}
+          BACKEND_FINGERPRINT: ${{ steps.fingerprints.outputs.backend_fingerprint }}
+          MCP_FINGERPRINT: ${{ steps.fingerprints.outputs.mcp_fingerprint }}
+          WEB_FINGERPRINT: ${{ steps.fingerprints.outputs.web_fingerprint }}
+        run: |
+          set -euo pipefail
+          for component in backend mcp web; do
+            case "$component" in
+              backend) image="$BACKEND_IMAGE"; fingerprint="$BACKEND_FINGERPRINT" ;;
+              mcp) image="$MCP_IMAGE"; fingerprint="$MCP_FINGERPRINT" ;;
+              web) image="$WEB_IMAGE"; fingerprint="$WEB_FINGERPRINT" ;;
+            esac
+            docker pull "$image" >/dev/null
+            labels_json="$(docker image inspect --format '{{json .Config.Labels}}' "$image")"
+            digests_json="$(docker image inspect --format '{{json .RepoDigests}}' "$image")"
+            COMPONENT="$component" FINGERPRINT="$fingerprint" LABELS_JSON="$labels_json" DIGESTS_JSON="$digests_json" python - <<'PY'
+          import json
+          import os
+
+          component = os.environ["COMPONENT"]
+          fingerprint = os.environ["FINGERPRINT"]
+          labels = json.loads(os.environ["LABELS_JSON"] or "{}") or {}
+          digests = json.loads(os.environ["DIGESTS_JSON"] or "[]") or []
+          if labels.get("io.pdpone.component") != component:
+              raise SystemExit(f"component label mismatch for {component}")
+          if labels.get("io.pdpone.component.fingerprint") != fingerprint:
+              raise SystemExit(f"fingerprint label mismatch for {component}")
+          expected_prefix = f"ghcr.io/pdp-webbase/pdp-one-{component}@sha256:"
+          if not any(str(value).lower().startswith(expected_prefix) for value in digests):
+              raise SystemExit(f"repository digest missing for {component}")
+          print(f"component_image_identity {component}=content-{fingerprint}")
+          PY
+          done
 
       - name: Record immutable component image plan
         shell: bash
