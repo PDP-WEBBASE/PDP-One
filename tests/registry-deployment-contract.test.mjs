@@ -3,22 +3,52 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 
-test("PDP One builds immutable images in GitHub and never builds on the laptop", async () => {
+test("PDP One builds exact PR-head immutable images in GitHub and never builds on the laptop", async () => {
   const workflow = await readFile(new URL("../.github/workflows/build-images.yml", import.meta.url), "utf8");
   const managed = await readFile(new URL("../scripts/windows/Invoke-PDPOneManagedFastDeployment.ps1", import.meta.url), "utf8");
   const registryDeploy = await readFile(new URL("../scripts/windows/Invoke-PDPOneRegistryFastDeployment.ps1", import.meta.url), "utf8");
   const compose = await readFile(new URL("../docker-compose.yml", import.meta.url), "utf8");
 
+  assert.match(workflow, /pull_request:\s*\n\s+paths-ignore:/);
+  assert.doesNotMatch(workflow, /\n\s+push:\s*\n\s+branches:\s*\[main\]/);
+  assert.match(workflow, /group:\s*pdp-one-images-pr-\$\{\{ github\.event\.pull_request\.number \}\}/);
+  assert.match(workflow, /cancel-in-progress:\s*true/);
+  assert.match(workflow, /IMAGE_SHA:\s*\$\{\{ github\.event\.pull_request\.head\.sha \}\}/);
+  assert.doesNotMatch(workflow, /github\.event\.pull_request\.head\.sha \|\| github\.sha/);
+  assert.match(workflow, /"\.github\/\*\*"/);
+  assert.match(workflow, /"docs\/\*\*"/);
+  assert.match(workflow, /"scripts\/windows\/\*\*"/);
+  assert.match(workflow, /"release\/\*\*"/);
+  assert.match(workflow, /"tests\/\*\*"/);
   assert.match(workflow, /packages:\s*write/);
   assert.match(workflow, /docker\/build-push-action@v6/);
-  assert.match(workflow, /ghcr\.io\/pdp-webbase\/pdp-one-(backend|mcp|web)/);
-  assert.match(workflow, /github\.event\.pull_request\.head\.sha \|\| github\.sha/);
+  assert.match(workflow, /ghcr\.io\/pdp-webbase\/pdp-one-backend/);
+  assert.match(workflow, /ghcr\.io\/pdp-webbase\/pdp-one-mcp/);
+  assert.match(workflow, /ghcr\.io\/pdp-webbase\/pdp-one-web/);
+  assert.match(workflow, /push:\s*true/);
   assert.match(workflow, /cache-to:\s*type=gha/);
   assert.match(managed, /Invoke-PDPOneRegistryFastDeployment\.ps1/);
   assert.match(registryDeploy, /local_image_build_performed = \$false/);
   assert.match(registryDeploy, /-Command "docker" -Arguments @\("pull", \$image\)/);
   assert.doesNotMatch(registryDeploy, /-Command "docker" -Arguments @\("compose", "build"/);
   assert.doesNotMatch(compose, /^\s+build:/m);
+});
+
+
+test("PR governance cancels superseded runs without repeating CI after merge", async () => {
+  const ci = await readFile(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
+  const boundary = await readFile(new URL("../.github/workflows/pdp-memory-governance.yml", import.meta.url), "utf8");
+
+  assert.match(ci, /on:\s*\n\s+pull_request:/);
+  assert.doesNotMatch(ci, /\n\s+push:\s*\n\s+branches:\s*\[main\]/);
+  assert.match(ci, /group:\s*pdp-one-ci-pr-\$\{\{ github\.event\.pull_request\.number \}\}/);
+  assert.match(ci, /cancel-in-progress:\s*true/);
+  assert.match(ci, /\n\s+verify:\s*\n/);
+  assert.match(ci, /name:\s*Windows PowerShell 5\.1 compatibility/);
+
+  assert.match(boundary, /group:\s*pdp-one-public-boundary-pr-\$\{\{ github\.event\.pull_request\.number \}\}/);
+  assert.match(boundary, /cancel-in-progress:\s*true/);
+  assert.match(boundary, /\n\s+public-boundary:\s*\n/);
 });
 
 
