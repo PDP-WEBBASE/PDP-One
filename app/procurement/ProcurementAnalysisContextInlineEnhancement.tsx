@@ -11,8 +11,6 @@ const sectionByLabel: Record<string, AnalysisSection> = {
   "نسخه‌ها و فعال‌سازی": "versions",
 };
 
-const analysisLabels = new Set(Object.keys(sectionByLabel));
-
 function isAnalysisManagementTabs(element: HTMLElement | null) {
   if (!element) return false;
   const labels = Array.from(element.querySelectorAll(":scope > button")).map((button) => (button.textContent || "").trim());
@@ -71,7 +69,7 @@ export default function ProcurementAnalysisContextInlineEnhancement() {
   if (!section || !portalTarget || !portalTarget.isConnected) return null;
   return createPortal(
     <div data-pdp-analysis-context-inline="true" style={{ gridColumn: "1 / -1", width: "100%" }}>
-      <FastAnalysisContextManager inline initialSection={section} />
+      <FastAnalysisContextManager key={section} inline initialSection={section} />
     </div>,
     portalTarget,
   );
