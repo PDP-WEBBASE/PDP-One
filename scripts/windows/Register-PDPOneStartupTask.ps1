@@ -48,11 +48,13 @@ if ($LASTEXITCODE -ne 0) {
     throw "The PDP One network-recovery Scheduled Task could not be registered."
 }
 
-$openArguments = "-NoLogo -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -Command `"Start-Sleep -Seconds 75; & '$openScript' -TimeoutSeconds 300`""
+# Begin health polling immediately at logon. Open-PDPOneLocal waits until local
+# health is actually ready, so a fixed sleep only delays already-healthy boots.
+$openArguments = "-NoLogo -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$openScript`" -TimeoutSeconds 300"
 $openAction = New-ScheduledTaskAction -Execute "powershell.exe" -Argument $openArguments
 $openTrigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
 $openSettings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Minutes 8) -MultipleInstances IgnoreNew -StartWhenAvailable
-Register-ScheduledTask -TaskName $OpenWebTaskName -Action $openAction -Trigger $openTrigger -Principal $principal -Settings $openSettings -Description "Waits for PDP One local health after logon and opens the local web page without changing Windows DNS." -Force | Out-Null
+Register-ScheduledTask -TaskName $OpenWebTaskName -Action $openAction -Trigger $openTrigger -Principal $principal -Settings $openSettings -Description "Begins polling PDP One local health immediately after logon and opens localhost on the first healthy response without changing Windows DNS." -Force | Out-Null
 
 $mcpArguments = "-NoLogo -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$mcpWatchdogScript`" -ProjectRoot `"$ProjectRoot`""
 $mcpAction = New-ScheduledTaskAction -Execute "powershell.exe" -Argument $mcpArguments
