@@ -17,11 +17,31 @@ function isAnalysisManagementTabs(element: HTMLElement | null) {
   return ["نقش و Prompt", "کلیدواژه‌ها", "پروفایل، صلاحیت و رزومه", "نسخه‌ها و فعال‌سازی"].every((label) => labels.includes(label));
 }
 
+function activeAnalysisTarget() {
+  const buttons = Array.from(document.querySelectorAll("button")) as HTMLButtonElement[];
+  const activeButton = buttons.find((button) => {
+    const label = (button.textContent || "").trim();
+    return Boolean(sectionByLabel[label] && button.className && isAnalysisManagementTabs(button.parentElement));
+  });
+  if (!activeButton) return null;
+  const tabs = activeButton.parentElement;
+  const content = tabs?.nextElementSibling as HTMLElement | null;
+  const section = sectionByLabel[(activeButton.textContent || "").trim()];
+  return section && content?.isConnected ? { section, content } : null;
+}
+
 export default function ProcurementAnalysisContextInlineEnhancement() {
   const [section, setSection] = useState<AnalysisSection | null>(null);
   const [portalTarget, setPortalTarget] = useState<HTMLElement | null>(null);
 
   useEffect(() => {
+    const initialize = window.setTimeout(() => {
+      const current = activeAnalysisTarget();
+      if (!current) return;
+      setSection(current.section);
+      setPortalTarget(current.content);
+    }, 0);
+
     const onClick = (event: MouseEvent) => {
       const button = (event.target as HTMLElement | null)?.closest("button") as HTMLButtonElement | null;
       if (!button) return;
@@ -41,7 +61,10 @@ export default function ProcurementAnalysisContextInlineEnhancement() {
       }, 0);
     };
     document.addEventListener("click", onClick);
-    return () => document.removeEventListener("click", onClick);
+    return () => {
+      window.clearTimeout(initialize);
+      document.removeEventListener("click", onClick);
+    };
   }, []);
 
   useEffect(() => {
