@@ -1,34 +1,41 @@
-# راهنمای Deploy ایمن BACKLOG-001
+# راهنمای Deploy ایمن PDP One — lineage BACKLOG-001
+
+> این سند با معماری فعلی به‌روزرسانی شده است. Repository برنامه `PDP-WEBBASE/PDP-One` عمومی است و Control/Memory خصوصی در `PDP-WEBBASE/PDP-One-Control` نگه‌داری می‌شود. مسیر عادی Deployment از Imageهای immutable در GHCR استفاده می‌کند و Local application-image build مسیر عادی نیست.
 
 ## مرزهای اعتماد
 
-- GitHub خصوصی `PDP-WEBBASE/PDP-One` مرجع Source و Migration است؛ داده عملیاتی هرگز در Git نیست.
-- ChatGPT از طریق MCP فقط درخواست enum می‌سازد. درخواست شامل payload Base64، HMAC-SHA256، nonce، زمان ایجاد و زمان انقضاست.
+- Repository عمومی `PDP-WEBBASE/PDP-One` مرجع Canonical کد برنامه، Test، GitHub Actions و Commit/PR identity است؛ داده عملیاتی، Secretها و Canonical Project Memory در آن نگه‌داری نمی‌شوند.
+- Repository خصوصی `PDP-WEBBASE/PDP-One-Control` مرجع Canonical حافظه پروژه، Sessionها، Governance و شواهد عملیاتی خصوصی است و نباید به Workflow عمومی Credential دسترسی به آن داده شود.
+- ChatGPT از طریق MCP فقط درخواست enum/allowlisted می‌سازد. درخواست شامل payload امضاشده، nonce، زمان ایجاد و زمان انقضاست.
 - Scheduled Task با حساب Windows مالک نصب و Highest Privileges اجرا می‌شود. عامل HMAC، expiry، replay marker، SHA دقیق و allowlist را دوباره بررسی می‌کند.
 - هیچ ابزار عمومی Shell، PowerShell، CMD، SQL یا Docker در MCP وجود ندارد.
 
 ## اقدام اولیه یک‌باره
 
-`INSTALL-PDP-ONE-DEPLOYMENT-AGENT.bat` را یک‌بار اجرا کنید. Setup یک Fine-grained GitHub token با دسترسی فقط Read به Repository می‌گیرد، آن را با DPAPI همان حساب Windows نگه می‌دارد، ACL پوشه ProgramData را محدود و Scheduled Task را ثبت می‌کند. برای شکستن چرخه‌ی اولیه، فقط Compose/MCP control plane امضاشده را با Backup و بازگشت خودکار Bootstrap می‌کند؛ Web، داده، Volume، Tailscale identity، Migration و MCP path token را تغییر نمی‌دهد. Token نمایش داده یا در `.env`/Git نوشته نمی‌شود.
+`INSTALL-PDP-ONE-DEPLOYMENT-AGENT.bat` را یک‌بار اجرا کنید. Setup یک GitHub Personal Access Token (classic) با حداقل Scope برابر `read:packages` می‌گیرد تا Deployment Agent بتواند Imageهای خصوصی PDP One را از `ghcr.io` Pull کند. حساب GitHub مربوط باید روی Packageهای Container مجوز Read داشته باشد. Repository برنامه Public است و برای خواندن Source عمومی Scope اضافی `repo` لازم نیست.
 
-## جریان عادی پس از آن
+Installer قبل از ذخیره Credential، Login به GHCR را کنترل می‌کند. Credential فقط با DPAPI همان حساب Windows نگه‌داری می‌شود، ACL پوشه ProgramData محدود است و Token نمایش داده یا در `.env`، Git، ChatGPT، Screenshot یا Log نوشته نمی‌شود.
 
-1. تغییر روی Branch جداگانه ساخته و تست می‌شود.
-2. Preview و شناسه Commit دقیق نمایش داده می‌شود و جریان متوقف می‌ماند.
-3. پس از عبارت تأیید صریح، عامل همان Commit و Preview را حداکثر برای ۲۴ ساعت قفل می‌کند.
-4. عامل دقیقاً پس از تأیید، Dump کامل PostgreSQL، فایل‌های خصوصی، `.env` رمز‌شده، وضعیت Tailscale/Volumeها و Snapshot کد را تهیه می‌کند.
-5. Backup در PostgreSQL مجزا Restore و Archiveها/Hashها کنترل می‌شوند. شکست این گام Deploy را قبل از هر تغییر متوقف می‌کند.
-6. Source همان SHA از GitHub دانلود، Images ساخته و Migration با `--noinput` اجرا می‌شود.
-7. سرویس‌ها بدون حذف Volume بالا می‌آیند و Health چندلایه، شمارش داده و continuity توکن بررسی می‌شود.
-8. در هر شکست، Snapshot کد و در صورت اجرای Migration، Backup سازگار DB/فایل/تنظیمات بازگردانده می‌شود.
+برای شکستن چرخه‌ی اولیه، Setup فقط Compose/MCP control plane امضاشده را با Backup و بازگشت محدود Bootstrap می‌کند؛ Web، داده، Volume، Tailscale identity، Migration و MCP path token را تغییر نمی‌دهد.
+
+## جریان عادی Development-fast
+
+1. تغییر روی Branch جداگانه ساخته می‌شود و Private Control Session/soft lock مربوط ثبت می‌شود.
+2. Public Boundary، CI و در صورت نیاز Build immutable images روی exact PR head اجرا می‌شوند.
+3. Imageهای backend/MCP/web با Tag مبتنی بر SHA کامل Commit در GHCR ساخته و Push می‌شوند؛ Local application-image build در مسیر عادی مجاز نیست.
+4. PRE-DEPLOY Delta/Concurrency Sync باید `main`، PR head، Deployment Queue و Runtime مرتبط را دوباره کنترل کند.
+5. Deployment Agent exact commit را از GitHub تأیید، با Credential محافظت‌شده به GHCR Login و همان Imageهای immutable را Pull می‌کند. Revision label هر Image باید با SHA مورد انتظار منطبق باشد.
+6. Source همان SHA دریافت و Compose اعتبارسنجی می‌شود. اگر `release/database-change-risk.json` نیاز به Backup استاندارد را اعلام کند، development-fast متوقف و مسیر محافظت‌شده مناسب استفاده می‌شود.
+7. در Development-fast عادی، سرویس‌ها با Imageهای immutable فعال، Migration کنترل‌شده اجرا و Health کوتاه محلی/PostgreSQL/عمومی بررسی می‌شود. حذف Volume، Prune داده و Rotation توکن جزو Deployment عادی نیست.
+8. فقط بعد از exact deployment و Health پذیرفته‌شده، PR Merge می‌شود و lineage شامل PR head، Deployment ID، Image identity و Merge commit در Private Control ثبت می‌شود.
 
 ## قفل‌ها و Audit
 
-- Mutex سراسری از Deploy هم‌زمان جلوگیری می‌کند.
-- هر nonce پس از اجرا marker دارد؛ درخواست منقضی یا تکراری رد می‌شود.
-- Audit در `C:\ProgramData\PDP-One\deployment-agent\audit` بدون params حساس نگه‌داری می‌شود.
-- پاسخ‌ها فقط status، شناسه‌ها و نتیجه Health/Backup را دارند؛ Secret بازگردانده نمی‌شود.
+- Queue امضاشده و کنترل concurrency از Deploy هم‌زمان جلوگیری می‌کند؛ Request تکراری/منقضی نباید به Retry کور تبدیل شود.
+- هر nonce پس از اجرا marker دارد و Audit در `C:\ProgramData\PDP-One\deployment-agent\audit` بدون params حساس نگه‌داری می‌شود.
+- گزارش Deployment در `C:\ProgramData\PDP-One\deployment-agent\reports` stage و نتیجه را ثبت می‌کند، اما Secret برنمی‌گرداند.
+- Automatic rollback در Development-fast فعال نیست؛ در صورت شکست، ابتدا stage و `production_changed` بررسی و سپس recovery/rollback آگاهانه انجام می‌شود.
 
-## Startup در برابر Update
+## Startup در برابر Deployment
 
-`START-PDP-ONE.bat` از `docker compose up --no-build` استفاده می‌کند و هیچ Migration، Pull، Build یا Rotation ندارد. Migration فقط در Updater محافظت‌شده و بعد از Backup نهایی verified اجرا می‌شود.
+`START-PDP-ONE.bat` برای بالا آوردن نصب موجود است و نباید به‌صورت خودکار Migration، Credential rotation، destructive volume operation یا Local application-image build انجام دهد. تغییر نسخه برنامه فقط از مسیر Governed exact-commit / immutable-image Deployment انجام می‌شود.
