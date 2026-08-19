@@ -1,6 +1,6 @@
 "use client";
 
-import { ChangeEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ChangeEvent, useCallback, useEffect, useId, useState } from "react";
 import styles from "./analysis-context-manager.module.css";
 import { ANALYSIS_CONTEXT_SYNC_EVENT, AnalysisContextSyncDetail, emitAnalysisContextSync } from "./analysisContextSync";
 
@@ -10,13 +10,9 @@ type AttachmentCategory = "prompt_reference" | "keywords" | "company_profile" | 
 type Attachment = {
   id: string;
   category: AttachmentCategory;
-  category_label?: string;
   original_name: string;
-  content_type?: string;
   size_bytes: number;
-  checksum_sha256?: string;
   download_url?: string;
-  created_at?: string;
 };
 
 type ContextSnapshot = {
@@ -24,7 +20,6 @@ type ContextSnapshot = {
   version: number;
   status: "draft" | "active" | "retired";
   status_label: string;
-  is_locked?: boolean;
   role_text: string;
   base_instructions: string;
   analysis_prompt: string;
@@ -32,7 +27,6 @@ type ContextSnapshot = {
   qualifications: unknown[];
   keywords: { active?: unknown[]; excluded?: unknown[]; [key: string]: unknown };
   experience_summary: unknown[];
-  component_versions: Record<string, number>;
   changed_components: string[];
   content_hash: string;
   attachments: Attachment[];
@@ -164,7 +158,7 @@ export default function FastAnalysisContextManager({
   onClose?: () => void;
   inline?: boolean;
 }) {
-  const instanceId = useRef(`analysis-context-${Math.random().toString(36).slice(2)}`).current;
+  const instanceId = useId();
   const [section, setSection] = useState<AnalysisSection>(initialSection);
   const [active, setActive] = useState<ContextSnapshot | null>(null);
   const [draft, setDraft] = useState<ContextSnapshot | null>(null);
@@ -196,15 +190,12 @@ export default function FastAnalysisContextManager({
         }),
       ]);
 
-      let nextActive: ContextSnapshot | null = null;
-      let nextDraft: ContextSnapshot | null = null;
-
-      if (activeResult.status === "fulfilled" && activeResult.value.ok) {
-        nextActive = (await activeResult.value.json()) as ContextSnapshot;
-      }
-      if (draftResult.status === "fulfilled" && draftResult.value.ok) {
-        nextDraft = collection<ContextSnapshot>(await draftResult.value.json())[0] || null;
-      }
+      const nextActive = activeResult.status === "fulfilled" && activeResult.value.ok
+        ? await activeResult.value.json() as ContextSnapshot
+        : null;
+      const nextDraft = draftResult.status === "fulfilled" && draftResult.value.ok
+        ? collection<ContextSnapshot>(await draftResult.value.json())[0] || null
+        : null;
       if (!nextActive && !nextDraft) throw new Error("نسخه فعال یا پیش‌نویس تحلیل دریافت نشد.");
 
       setActive(nextActive);
@@ -238,7 +229,7 @@ export default function FastAnalysisContextManager({
       if (!response.ok) throw new Error(await responseError(response));
       const items = collection<ContextSnapshot>(await response.json()).sort((a, b) => b.version - a.version);
       setSnapshots(items);
-      setActive(items.find((item) => item.status === "active") || active);
+      setActive(items.find((item) => item.status === "active") || null);
       setDraft(items.find((item) => item.status === "draft") || null);
       setVersionsLoaded(true);
     } catch (caught) {
@@ -246,7 +237,7 @@ export default function FastAnalysisContextManager({
     } finally {
       setVersionsLoading(false);
     }
-  }, [active]);
+  }, []);
 
   const refreshSnapshot = useCallback(async (snapshotId: string) => {
     const response = await fetch(`${PROCUREMENT_API}/analysis-contexts/${snapshotId}/`, {
@@ -255,7 +246,7 @@ export default function FastAnalysisContextManager({
       cache: "no-store",
     });
     if (!response.ok) throw new Error(await responseError(response));
-    const refreshed = (await response.json()) as ContextSnapshot;
+    const refreshed = await response.json() as ContextSnapshot;
     setSnapshots((items) => upsert(items, refreshed));
     if (refreshed.status === "draft") setDraft(refreshed);
     if (refreshed.status === "active") setActive(refreshed);
@@ -265,16 +256,15 @@ export default function FastAnalysisContextManager({
   }, []);
 
   useEffect(() => {
-    setSection(initialSection);
-  }, [initialSection]);
-
-  useEffect(() => {
-    void bootstrap(true);
+    const timer = window.setTimeout(() => void bootstrap(true), 0);
+    return () => window.clearTimeout(timer);
   }, [bootstrap]);
 
   useEffect(() => {
-    if (section === "versions" && !versionsLoaded && !versionsLoading) void loadVersions();
-  }, [section, versionsLoaded, versionsLoading, loadVersions]);
+    if (section !== "versions" || versionsLoaded) return;
+    const timer = window.setTimeout(() => void loadVersions(), 0);
+    return () => window.clearTimeout(timer);
+  }, [section, versionsLoaded, loadVersions]);
 
   useEffect(() => {
     const onSync = (event: Event) => {
@@ -284,11 +274,12 @@ export default function FastAnalysisContextManager({
         const snapshot = detail.snapshot;
         setActive(snapshot);
         setDraft(null);
-        setSnapshots((items) => upsert(items.map((item) => item.status === "active" && item.id !== snapshot.id ? { ...item, status: "retired", status_label: "بازنشسته" } : item), snapshot));
-        if (!editing) {
-          setSelected(snapshot);
-          setForm(formFromSnapshot(snapshot));
-        }
+        setSnapshots((items) => upsert(items.map((item) => item.status === "active" && item.id !== snapshot.id
+          ? { ...item, status: "retired", status_label: "بازنشسته" }
+          : item), snapshot));
+        setSelected(snapshot);
+        setForm(formFromSnapshot(snapshot));
+        setEditing(false);
       } else {
         void bootstrap(false);
       }
@@ -296,7 +287,7 @@ export default function FastAnalysisContextManager({
     };
     window.addEventListener(ANALYSIS_CONTEXT_SYNC_EVENT, onSync);
     return () => window.removeEventListener(ANALYSIS_CONTEXT_SYNC_EVENT, onSync);
-  }, [bootstrap, editing, instanceId, loadVersions, section]);
+  }, [bootstrap, instanceId, loadVersions, section]);
 
   function notify(text: string) {
     setMessage(text);
@@ -315,7 +306,7 @@ export default function FastAnalysisContextManager({
         body: JSON.stringify(active ? { source_snapshot: active.id } : {}),
       });
       if (!response.ok) throw new Error(await responseError(response));
-      const created = (await response.json()) as ContextSnapshot & { reused_draft?: boolean };
+      const created = await response.json() as ContextSnapshot & { reused_draft?: boolean };
       setDraft(created);
       setSnapshots((items) => upsert(items, created));
       setSelected(created);
@@ -355,7 +346,7 @@ export default function FastAnalysisContextManager({
         }),
       });
       if (!response.ok) throw new Error(await responseError(response));
-      const updated = (await response.json()) as ContextSnapshot;
+      const updated = await response.json() as ContextSnapshot;
       setDraft(updated);
       setSnapshots((items) => upsert(items, updated));
       setSelected(updated);
@@ -384,10 +375,12 @@ export default function FastAnalysisContextManager({
         body: "{}",
       });
       if (!response.ok) throw new Error(await responseError(response));
-      const activated = (await response.json()) as ContextSnapshot;
+      const activated = await response.json() as ContextSnapshot;
       setActive(activated);
       setDraft(null);
-      setSnapshots((items) => upsert(items.map((item) => item.status === "active" && item.id !== activated.id ? { ...item, status: "retired", status_label: "بازنشسته" } : item), activated));
+      setSnapshots((items) => upsert(items.map((item) => item.status === "active" && item.id !== activated.id
+        ? { ...item, status: "retired", status_label: "بازنشسته" }
+        : item), activated));
       setSelected(activated);
       setForm(formFromSnapshot(activated));
       setEditing(false);
@@ -477,7 +470,7 @@ export default function FastAnalysisContextManager({
         <span><b>{attachment.original_name}</b><small>{fa.format(Math.ceil(attachment.size_bytes / 1024))} کیلوبایت</small></span>
         <span className={styles.fileActions}>
           {attachment.download_url && <a href={attachment.download_url} target="_blank" rel="noreferrer">دریافت</a>}
-          {editing && draft && <button disabled={busy !== ""} onClick={() => void deleteFile(attachment)}>حذف</button>}
+          {editing && draft && <button type="button" disabled={busy !== ""} onClick={() => void deleteFile(attachment)}>حذف</button>}
         </span>
       </div>)}</div> : <p className={styles.emptyText}>فایلی در این دسته ثبت نشده است.</p>}
     </section>;
@@ -493,10 +486,10 @@ export default function FastAnalysisContextManager({
         {!draft && <span className={styles.lockedBadge}>اطلاعات فعال قفل است</span>}
       </div>
       <div className={styles.toolbarActions}>
-        {!draft && <button className={styles.secondary} disabled={busy !== ""} onClick={() => void createDraft()}>{busy === "draft" ? "در حال ساخت…" : "ویرایش و ساخت نسخه جدید"}</button>}
-        {draft && !editing && <button className={styles.secondary} disabled={busy !== ""} onClick={() => { setSelected(draft); setForm(formFromSnapshot(draft)); setEditing(true); }}>ویرایش نسخه پیش‌نویس</button>}
-        {draft && editing && <button className={styles.primary} disabled={busy !== ""} onClick={() => void saveDraft()}>{busy === "save" ? "در حال ذخیره…" : "ذخیره و قفل"}</button>}
-        {draft && <button className={styles.activate} disabled={busy !== "" || editing} onClick={() => void activateDraft()}>{busy === "activate" ? "در حال فعال‌سازی…" : "فعال‌سازی نسخه"}</button>}
+        {!draft && <button type="button" className={styles.secondary} disabled={busy !== ""} onClick={() => void createDraft()}>{busy === "draft" ? "در حال ساخت…" : "ویرایش و ساخت نسخه جدید"}</button>}
+        {draft && !editing && <button type="button" className={styles.secondary} disabled={busy !== ""} onClick={() => { setSelected(draft); setForm(formFromSnapshot(draft)); setEditing(true); }}>ویرایش نسخه پیش‌نویس</button>}
+        {draft && editing && <button type="button" className={styles.primary} disabled={busy !== ""} onClick={() => void saveDraft()}>{busy === "save" ? "در حال ذخیره…" : "ذخیره و قفل"}</button>}
+        {draft && <button type="button" className={styles.activate} disabled={busy !== "" || editing} onClick={() => void activateDraft()}>{busy === "activate" ? "در حال فعال‌سازی…" : "فعال‌سازی نسخه"}</button>}
       </div>
     </div>
   </>;
@@ -509,13 +502,11 @@ export default function FastAnalysisContextManager({
       {field("Prompt مشترک تحلیل مناقصات و استعلامات", "analysisPrompt", 9)}
       {filePanel("prompt_reference", ".txt,.md,.pdf,.doc,.docx")}
     </div>}
-
     {!loading && section === "keywords" && <div className={styles.gridTwo}>
       {field("کلیدواژه‌های فعال", "activeKeywords", 14, "هر کلیدواژه در یک خط")}
       {field("کلیدواژه‌های حذف یا احتیاط", "excludedKeywords", 14, "هر عبارت در یک خط")}
       <div className={styles.wide}>{filePanel("keywords", ".txt,.md,.csv,.xls,.xlsx")}</div>
     </div>}
-
     {!loading && section === "company" && <div className={styles.grid}>
       {field("پروفایل خلاصه شرکت", "companySummary", 7)}
       {filePanel("company_profile", ".txt,.md,.pdf,.doc,.docx")}
@@ -524,11 +515,10 @@ export default function FastAnalysisContextManager({
       {field("خلاصه سوابق و تجربیات", "experienceSummary", 10, "هر سابقه در یک خط")}
       {filePanel("resume", ".txt,.md,.pdf,.doc,.docx")}
     </div>}
-
     {!loading && section === "versions" && <div className={styles.versionArea}>
       <div className={styles.versionCards}>
         {versionsLoading && <p>در حال دریافت تاریخچه نسخه‌ها…</p>}
-        {!versionsLoading && snapshots.map((snapshot) => <button key={snapshot.id} className={`${styles.versionCard} ${selected?.id === snapshot.id ? styles.selectedVersion : ""}`} onClick={() => { setSelected(snapshot); setForm(formFromSnapshot(snapshot)); setEditing(false); }}>
+        {!versionsLoading && snapshots.map((snapshot) => <button type="button" key={snapshot.id} className={`${styles.versionCard} ${selected?.id === snapshot.id ? styles.selectedVersion : ""}`} onClick={() => { setSelected(snapshot); setForm(formFromSnapshot(snapshot)); setEditing(false); }}>
           <span><b>نسخه {fa.format(snapshot.version)}</b><small>{snapshot.status_label}</small></span>
           <span><small>ثبت: {formatDate(snapshot.created_at)}</small><small>فعال‌سازی: {formatDate(snapshot.activated_at)}</small></span>
           <span><small>تغییرات: {snapshot.changed_components?.length ? snapshot.changed_components.join("، ") : "بدون تغییر ثبت‌شده"}</small></span>
@@ -548,7 +538,7 @@ export default function FastAnalysisContextManager({
   </main>;
 
   if (inline) {
-    return <article dir="rtl" style={{ border: "1px solid #dbe3ec", borderRadius: 16, background: "#f8fafc", overflow: "hidden", marginTop: 14 }} data-pdp-analysis-context-inline="true">
+    return <article dir="rtl" style={{ border: "1px solid #dbe3ec", borderRadius: 16, background: "#f8fafc", overflow: "hidden", marginTop: 14 }} data-pdp-analysis-context-editor="inline">
       <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center", padding: "14px 18px", background: "#fff", borderBottom: "1px solid #e2e8f0" }}>
         <div><h2 style={{ margin: 0, fontSize: 20 }}>{sectionLabels[section]}</h2><small style={{ color: "#64748b" }}>نمای مستقیم نسخه فعال؛ ویرایش در همین صفحه انجام می‌شود.</small></div>
         {active && <span className={styles.activeBadge}>نسخه فعال {fa.format(active.version)}</span>}
@@ -566,9 +556,9 @@ export default function FastAnalysisContextManager({
           <h2>{sectionLabels[section]}</h2>
           <p>{selected ? `نسخه ${fa.format(selected.version)} · ${selected.status_label}` : "در حال دریافت نسخه فعال…"}</p>
         </div>
-        <button className={styles.closeButton} onClick={onClose} aria-label="بستن">×</button>
+        <button type="button" className={styles.closeButton} onClick={onClose} aria-label="بستن">×</button>
       </header>
-      <nav className={styles.tabs}>{(Object.keys(sectionLabels) as AnalysisSection[]).map((id) => <button key={id} className={section === id ? styles.activeTab : ""} onClick={() => setSection(id)}>{sectionLabels[id]}</button>)}</nav>
+      <nav className={styles.tabs}>{(Object.keys(sectionLabels) as AnalysisSection[]).map((id) => <button type="button" key={id} className={section === id ? styles.activeTab : ""} onClick={() => setSection(id)}>{sectionLabels[id]}</button>)}</nav>
       {toolbar}
       {body}
     </section>
