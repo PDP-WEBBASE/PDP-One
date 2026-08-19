@@ -4,6 +4,7 @@ import ProcurementStartupSessionResilience from "./ProcurementStartupSessionResi
 import ProcurementPaginationEnhancement from "./ProcurementPaginationEnhancement";
 import ProcurementTabCacheEnhancement from "./ProcurementTabCacheEnhancement";
 import ProcurementManagementPerformanceEnhancement from "./ProcurementManagementPerformanceEnhancement";
+import ProcurementAnalysisContextInlineEnhancement from "./ProcurementAnalysisContextInlineEnhancement";
 import ProcurementPaginationIntegrityEnhancement from "./ProcurementPaginationIntegrityEnhancement";
 import ProcurementSubmissionResultsEnhancements from "./ProcurementSubmissionResultsEnhancements";
 import ProcurementWorkspaceEnhancements from "./ProcurementWorkspaceEnhancements";
@@ -15,6 +16,7 @@ export default function ProcurementWorkspaceV23() {
     <ProcurementPaginationEnhancement />
     <ProcurementTabCacheEnhancement />
     <ProcurementManagementPerformanceEnhancement />
+    <ProcurementAnalysisContextInlineEnhancement />
     <ProcurementPaginationIntegrityEnhancement />
     <ProcurementWorkspaceV22 />
     <ProcurementWorkspaceEnhancements />
