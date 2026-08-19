@@ -16,14 +16,15 @@ type CacheWindow = Window & {
   __pdpNavigationReadCacheInstalled?: boolean;
   __pdpNavigationReadPreviousFetch?: typeof window.fetch;
   __pdpNavigationReadCache?: Map<string, StoredResponse>;
+  __pdpNavigationReadRevalidating?: Set<string>;
   __pdpNavigationForceRefreshUntil?: number;
   __pdpTabPageCache?: Map<string, unknown>;
   __pdpManagementDashboardCache?: unknown;
 };
 
 const API_PREFIX = "/api/v1/procurement/";
-const CACHE_TTL_MS = 5 * 60 * 1000;
-const DYNAMIC_CACHE_TTL_MS = 60 * 1000;
+const CACHE_REVALIDATE_MS = 5 * 60 * 1000;
+const DYNAMIC_REVALIDATE_MS = 60 * 1000;
 const FORCE_REFRESH_WINDOW_MS = 2000;
 const MAX_CACHE_ENTRIES = 80;
 const MAX_ENTRY_BYTES = 2 * 1024 * 1024;
@@ -74,6 +75,12 @@ function readCache() {
   return guarded.__pdpNavigationReadCache;
 }
 
+function revalidatingKeys() {
+  const guarded = window as CacheWindow;
+  if (!guarded.__pdpNavigationReadRevalidating) guarded.__pdpNavigationReadRevalidating = new Set();
+  return guarded.__pdpNavigationReadRevalidating;
+}
+
 function clearAll() {
   readCache().clear();
 }
@@ -103,6 +110,12 @@ function remember(key: string, value: StoredResponse) {
   }
 }
 
+function touch(key: string, value: StoredResponse) {
+  const cache = readCache();
+  cache.delete(key);
+  cache.set(key, value);
+}
+
 function cachedResponse(entry: StoredResponse) {
   return new Response(entry.body, {
     status: entry.status,
@@ -117,8 +130,8 @@ function isCacheableProcurementGet(url: URL) {
     && !SPECIALIZED_LIST_PATHS.has(url.pathname);
 }
 
-function ttlForPath(pathname: string) {
-  return DYNAMIC_PATH_MARKERS.some((marker) => pathname.includes(marker)) ? DYNAMIC_CACHE_TTL_MS : CACHE_TTL_MS;
+function revalidateAfter(pathname: string) {
+  return DYNAMIC_PATH_MARKERS.some((marker) => pathname.includes(marker)) ? DYNAMIC_REVALIDATE_MS : CACHE_REVALIDATE_MS;
 }
 
 function forceRefreshActive() {
@@ -144,6 +157,21 @@ async function storeJsonResponse(key: string, response: Response) {
   } catch {
     // A failed cache write must never affect the real response.
   }
+}
+
+function revalidateInBackground(
+  key: string,
+  input: RequestInfo | URL,
+  init: RequestInit | undefined,
+  previousFetch: typeof window.fetch,
+) {
+  const active = revalidatingKeys();
+  if (active.has(key)) return;
+  active.add(key);
+  void previousFetch(input, init)
+    .then((response) => storeJsonResponse(key, response))
+    .catch(() => undefined)
+    .finally(() => active.delete(key));
 }
 
 function installNavigationReadCache() {
@@ -173,12 +201,13 @@ function installNavigationReadCache() {
     const forceRefresh = mode === "reload" || forceRefreshActive();
     if (!forceRefresh) {
       const cached = readCache().get(key);
-      if (cached && Date.now() - cached.storedAt <= ttlForPath(original.pathname)) {
-        readCache().delete(key);
-        readCache().set(key, cached);
+      if (cached) {
+        touch(key, cached);
+        if (Date.now() - cached.storedAt > revalidateAfter(original.pathname)) {
+          revalidateInBackground(key, input, init, previousFetch);
+        }
         return cachedResponse(cached);
       }
-      if (cached) readCache().delete(key);
     }
 
     const response = await previousFetch(input, init);
