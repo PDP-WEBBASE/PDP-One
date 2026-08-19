@@ -1,0 +1,42 @@
+{
+  "schema": "pdp-one.component-contexts.v1",
+  "components": {
+    "backend": {
+      "root": "backend",
+      "exclude_prefixes": [],
+      "exclude_files": [],
+      "exclude_suffixes": [],
+      "exclude_name_prefixes": []
+    },
+    "mcp": {
+      "root": "services/pdp_mcp",
+      "exclude_prefixes": [],
+      "exclude_files": [],
+      "exclude_suffixes": [],
+      "exclude_name_prefixes": []
+    },
+    "web": {
+      "root": ".",
+      "exclude_prefixes": [
+        ".git/",
+        ".github/",
+        "backend/",
+        "services/",
+        "docs/",
+        "tests/",
+        "release/",
+        "scripts/windows/",
+        "work/",
+        "node_modules/",
+        ".next/"
+      ],
+      "exclude_files": [
+        "docker-compose.yml",
+        "HOST-RUNTIME-SOURCE",
+        "infra/docker/pdp-images-bake.hcl"
+      ],
+      "exclude_suffixes": [".md", ".bat"],
+      "exclude_name_prefixes": [".env"]
+    }
+  }
+}
