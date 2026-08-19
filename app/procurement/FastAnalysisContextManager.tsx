@@ -145,7 +145,7 @@ async function csrfToken(): Promise<string> {
     headers: { Accept: "application/json" },
   });
   if (!response.ok) throw new Error("دریافت نشست امنیتی انجام نشد.");
-  const payload = (await response.json()) as { csrf_token?: string };
+  const payload = await response.json() as { csrf_token?: string };
   return String(payload.csrf_token || "");
 }
 
@@ -173,45 +173,24 @@ export default function FastAnalysisContextManager({
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
 
-  const bootstrap = useCallback(async (showLoading = true) => {
+  const bootstrapActive = useCallback(async (showLoading = true) => {
     if (showLoading) setLoading(true);
     setError("");
     try {
-      const [activeResult, draftResult] = await Promise.allSettled([
-        fetch(`${PROCUREMENT_API}/analysis/context/active/`, {
-          credentials: "include",
-          headers: { Accept: "application/json" },
-          cache: "no-store",
-        }),
-        fetch(`${PROCUREMENT_API}/analysis-contexts/?status=draft&ordering=-version&page_size=1`, {
-          credentials: "include",
-          headers: { Accept: "application/json" },
-          cache: "no-store",
-        }),
-      ]);
-
-      const nextActive = activeResult.status === "fulfilled" && activeResult.value.ok
-        ? await activeResult.value.json() as ContextSnapshot
-        : null;
-      const nextDraft = draftResult.status === "fulfilled" && draftResult.value.ok
-        ? collection<ContextSnapshot>(await draftResult.value.json())[0] || null
-        : null;
-      if (!nextActive && !nextDraft) throw new Error("نسخه فعال یا پیش‌نویس تحلیل دریافت نشد.");
-
-      setActive(nextActive);
-      setDraft(nextDraft);
-      setSnapshots((items) => {
-        let next = items;
-        if (nextActive) next = upsert(next, nextActive);
-        if (nextDraft) next = upsert(next, nextDraft);
-        return next;
+      const response = await fetch(`${PROCUREMENT_API}/analysis/context/active/`, {
+        credentials: "include",
+        headers: { Accept: "application/json" },
+        cache: "no-store",
       });
-      const nextSelected = nextDraft || nextActive;
-      setSelected(nextSelected);
-      setForm(formFromSnapshot(nextSelected));
+      if (!response.ok) throw new Error(await responseError(response));
+      const snapshot = await response.json() as ContextSnapshot;
+      setActive(snapshot);
+      setSnapshots((items) => upsert(items, snapshot));
+      setSelected(snapshot);
+      setForm(formFromSnapshot(snapshot));
       setEditing(false);
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "دریافت تنظیمات تحلیل انجام نشد.");
+      setError(caught instanceof Error ? caught.message : "دریافت نسخه فعال تحلیل انجام نشد.");
     } finally {
       if (showLoading) setLoading(false);
     }
@@ -228,16 +207,22 @@ export default function FastAnalysisContextManager({
       });
       if (!response.ok) throw new Error(await responseError(response));
       const items = collection<ContextSnapshot>(await response.json()).sort((a, b) => b.version - a.version);
+      const nextActive = items.find((item) => item.status === "active") || active;
+      const nextDraft = items.find((item) => item.status === "draft") || null;
       setSnapshots(items);
-      setActive(items.find((item) => item.status === "active") || null);
-      setDraft(items.find((item) => item.status === "draft") || null);
+      setActive(nextActive);
+      setDraft(nextDraft);
+      if (!selected && nextActive) {
+        setSelected(nextActive);
+        setForm(formFromSnapshot(nextActive));
+      }
       setVersionsLoaded(true);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "دریافت تاریخچه نسخه‌ها انجام نشد.");
     } finally {
       setVersionsLoading(false);
     }
-  }, []);
+  }, [active, selected]);
 
   const refreshSnapshot = useCallback(async (snapshotId: string) => {
     const response = await fetch(`${PROCUREMENT_API}/analysis-contexts/${snapshotId}/`, {
@@ -256,9 +241,9 @@ export default function FastAnalysisContextManager({
   }, []);
 
   useEffect(() => {
-    const timer = window.setTimeout(() => void bootstrap(true), 0);
+    const timer = window.setTimeout(() => void bootstrapActive(true), 0);
     return () => window.clearTimeout(timer);
-  }, [bootstrap]);
+  }, [bootstrapActive]);
 
   useEffect(() => {
     if (section !== "versions" || versionsLoaded) return;
@@ -280,14 +265,19 @@ export default function FastAnalysisContextManager({
         setSelected(snapshot);
         setForm(formFromSnapshot(snapshot));
         setEditing(false);
-      } else {
-        void bootstrap(false);
+        return;
       }
-      if (section === "versions") void loadVersions();
+      if (detail.kind === "draft" && detail.snapshot) {
+        setDraft(detail.snapshot);
+        setSnapshots((items) => upsert(items, detail.snapshot as ContextSnapshot));
+        if (section === "versions") void loadVersions();
+        return;
+      }
+      void bootstrapActive(false);
     };
     window.addEventListener(ANALYSIS_CONTEXT_SYNC_EVENT, onSync);
     return () => window.removeEventListener(ANALYSIS_CONTEXT_SYNC_EVENT, onSync);
-  }, [bootstrap, instanceId, loadVersions, section]);
+  }, [bootstrapActive, instanceId, loadVersions, section]);
 
   function notify(text: string) {
     setMessage(text);
