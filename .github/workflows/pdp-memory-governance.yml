@@ -1,4 +1,4 @@
-name: PDP One Public Boundary Governance
+name: PDP One Application Boundary Governance
 
 on:
   pull_request:
@@ -15,6 +15,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Keep this job name stable because the main-branch ruleset requires it.
   public-boundary:
     runs-on: ubuntu-latest
     steps:
@@ -23,7 +24,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Validate public/private repository boundary
+      - name: Validate application/control repository boundary
         shell: bash
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
@@ -62,24 +63,24 @@ jobs:
               if path in forbidden_exact or name in forbidden_exact or name.endswith(forbidden_suffixes):
                   sensitive_paths.append(path)
           if sensitive_paths:
-              raise SystemExit('Sensitive/private file types must not be committed to the public application repository: ' + ', '.join(sensitive_paths))
+              raise SystemExit('Sensitive/private file types must not be committed to the application repository: ' + ', '.join(sensitive_paths))
 
           # Construct forbidden identifiers so this validator does not flag its own source text.
           private_control_identifier = 'PDP-One-' + 'Control'
           forbidden_event = 'pull_request' + '_target:'
 
-          # Public workflows must never be wired directly to the private control repository.
+          # Application workflows must never be wired directly to the private control repository.
           for workflow in Path('.github/workflows').glob('*.y*ml'):
               text = workflow.read_text(encoding='utf-8')
               if private_control_identifier in text:
-                  raise SystemExit(f'{workflow}: public workflow must not reference the private control repository')
+                  raise SystemExit(f'{workflow}: application workflow must not reference the private control repository')
               if forbidden_event in text:
-                  raise SystemExit(f'{workflow}: pull_request_target is not allowed in PDP One public workflows')
+                  raise SystemExit(f'{workflow}: pull_request_target is not allowed in PDP One application workflows')
 
-          print('Public/private repository boundary PASS')
+          print('Application/control repository boundary PASS')
           PY
 
-      - name: Validate public-safe PR metadata
+      - name: Validate visibility-safe PR metadata
         shell: bash
         env:
           PR_BODY: ${{ github.event.pull_request.body }}
@@ -90,10 +91,11 @@ jobs:
             echo "ERROR: PR body appears to contain private credential/configuration material."
             exit 1
           fi
-          echo "Public-safe PR metadata PASS"
+          echo "Visibility-safe PR metadata PASS"
 
       - name: Boundary summary
         shell: bash
         run: |
-          echo "Canonical internal memory and acceptance evidence are maintained outside this public application repository."
+          echo "Canonical internal memory and acceptance evidence are maintained outside the application repository."
+          echo "Application-repository content must remain safe for future Public exposure in both Public and Private visibility modes."
           echo "Exact CI/build/deployment acceptance is coordinated through the private PDP One control plane."
