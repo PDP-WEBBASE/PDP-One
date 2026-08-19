@@ -61,7 +61,9 @@ try {
         }
     }
 
-    Write-PDPOneDeploymentOperation -Lease $deploymentLease -Stage "deploying-exact-release"
+    # Keep this stable stage name for existing deployment-operation observers and
+    # contracts. The selected engine may activate an exact release manifest.
+    Write-PDPOneDeploymentOperation -Lease $deploymentLease -Stage "deploying-exact-commit"
     $deploymentOutput = @(& powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File $innerScript -CommitSha $CommitSha -DeploymentId $DeploymentId -PreviewId $PreviewId -AgentRoot $AgentRoot)
     $deploymentExitCode = $LASTEXITCODE
 } finally {
