@@ -71,9 +71,12 @@ services:
     environment:
       PDP_API_URL: http://backend:8000/api/v1
       PDP_DEPLOYMENT_QUEUE: /deployment-agent/queue
+      PDP_DEPLOYMENT_REPORTS: /deployment-agent/reports
     volumes:
       - "${PDP_DEPLOYMENT_AGENT_ROOT:-C:/ProgramData/PDP-One/deployment-agent}/queue/incoming:/deployment-agent/queue/incoming"
       - "${PDP_DEPLOYMENT_AGENT_ROOT:-C:/ProgramData/PDP-One/deployment-agent}/queue/responses:/deployment-agent/queue/responses:ro"
+      - "${PDP_DEPLOYMENT_AGENT_ROOT:-C:/ProgramData/PDP-One/deployment-agent}/queue/rejected:/deployment-agent/queue/rejected:ro"
+      - "${PDP_DEPLOYMENT_AGENT_ROOT:-C:/ProgramData/PDP-One/deployment-agent}/reports:/deployment-agent/reports:ro"
     depends_on: [backend]
     healthcheck:
       test:
