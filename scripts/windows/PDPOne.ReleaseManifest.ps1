@@ -176,7 +176,7 @@ function Get-PDPOneChangeScope {
     $backend = $false
     $mcp = $false
     $web = $false
-    $host = $false
+    $hostChanged = $false
     $topology = [bool]$ConservativeFullStack
     $runtimeRelevant = [bool]$ConservativeFullStack
 
@@ -199,7 +199,7 @@ function Get-PDPOneChangeScope {
             $path -in @("package.json", "package-lock.json", "tsconfig.json", "eslint.config.mjs", "vinext.config.ts", "next.config.js", ".dockerignore", "infra/docker/web.Dockerfile", "scripts/build-verified.sh", "scripts/sites-env.sh", "scripts/install-ci.sh")
         ) { $web = $true; $runtimeRelevant = $true }
         if ($path.StartsWith("scripts/windows/", [System.StringComparison]::OrdinalIgnoreCase) -or $path.EndsWith(".bat", [System.StringComparison]::OrdinalIgnoreCase) -or $path -eq "HOST-RUNTIME-SOURCE") {
-            $host = $true
+            $hostChanged = $true
             $runtimeRelevant = $true
         }
     }
@@ -210,12 +210,12 @@ function Get-PDPOneChangeScope {
     if ($mcp) { $services += "mcp" }
     if ($web) { $services += "web" }
 
-    $profile = if ($topology) { "full" } elseif ($backend) { "backend" } elseif ($mcp) { "mcp" } elseif ($web) { "web" } elseif ($host) { "host" } else { "none" }
+    $profile = if ($topology) { "full" } elseif ($backend) { "backend" } elseif ($mcp) { "mcp" } elseif ($web) { "web" } elseif ($hostChanged) { "host" } else { "none" }
     return [pscustomobject][ordered]@{
         backend = $backend
         mcp = $mcp
         web = $web
-        host = $host
+        host = $hostChanged
         topology_sensitive = $topology
         runtime_relevant = $runtimeRelevant
         changed_services = @($services)
