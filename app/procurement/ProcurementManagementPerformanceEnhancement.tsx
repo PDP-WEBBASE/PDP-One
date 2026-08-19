@@ -70,6 +70,9 @@ function installManagementPerformanceGuard() {
     if (!original || original.origin !== window.location.origin) return previousFetch(input, init);
 
     if (original.pathname === EXTRACTION_RUNS_PATH) {
+      const requestedPage = original.searchParams.get("page");
+      if (requestedPage && requestedPage !== "1") return previousFetch(input, init);
+
       const bounded = new URL(original.toString());
       bounded.searchParams.set("page", "1");
       bounded.searchParams.set("page_size", String(MANAGEMENT_HISTORY_PAGE_SIZE));
