@@ -1,45 +1,111 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import test from "node:test";
 
+import { computeComponentFingerprints } from "../scripts/ci/component-fingerprints.mjs";
 
-test("PDP One builds all exact PR-head immutable images concurrently on one GitHub runner", async () => {
+
+test("PDP One publishes or reuses immutable content-addressed component images on one GitHub runner", async () => {
   const workflow = await readFile(new URL("../.github/workflows/build-images.yml", import.meta.url), "utf8");
   const bake = await readFile(new URL("../infra/docker/pdp-images-bake.hcl", import.meta.url), "utf8");
   const managed = await readFile(new URL("../scripts/windows/Invoke-PDPOneManagedFastDeployment.ps1", import.meta.url), "utf8");
-  const registryDeploy = await readFile(new URL("../scripts/windows/Invoke-PDPOneRegistryFastDeployment.ps1", import.meta.url), "utf8");
+  const scopedDeploy = await readFile(new URL("../scripts/windows/Invoke-PDPOneScopedRegistryDeployment.ps1", import.meta.url), "utf8");
   const compose = await readFile(new URL("../docker-compose.yml", import.meta.url), "utf8");
+  const mode = JSON.parse(await readFile(new URL("../release/component-image-mode.json", import.meta.url), "utf8"));
+  const contexts = JSON.parse(await readFile(new URL("../release/component-contexts.json", import.meta.url), "utf8"));
+  const dockerignore = await readFile(new URL("../.dockerignore", import.meta.url), "utf8");
 
   assert.match(workflow, /pull_request:\s*\n\s+paths-ignore:/);
   assert.doesNotMatch(workflow, /\n\s+push:\s*\n\s+branches:\s*\[main\]/);
+  assert.doesNotMatch(workflow, /-\s+"release\/\*\*"/);
   assert.match(workflow, /group:\s*pdp-one-images-pr-\$\{\{ github\.event\.pull_request\.number \}\}/);
   assert.match(workflow, /cancel-in-progress:\s*true/);
-  assert.match(workflow, /IMAGE_SHA:\s*\$\{\{ github\.event\.pull_request\.head\.sha \}\}/);
+  assert.match(workflow, /RELEASE_SHA:\s*\$\{\{ github\.event\.pull_request\.head\.sha \}\}/);
+  assert.match(workflow, /component-fingerprints\.mjs --github-output/);
+  assert.match(workflow, /docker buildx imagetools inspect "\$image"/);
+  assert.match(workflow, /action="reuse"/);
+  assert.match(workflow, /targets=\(\)/);
+  assert.match(workflow, /targets:\s*\$\{\{ steps\.plan\.outputs\.targets \}\}/);
+  assert.match(workflow, /if:\s*steps\.plan\.outputs\.targets != ''/);
   assert.match(workflow, /docker\/bake-action@v7/);
   assert.match(workflow, /source:\s*\./);
   assert.match(workflow, /files:\s*\.\/infra\/docker\/pdp-images-bake\.hcl/);
-  assert.match(workflow, /targets:\s*default/);
   assert.match(workflow, /push:\s*true/);
   assert.match(workflow, /provenance:\s*false/);
   assert.match(workflow, /DOCKER_BUILD_RECORD_UPLOAD:\s*"false"/);
-  assert.doesNotMatch(workflow, /strategy:\s*\n\s+fail-fast:/);
   assert.doesNotMatch(workflow, /matrix:\s*\n/);
 
   assert.match(bake, /group "default"\s*\{[\s\S]*targets = \["backend", "mcp", "web"\]/);
-  assert.match(bake, /ghcr\.io\/pdp-webbase\/pdp-one-backend:\$\{IMAGE_SHA\}/);
-  assert.match(bake, /ghcr\.io\/pdp-webbase\/pdp-one-mcp:\$\{IMAGE_SHA\}/);
-  assert.match(bake, /ghcr\.io\/pdp-webbase\/pdp-one-web:\$\{IMAGE_SHA\}/);
-  assert.equal((bake.match(/"org\.opencontainers\.image\.revision" = IMAGE_SHA/g) || []).length, 3);
+  assert.match(bake, /pdp-one-backend:content-\$\{BACKEND_FINGERPRINT\}/);
+  assert.match(bake, /pdp-one-mcp:content-\$\{MCP_FINGERPRINT\}/);
+  assert.match(bake, /pdp-one-web:content-\$\{WEB_FINGERPRINT\}/);
+  assert.equal((bake.match(/"org\.opencontainers\.image\.revision"\s+= RELEASE_SHA/g) || []).length, 3);
+  assert.equal((bake.match(/"io\.pdpone\.component\.fingerprint"/g) || []).length, 3);
+  assert.equal((bake.match(/"io\.pdpone\.component"/g) || []).length, 3);
   assert.match(bake, /cache-from = \["type=gha,scope=pdp-one-backend"\]/);
   assert.match(bake, /cache-to\s+= \["type=gha,mode=max,scope=pdp-one-web"\]/);
-  assert.match(bake, /PDP_BUILD_ID\s+= IMAGE_SHA/);
+  assert.match(bake, /PDP_BUILD_ID\s+= "content-\$\{WEB_FINGERPRINT\}"/);
 
-  assert.match(managed, /Invoke-PDPOneRegistryFastDeployment\.ps1/);
-  assert.match(registryDeploy, /local_image_build_performed = \$false/);
-  assert.match(registryDeploy, /-Command "docker" -Arguments @\("pull", \$image\)/);
-  assert.match(registryDeploy, /Assert-PDPOneImageRevision -Image \$image -ExpectedCommit \$CommitSha/);
-  assert.doesNotMatch(registryDeploy, /-Command "docker" -Arguments @\("compose", "build"/);
+  assert.equal(mode.mode, "content-addressed-v1");
+  assert.ok(contexts.components.web.exclude_prefixes.includes("scripts/ci/"));
+  assert.match(dockerignore, /^release$/m);
+  assert.match(dockerignore, /^scripts\/ci$/m);
+  assert.match(dockerignore, /^scripts\/windows$/m);
+  assert.match(dockerignore, /^backend$/m);
+  assert.match(dockerignore, /^services$/m);
+
+  assert.match(managed, /Invoke-PDPOneScopedRegistryDeployment\.ps1/);
+  assert.match(scopedDeploy, /Get-PDPOneComponentFingerprint/);
+  assert.match(scopedDeploy, /Get-PDPOneComponentImageReference/);
+  assert.match(scopedDeploy, /Write-PDPOneReleaseManifest/);
+  assert.match(scopedDeploy, /local_image_build_performed = \$false/);
+  assert.doesNotMatch(scopedDeploy, /-Command "docker" -Arguments @\("compose", "build"/);
   assert.doesNotMatch(compose, /^\s+build:/m);
+});
+
+
+test("component fingerprinting ignores build-only web files and changes only the affected component", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "pdp-component-fingerprint-"));
+  try {
+    for (const directory of ["backend", "services/pdp_mcp", "app", "release", "scripts/ci", "scripts/windows", "tests"]) {
+      await mkdir(path.join(root, directory), { recursive: true });
+    }
+    await writeFile(path.join(root, "backend", "a.py"), "backend-v1\n");
+    await writeFile(path.join(root, "services", "pdp_mcp", "a.py"), "mcp-v1\n");
+    await writeFile(path.join(root, "app", "page.tsx"), "web-v1\n");
+    await writeFile(path.join(root, "scripts", "ci", "planner.mjs"), "ignored-build-tool-v1\n");
+    await writeFile(path.join(root, "scripts", "windows", "host.ps1"), "ignored-host-tool-v1\n");
+    await writeFile(path.join(root, "tests", "contract.test.mjs"), "ignored-test-v1\n");
+    await writeFile(path.join(root, "release", "component-contexts.json"), JSON.stringify({
+      schema: "pdp-one.component-contexts.v1",
+      components: {
+        backend: { root: "backend", exclude_prefixes: [], exclude_files: [], exclude_suffixes: [], exclude_name_prefixes: [] },
+        mcp: { root: "services/pdp_mcp", exclude_prefixes: [], exclude_files: [], exclude_suffixes: [], exclude_name_prefixes: [] },
+        web: {
+          root: ".",
+          exclude_prefixes: ["backend/", "services/", "release/", "scripts/windows/", "scripts/ci/", "tests/"],
+          exclude_files: [],
+          exclude_suffixes: [".md", ".bat"],
+          exclude_name_prefixes: [".env"],
+        },
+      },
+    }, null, 2));
+
+    const first = await computeComponentFingerprints(root);
+    await writeFile(path.join(root, "scripts", "ci", "planner.mjs"), "ignored-build-tool-v2\n");
+    const afterBuildTool = await computeComponentFingerprints(root);
+    assert.deepEqual(afterBuildTool, first);
+
+    await writeFile(path.join(root, "app", "page.tsx"), "web-v2\n");
+    const afterWeb = await computeComponentFingerprints(root);
+    assert.equal(afterWeb.backend, first.backend);
+    assert.equal(afterWeb.mcp, first.mcp);
+    assert.notEqual(afterWeb.web, first.web);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 
