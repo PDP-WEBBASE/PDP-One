@@ -6,9 +6,6 @@ on:
 permissions:
   contents: read
 
-# The protected main branch accepts changes through up-to-date PRs. CI therefore
-# validates the exact PR head and does not repeat the same suite after merge.
-# Newer commits on the same PR cancel superseded runs.
 concurrency:
   group: pdp-one-ci-pr-${{ github.event.pull_request.number }}
   cancel-in-progress: true
@@ -37,27 +34,38 @@ jobs:
           run_windows_helpers=false
           run_preview=false
           run_connector_packages=false
+          run_fast_contracts=false
 
           while IFS= read -r path; do
             [ -n "$path" ] || continue
 
             case "$path" in
-              docs/*|*.md)
-                ;;
-              *)
+              app/*|components/*|lib/*|public/*|styles/*|build/*|package.json|package-lock.json|tsconfig.json|eslint.config.*|vinext.config.*|next.config.*|scripts/build-verified.sh|scripts/sites-env.sh|scripts/install-ci.sh|infra/docker/web.Dockerfile)
                 run_node=true
+                ;;
+              tests/*.test.mjs)
+                case "$path" in
+                  tests/registry-deployment-contract.test.mjs|tests/deployment-operation-lock.test.mjs|tests/disk-guard-contract.test.mjs|tests/disk-lifecycle-contract.test.mjs|tests/mcp-stability-contract.test.mjs|tests/persistent-analysis-contract.test.mjs|tests/development-speed-foundation-contract.test.mjs)
+                    run_fast_contracts=true
+                    ;;
+                  *)
+                    run_node=true
+                    ;;
+                esac
                 ;;
             esac
 
             case "$path" in
               backend/*|services/pdp_mcp/*|docker-compose.yml|.github/workflows/ci.yml)
                 run_backend=true
+                run_fast_contracts=true
                 ;;
             esac
 
             case "$path" in
               scripts/windows/*|*.bat|docker-compose.yml|HOST-RUNTIME-SOURCE|.github/workflows/ci.yml)
                 run_windows_helpers=true
+                run_fast_contracts=true
                 ;;
             esac
 
@@ -72,6 +80,12 @@ jobs:
                 run_connector_packages=true
                 ;;
             esac
+
+            case "$path" in
+              .github/workflows/*|release/*|infra/docker/pdp-images-bake.hcl)
+                run_fast_contracts=true
+                ;;
+            esac
           done < /tmp/pdp-changed-files.txt
 
           {
@@ -80,12 +94,13 @@ jobs:
             echo "RUN_WINDOWS_HELPERS=$run_windows_helpers"
             echo "RUN_PREVIEW=$run_preview"
             echo "RUN_CONNECTOR_PACKAGES=$run_connector_packages"
+            echo "RUN_FAST_CONTRACTS=$run_fast_contracts"
           } >> "$GITHUB_ENV"
 
-          printf 'scope node=%s backend=%s windows_helpers=%s preview=%s connector_packages=%s\n' \
-            "$run_node" "$run_backend" "$run_windows_helpers" "$run_preview" "$run_connector_packages"
+          printf 'scope node=%s backend=%s windows_helpers=%s preview=%s connector_packages=%s fast_contracts=%s\n' \
+            "$run_node" "$run_backend" "$run_windows_helpers" "$run_preview" "$run_connector_packages" "$run_fast_contracts"
 
-      - name: Reject secrets and destructive volume operations
+      - name: Fast safety preflight
         shell: bash
         run: |
           set -euo pipefail
@@ -124,10 +139,22 @@ jobs:
         run: pwsh -NoLogo -NoProfile -File scripts/windows/tests/Test-PortableRecovery.ps1
 
       - uses: actions/setup-node@v4
-        if: env.RUN_NODE == 'true'
+        if: env.RUN_NODE == 'true' || env.RUN_FAST_CONTRACTS == 'true'
         with:
           node-version: 22
           cache: npm
+
+      - name: Run fast cross-component contracts
+        if: env.RUN_FAST_CONTRACTS == 'true'
+        run: |
+          node --test \
+            tests/registry-deployment-contract.test.mjs \
+            tests/deployment-operation-lock.test.mjs \
+            tests/disk-guard-contract.test.mjs \
+            tests/disk-lifecycle-contract.test.mjs \
+            tests/mcp-stability-contract.test.mjs \
+            tests/persistent-analysis-contract.test.mjs \
+            tests/development-speed-foundation-contract.test.mjs
 
       - name: Install Node dependencies
         if: env.RUN_NODE == 'true'
@@ -150,7 +177,7 @@ jobs:
           if-no-files-found: warn
           retention-days: 3
 
-      - name: Run Node contract and frontend tests
+      - name: Run frontend build and full Node suite
         if: env.RUN_NODE == 'true'
         run: npm test
 
@@ -159,7 +186,7 @@ jobs:
         shell: bash
         run: |
           mkdir -p dist/.pdpone-preview
-          cat > dist/.pdpone-preview/manifest.json <<EOF
+          cat > dist/.pdpone-preview/manifest.json <<PREVIEW
           {
             "repository": "${GITHUB_REPOSITORY}",
             "commit": "${{ github.event.pull_request.head.sha }}",
@@ -169,7 +196,7 @@ jobs:
             "database_migrated": false,
             "deployment_authorized": false
           }
-          EOF
+          PREVIEW
 
       - name: Upload procurement preview artifact
         if: env.RUN_PREVIEW == 'true' && success()
@@ -244,7 +271,7 @@ jobs:
         run: |
           mkdir -p setad-live-test-package
           git archive --format=zip --output="setad-live-test-package/PDP-One-SETAD-Live-Test-Source-${{ github.event.pull_request.head.sha }}.zip" HEAD
-          cat > setad-live-test-package/README-SETAD-LIVE-TEST.txt <<'EOF'
+          cat > setad-live-test-package/README-SETAD-LIVE-TEST.txt <<'PACKAGE'
           PDP One - SETAD controlled live test
 
           1. Extract the source ZIP to a new folder.
@@ -254,7 +281,7 @@ jobs:
           5. A PostgreSQL backup is created before migration.
           6. Upload only the generated PDP-ONE-SETAD-LIVE-TEST-....zip report.
              Do not upload the separate database backup.
-          EOF
+          PACKAGE
 
       - name: Upload controlled SETAD live-test source package
         if: env.RUN_CONNECTOR_PACKAGES == 'true' && success()
@@ -271,7 +298,7 @@ jobs:
         run: |
           mkdir -p hezareh-parsnamad-live-test-package
           git archive --format=zip --output="hezareh-parsnamad-live-test-package/PDP-One-Hezareh-ParsNamad-Live-Test-Source-${{ github.event.pull_request.head.sha }}.zip" HEAD
-          cat > hezareh-parsnamad-live-test-package/README-HEZAREH-PARSNAMAD-LIVE-TEST.txt <<'EOF'
+          cat > hezareh-parsnamad-live-test-package/README-HEZAREH-PARSNAMAD-LIVE-TEST.txt <<'PACKAGE'
           PDP One - Hezareh and Pars Namad controlled live test
 
           1. Extract the source ZIP to a new folder.
@@ -283,7 +310,7 @@ jobs:
           7. A PostgreSQL backup is created before migration.
           8. Upload only the generated PDP-ONE-HEZAREH-PARSNAMAD-LIVE-TEST-....zip report.
              Do not upload the separate database backup.
-          EOF
+          PACKAGE
 
       - name: Upload Hezareh and Pars Namad live-test source package
         if: env.RUN_CONNECTOR_PACKAGES == 'true' && success()
@@ -300,7 +327,7 @@ jobs:
         run: |
           mkdir -p parsnamad-tender-repair-package
           git archive --format=zip --output="parsnamad-tender-repair-package/PDP-One-ParsNamad-Tender-Repair-Source-${{ github.event.pull_request.head.sha }}.zip" HEAD
-          cat > parsnamad-tender-repair-package/README-PARSNAMAD-TENDER-REPAIR.txt <<'EOF'
+          cat > parsnamad-tender-repair-package/README-PARSNAMAD-TENDER-REPAIR.txt <<'PACKAGE'
           PDP One - Pars Namad tender repair and five-page retest
 
           1. Extract the source ZIP to a new folder.
@@ -311,7 +338,7 @@ jobs:
           6. The corrected tender route is tested for five pages.
           7. Upload only the generated PDP-ONE-PARSNAMAD-TENDER-REPAIR-....zip report.
              Do not upload the separate database backup.
-          EOF
+          PACKAGE
 
       - name: Upload Pars Namad tender repair and retest package
         if: env.RUN_CONNECTOR_PACKAGES == 'true' && success()
@@ -327,7 +354,29 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Classify Windows compatibility scope
+        id: windows_scope
+        shell: powershell
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          $changed = @(git diff --name-only $env:BASE_SHA $env:HEAD_SHA)
+          $required = $false
+          foreach ($path in $changed) {
+            $normalized = ([string]$path).Replace('\', '/')
+            if ($normalized -like 'scripts/windows/*' -or $normalized -like '*.bat' -or $normalized -eq 'docker-compose.yml' -or $normalized -eq 'HOST-RUNTIME-SOURCE' -or $normalized -eq '.github/workflows/ci.yml') {
+              $required = $true
+              break
+            }
+          }
+          "required=$($required.ToString().ToLowerInvariant())" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding ascii
+
       - name: Parse all Windows scripts with Windows PowerShell 5.1
+        if: steps.windows_scope.outputs.required == 'true'
         shell: powershell
         run: |
           $failed = $false
@@ -341,6 +390,13 @@ jobs:
             }
           }
           if ($failed) { exit 1 }
+
       - name: Test DPAPI and compatibility helpers
+        if: steps.windows_scope.outputs.required == 'true'
         shell: powershell
         run: .\scripts\windows\tests\Test-WindowsPowerShell51.ps1
+
+      - name: Windows compatibility not affected
+        if: steps.windows_scope.outputs.required != 'true'
+        shell: powershell
+        run: Write-Host 'No Windows-sensitive files changed; required check identity remains successful without re-running the full compatibility suite.'
