@@ -105,6 +105,37 @@ class NoticeIngestionTests(TestCase):
         self.assertEqual(source.revisions.count(), 2)
         self.assertEqual(notice.title, "مناقصه طراحی ساختمان ـ تمدید مهلت")
 
+    def test_page_movement_and_raw_capture_drift_do_not_create_semantic_update(self):
+        first = self.parsed_notice()
+        first.raw_payload = {"source_marker": "page-one"}
+        source, _, status = ingest_parsed_notice(
+            self.connector,
+            first,
+            run=self.run,
+            page_number=1,
+        )
+        self.assertEqual(status, ExtractionRunItem.Status.NEW)
+        self.assertEqual(source.revisions.count(), 1)
+
+        moved = self.parsed_notice()
+        moved.source_url = "https://www.hezarehinfo.net/tenders/-%21/page-2"
+        moved.raw_payload = {"source_marker": "page-two"}
+        source, _, status = ingest_parsed_notice(
+            self.connector,
+            moved,
+            run=self.run,
+            page_number=2,
+        )
+
+        source.refresh_from_db()
+        self.assertEqual(status, ExtractionRunItem.Status.DUPLICATE)
+        self.assertEqual(source.revisions.count(), 1)
+        self.assertEqual(source.source_url, moved.source_url)
+        self.assertEqual(source.raw_payload["list"]["source_marker"], "page-two")
+        latest_item = self.run.items.order_by("-created_at").first()
+        self.assertEqual(latest_item.status, ExtractionRunItem.Status.DUPLICATE)
+        self.assertEqual(latest_item.changed_fields, [])
+
     def test_type_conflict_is_saved_in_detected_view_and_marked_for_review(self):
         parsed = self.parsed_notice(title="استعلام خدمات طراحی")
         parsed.content_detected_type = "inquiry"
