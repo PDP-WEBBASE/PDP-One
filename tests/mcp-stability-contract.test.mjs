@@ -42,6 +42,7 @@ test("Windows startup and self-heal validate MCP without amplifying public-only 
   const startup = await load("../scripts/windows/Start-PDPOne.ps1");
   const repair = await load("../scripts/windows/Repair-PDPOneConnectivity.ps1");
   const watchdog = await load("../scripts/windows/Ensure-PDPOneMcpHealthy.ps1");
+  const startupTask = await load("../scripts/windows/Register-PDPOneStartupTask.ps1");
 
   assert.match(startup, /local_mcp_health/);
   assert.match(startup, /public_mcp_health/);
@@ -63,6 +64,20 @@ test("Windows startup and self-heal validate MCP without amplifying public-only 
     repair,
     /Only a repeatedly confirmed full web\/API public-route failure[\s\S]*?Restart-PDPOnePublicRoute/,
   );
+
+  assert.match(repair, /Wait-PDPOnePublicDnsPublication/);
+  assert.match(repair, /Get-PDPOnePublicIPv4Addresses/);
+  assert.match(repair, /public_dns_state/);
+  assert.match(repair, /funnel_registration_reset/);
+  assert.match(repair, /Reset-PDPOneFunnelRegistration/);
+  assert.match(repair, /"funnel", "reset"/);
+  assert.match(repair, /"funnel", "--bg", "--yes", "80"/);
+  assert.match(repair, /Tailscale node identity, MCP token, nginx and all application data/);
+  assert.doesNotMatch(repair, /"tailscale", "(?:down|logout|up)"/);
+
+  assert.match(startupTask, /RestartCount 1/);
+  assert.match(startupTask, /RestartInterval \(New-TimeSpan -Minutes 5\)/);
+  assert.doesNotMatch(startupTask, /RestartCount 20/);
 
   assert.match(watchdog, /\.State\.Health/);
   assert.match(watchdog, /Test-LocalMcpRoute/);
