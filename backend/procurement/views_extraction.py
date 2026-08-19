@@ -6,7 +6,7 @@ from core.models import AuditEvent
 
 from .models_extraction import ExtractionRun
 from .permissions_extraction import IsManagerOrReadOnly
-from .serializers_extraction import ExtractionRunSerializer
+from .serializers_extraction import ExtractionRunListSerializer, ExtractionRunSerializer
 from .tasks import run_extraction
 
 
@@ -22,12 +22,18 @@ class ExtractionRunViewSet(
     ordering_fields = ["created_at", "started_at", "finished_at", "records_new", "records_failed"]
     ordering = ["-created_at"]
 
+    def get_serializer_class(self):
+        if self.action == "list":
+            return ExtractionRunListSerializer
+        return ExtractionRunSerializer
+
     def get_queryset(self):
-        return (
-            ExtractionRun.objects.select_related("requested_by")
-            .prefetch_related("connectors__source", "pages__connector", "errors__connector")
-            .all()
+        queryset = ExtractionRun.objects.select_related("requested_by").prefetch_related(
+            "connectors__source"
         )
+        if self.action == "retrieve":
+            queryset = queryset.prefetch_related("pages__connector", "errors__connector")
+        return queryset.all()
 
     def perform_create(self, serializer):
         run = serializer.save(requested_by=self.request.user)

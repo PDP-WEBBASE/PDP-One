@@ -53,12 +53,14 @@ test("ordinary workspace mutations avoid global refresh and use local reconcilia
   assert.match(workspace, /bulkWorkspace/);
 });
 
-test("the only procurement hard reload is the explicit connectivity recovery action", async () => {
+test("connectivity recovery is targeted and does not hard reload the procurement workspace", async () => {
   const v14 = await read("app/procurement/ProcurementWorkspaceV14.tsx");
   const reloads = v14.match(/window\.location\.reload\s*\(/g) || [];
 
-  assert.equal(reloads.length, 1);
+  assert.equal(reloads.length, 0);
   assert.match(v14, /fetchFailure/);
+  assert.match(v14, /retryFailedEndpoint/);
+  assert.match(v14, /probeFailedEndpoint/);
   assert.match(v14, /تلاش مجدد/);
 });
 
