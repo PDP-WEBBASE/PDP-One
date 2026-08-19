@@ -23,6 +23,31 @@ from .serializers_direct import (
     OpportunityFollowUpSerializer,
     OpportunityResultSerializer,
 )
+from .views import _filter_deadline_urgency
+
+
+DIRECT_RECOMMENDED_STAGES = [
+    DirectOpportunity.Stage.REVIEWING,
+    DirectOpportunity.Stage.FOLLOWING_UP,
+    DirectOpportunity.Stage.NEGOTIATING,
+]
+DIRECT_SELECTED_STAGES = [
+    DirectOpportunity.Stage.SELECTED,
+    DirectOpportunity.Stage.PREPARING,
+]
+DIRECT_RESULT_STAGES = [
+    DirectOpportunity.Stage.WON,
+    DirectOpportunity.Stage.LOST,
+    DirectOpportunity.Stage.STOPPED,
+    DirectOpportunity.Stage.DEFERRED,
+    DirectOpportunity.Stage.CONVERTED_TO_NOTICE,
+    DirectOpportunity.Stage.CONVERTED_TO_CONTRACT,
+]
+DIRECT_ACTIVE_STAGES = [
+    DirectOpportunity.Stage.SELECTED,
+    DirectOpportunity.Stage.PREPARING,
+    DirectOpportunity.Stage.SUBMITTED,
+]
 
 
 class DirectOpportunityViewSet(
@@ -36,12 +61,18 @@ class DirectOpportunityViewSet(
         "reference_record__code", "title", "employer_name", "description",
         "domain", "province", "city", "next_action",
     ]
-    filterset_fields = ["opportunity_type", "stage", "responsible", "province", "probability", "confidentiality"]
-    ordering_fields = ["next_action_due", "last_activity_at", "created_at", "updated_at", "probability_percent"]
-    ordering = ["next_action_due", "-last_activity_at"]
+    filterset_fields = [
+        "opportunity_type", "stage", "responsible", "province", "probability",
+        "importance", "confidentiality",
+    ]
+    ordering_fields = [
+        "next_action_due", "last_activity_at", "created_at", "updated_at",
+        "probability_percent", "id",
+    ]
+    ordering = ["-last_activity_at", "-id"]
 
     def get_queryset(self):
-        return (
+        queryset = (
             DirectOpportunity.objects.filter(soft_deleted_at__isnull=True)
             .select_related(
                 "responsible", "created_by", "primary_contact", "result", "result__contract",
@@ -50,6 +81,25 @@ class DirectOpportunityViewSet(
             .prefetch_related("contacts", "follow_ups__created_by")
             .annotate(follow_up_count=Count("follow_ups"))
         )
+        params = self.request.query_params
+        workflow_view = params.get("workflow_view", "").strip()
+        if workflow_view == "recommended":
+            queryset = queryset.filter(stage__in=DIRECT_RECOMMENDED_STAGES)
+        elif workflow_view == "selected":
+            queryset = queryset.filter(stage__in=DIRECT_SELECTED_STAGES)
+        elif workflow_view == "submitted":
+            queryset = queryset.filter(stage=DirectOpportunity.Stage.SUBMITTED)
+        elif workflow_view == "results":
+            queryset = queryset.filter(stage__in=DIRECT_RESULT_STAGES)
+        elif workflow_view == "active":
+            queryset = queryset.filter(stage__in=DIRECT_ACTIVE_STAGES)
+
+        queryset = _filter_deadline_urgency(
+            queryset,
+            "next_action_due",
+            params.get("urgency", "").strip(),
+        )
+        return queryset
 
     def get_serializer_class(self):
         if self.action in {"create", "retrieve", "update", "partial_update"}:

@@ -38,14 +38,18 @@ test("routes procurement through V23 while preserving V22 to V13", async () => {
   for (let version = 13; version <= 23; version += 1) {
     versions.set(version, await readFile(new URL(`../app/procurement/ProcurementWorkspaceV${version}.tsx`, import.meta.url), "utf8"));
   }
+  const pagination = await readFile(new URL("../app/procurement/ProcurementPaginationEnhancement.tsx", import.meta.url), "utf8");
   const enhancements = await readFile(new URL("../app/procurement/ProcurementWorkspaceEnhancements.tsx", import.meta.url), "utf8");
   assert.match(page, /ProcurementWorkspaceV23/);
   assert.match(versions.get(23), /ProcurementWorkspaceV22/);
+  assert.match(versions.get(23), /ProcurementPaginationEnhancement/);
   assert.match(versions.get(23), /ProcurementWorkspaceEnhancements/);
   for (let version = 22; version > 13; version -= 1) {
     assert.match(versions.get(version), new RegExp(`ProcurementWorkspaceV${version - 1}`));
   }
-  assert.match(versions.get(22), /is_recommended/);
+  assert.match(pagination, /recommended-notices/);
+  assert.match(pagination, /actionable/);
+  assert.doesNotMatch(versions.get(22), /fetchCompleteRecommended/);
   assert.match(enhancements, /ProcurementAnalysisCenterPanel/);
   assert.match(enhancements, /AutomationControlPanel/);
   assert.match(enhancements, /ManagementDashboardPanel/);
