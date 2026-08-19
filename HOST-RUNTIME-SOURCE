@@ -1,5 +1,5 @@
 PDP One Windows host-orchestration source is part of the exact application commit.
 
-Revision policy: v1-network-startup-recovery-20260819
+Revision policy: v2-low-latency-startup-20260819
 
 This public-safe marker intentionally changes when host-only runtime orchestration requires exact-commit GHCR image publication for the governed registry deployment path. It contains no secrets or private runtime data.
