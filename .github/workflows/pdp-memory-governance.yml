@@ -22,7 +22,6 @@ jobs:
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
           set -euo pipefail
           git diff --name-only "$BASE_SHA" "$HEAD_SHA" > /tmp/pdp-changed-files.txt
@@ -30,20 +29,16 @@ jobs:
           cat /tmp/pdp-changed-files.txt
 
           python - <<'PY'
-          import os
           from pathlib import Path
 
-          pr_number = int(os.environ['PR_NUMBER'])
           changed = [line.strip() for line in Path('/tmp/pdp-changed-files.txt').read_text(encoding='utf-8').splitlines() if line.strip()]
 
-          # Transitional exception only for the already-open migration-baseline PRs.
-          # New application PRs must not write canonical private Project Memory here.
-          legacy_memory_prs = {83, 84, 86}
+          # Canonical Project Memory is private. No application PR may modify it.
           memory_changes = [p for p in changed if p.startswith('docs/project-memory/')]
-          if memory_changes and pr_number not in legacy_memory_prs:
+          if memory_changes:
               raise SystemExit(
-                  'Canonical Project Memory has moved to the private control repository. '
-                  'New application PRs must not modify docs/project-memory/**.'
+                  'Canonical Project Memory is maintained in the private control repository. '
+                  'Application PRs must not modify docs/project-memory/**.'
               )
 
           forbidden_exact = {
