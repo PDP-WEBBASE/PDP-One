@@ -23,7 +23,7 @@
 2. فایل `.pdpone` را کنار `RESTORE-PDP-ONE.bat` بگذارید؛ یا هنگام اجرا مسیر کامل آن را وارد کنید.
 3. `RESTORE-PDP-ONE.bat` را اجرا و Passphrase را وارد کنید.
 4. ابزار، Source ثبت‌شده در Backup را در `C:\PDP-One` بازسازی، پیش‌نیازها را نصب، `.env`، PostgreSQL، فایل‌های خصوصی، Redis و هویت Tailscale را Restore و Health را اجرا می‌کند.
-5. هنگام نصب Deployment Agent، Fine-grained GitHub Token با دسترسی Read-only به Repository را یک‌بار وارد کنید. این Token در GitHub یا Backup نیست و با DPAPI ویندوز جدید نگه‌داری می‌شود.
+5. هنگام نصب Deployment Agent، یک GitHub Personal Access Token (classic) با حداقل Scope برابر `read:packages` و متعلق به حسابی که مجوز Read روی Packageهای Container خصوصی PDP One دارد وارد کنید. Repository برنامه Public است و برای Source عمومی Scope اضافی `repo` لازم نیست. Token فقط در همان Windows account با DPAPI نگه‌داری می‌شود و نباید در GitHub، Backup، ChatGPT، Screenshot یا Log قرار گیرد.
 
 اگر Windows برای WSL یا VirtualMachinePlatform نیازمند Restart باشد، پس از ورود مجدد همان `RESTORE-PDP-ONE.bat` را اجرا کنید. Marker امن فقط اجازه ادامه همان Backup را می‌دهد و از بازنویسی مسیر نامرتبط جلوگیری می‌کند.
 

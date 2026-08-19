@@ -1,10 +1,10 @@
 # PDP ONE — APPLICATION REPOSITORY START
 
-> This repository is the PDP One **application source repository**. It is being prepared for Public visibility. Do not store canonical private Project Memory, secrets, private runtime evidence or internal Session coordination here.
+> This repository is the PDP One **Public canonical application source repository**. Do not store canonical private Project Memory, secrets, private runtime evidence or internal Session coordination here.
 
 ## Authorized PDP One conversations
 
-A new ChatGPT Conversation still requires `PDPONE START` once before PDP One mutations. After successful activation, the Conversation remains active until `PDPONE END`.
+A new ChatGPT Conversation requires `PDPONE START` once before PDP One mutations. After successful activation, the Conversation remains active until `PDPONE END`.
 
 For authorized project work, canonical private control/memory is maintained in the connected private repository:
 
@@ -36,6 +36,8 @@ Public GitHub Actions in this repository must never receive credentials granting
 
 Application PRs/Issues/workflow output must be public-safe. Internal governance, concurrency locks, exact acceptance evidence and private operational rationale are recorded in the private control plane.
 
+Canonical `docs/project-memory/**` content must not be added or modified by application PRs.
+
 ## Runtime boundary
 
 Repository topology does not itself move or recreate PostgreSQL/business data, Docker volumes/private files, Windows runtime data, Tailscale identity/state or MCP secrets.
@@ -44,9 +46,14 @@ Repository topology does not itself move or recreate PostgreSQL/business data, D
 
 Keep application `main`, PR head, merge commit, immutable image/build identity, deployed exact commit and deployment ID distinct. The private control plane records the accepted cross-system lineage.
 
-## Current migration rule
+## Repository migration status
 
-Until the private migration Session records PRE-PUBLIC PASS, repository visibility must not be changed merely because this forwarding file exists. No Git-history rewrite is authorized by default.
+The Public-application / Private-control migration is **COMPLETED**.
+
+- `PDP-WEBBASE/PDP-One` is the Public canonical application repository.
+- `PDP-WEBBASE/PDP-One-Control` is the Private canonical control/memory repository.
+- Future PDP One work uses this two-repository model directly; there is no PRE-PUBLIC transitional phase.
+- No Git-history rewrite was performed as part of the migration; do not rewrite history without separate explicit authorization.
 
 ## Public contributor safety
 

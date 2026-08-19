@@ -11,10 +11,34 @@ $envPath = Assert-PDPOneConfiguration -ProjectRoot $ProjectRoot
 $BootstrapSourceRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 
 Write-Host "One-time setup: PDP One Local Deployment Agent" -ForegroundColor Cyan
-Write-Host "A fine-grained GitHub token with read-only access to PDP-WEBBASE/PDP-One is required once." -ForegroundColor Yellow
-Write-Host "It is protected with Windows DPAPI for this Windows account and is never printed or committed." -ForegroundColor DarkGreen
-$secureToken = Read-Host "Paste the fine-grained GitHub token" -AsSecureString
+Write-Host "A GitHub Personal Access Token (classic) with minimum read:packages is required once for Private GHCR image pulls." -ForegroundColor Yellow
+Write-Host "The application repository is Public; repo scope is not required for source access. The GitHub account must have read access to the PDP One container packages." -ForegroundColor Yellow
+Write-Host "The token is protected with Windows DPAPI for this Windows account and is never printed or committed." -ForegroundColor DarkGreen
+$secureToken = Read-Host "Paste the GitHub PAT classic with read:packages" -AsSecureString
 if ($secureToken.Length -lt 20) { throw "A GitHub token was not supplied." }
+
+if (-not (Test-PDPOneDockerEngine)) {
+    throw "Docker Engine must be ready before the GHCR credential can be validated."
+}
+
+$credentialPointer = [IntPtr]::Zero
+$plainCredential = $null
+try {
+    $credentialPointer = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secureToken)
+    $plainCredential = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($credentialPointer)
+    if ([string]::IsNullOrWhiteSpace($plainCredential)) { throw "The GitHub token could not be opened for validation." }
+
+    $plainCredential | & docker login ghcr.io --username "PDP-WEBBASE" --password-stdin | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        throw "GitHub Container Registry login failed. Use a PAT classic with read:packages and an account that can read the PDP One container packages."
+    }
+} finally {
+    if ($credentialPointer -ne [IntPtr]::Zero) {
+        [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($credentialPointer)
+    }
+    Remove-Variable plainCredential -ErrorAction SilentlyContinue
+    & docker logout ghcr.io *> $null
+}
 
 foreach ($directory in @("queue\incoming", "queue\processing", "queue\responses", "queue\rejected", "state\processed", "audit", "secrets", "reports", "downloads")) {
     New-Item -ItemType Directory -Force -Path (Join-Path $AgentRoot $directory) | Out-Null
