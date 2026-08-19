@@ -1,11 +1,10 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import AnalysisContextManager from "./AnalysisContextManager";
+import FastAnalysisContextManager, { AnalysisSection } from "./FastAnalysisContextManager";
 import AnalysisEnginePanel from "./AnalysisEnginePanel";
 import ProcurementWorkspaceV13 from "./ProcurementWorkspaceV13";
 
-type AnalysisSection = "prompts" | "keywords" | "company" | "versions";
 type FetchFailure = {
   url: string;
   reason: "timeout" | "network" | "service";
@@ -22,13 +21,6 @@ const FETCH_FAILURE_EVENT = "pdp-procurement-fetch-failure";
 const TRANSIENT_HTTP_STATUSES = new Set([502, 503, 504]);
 const FETCH_RECOVERY_ATTEMPTS = 3;
 const FETCH_RECOVERY_DELAY_MS = 2_500;
-
-const labelToSection: Record<string, AnalysisSection> = {
-  "نقش و Prompt": "prompts",
-  "کلیدواژه‌ها": "keywords",
-  "پروفایل، صلاحیت و رزومه": "company",
-  "نسخه‌ها و فعال‌سازی": "versions",
-};
 
 const floatingButtonStyle = {
   position: "fixed",
@@ -60,8 +52,6 @@ function sessionRequest(value: string) {
   return parsedRequestUrl(value)?.pathname === "/api/v1/auth/session/";
 }
 
-// Extraction history can be several megabytes. It must not prevent the tender
-// and inquiry workspace from opening after Windows or Rancher startup.
 function optionalStartupCollection(value: string) {
   const parsed = parsedRequestUrl(value);
   return parsed?.pathname === "/api/v1/procurement/extraction-runs/";
@@ -234,20 +224,6 @@ export default function ProcurementWorkspaceV14() {
   const [retryingFailure, setRetryingFailure] = useState(false);
 
   useEffect(() => {
-    if (analysisSection) return;
-    const handleClick = (event: MouseEvent) => {
-      const target = event.target as HTMLElement | null;
-      const button = target?.closest("button");
-      if (!button) return;
-      const section = labelToSection[(button.textContent || "").trim()];
-      if (!section) return;
-      setAnalysisSection(section);
-    };
-    document.addEventListener("click", handleClick);
-    return () => document.removeEventListener("click", handleClick);
-  }, [analysisSection]);
-
-  useEffect(() => {
     const handleFailure = (event: Event) => {
       setFetchFailure((event as CustomEvent<FetchFailure>).detail);
     };
@@ -329,6 +305,7 @@ export default function ProcurementWorkspaceV14() {
     </aside>}
     <button
       type="button"
+      data-pdp-analysis-context-manager="true"
       onClick={() => setAnalysisSection("prompts")}
       style={{
         ...floatingButtonStyle,
@@ -352,7 +329,7 @@ export default function ProcurementWorkspaceV14() {
     >
       موتور تحلیل PDP
     </button>
-    {analysisSection && <AnalysisContextManager initialSection={analysisSection} onClose={() => setAnalysisSection(null)} />}
+    {analysisSection && <FastAnalysisContextManager initialSection={analysisSection} onClose={() => setAnalysisSection(null)} />}
     {engineOpen && <AnalysisEnginePanel onClose={() => setEngineOpen(false)} />}
   </>;
 }
