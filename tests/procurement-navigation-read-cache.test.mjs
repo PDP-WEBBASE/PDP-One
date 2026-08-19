@@ -14,16 +14,23 @@ test("general Procurement navigation cache is installed after specialized caches
   assert.ok(tabCache >= 0 && managementCache > tabCache && navigationCache > managementCache);
 });
 
-test("safe Procurement JSON GETs are reused across tab remounts even when callers request no-store", () => {
+test("visited Procurement JSON stays immediately available and stale reads revalidate in background", () => {
   assert.match(cache, /__pdpNavigationReadCache/);
-  assert.match(cache, /CACHE_TTL_MS = 5 \* 60 \* 1000/);
-  assert.match(cache, /DYNAMIC_CACHE_TTL_MS = 60 \* 1000/);
+  assert.match(cache, /__pdpNavigationReadRevalidating/);
+  assert.match(cache, /CACHE_REVALIDATE_MS = 5 \* 60 \* 1000/);
+  assert.match(cache, /DYNAMIC_REVALIDATE_MS = 60 \* 1000/);
   assert.match(cache, /MAX_CACHE_ENTRIES = 80/);
   assert.match(cache, /MAX_ENTRY_BYTES = 2 \* 1024 \* 1024/);
-  assert.match(cache, /const forceRefresh = mode === "reload" \|\| forceRefreshActive\(\)/);
+  assert.match(cache, /revalidateInBackground\(key, input, init, previousFetch\)/);
   assert.match(cache, /return cachedResponse\(cached\)/);
-  assert.doesNotMatch(cache, /mode !== "reload" && mode !== "no-store"/);
+  assert.match(cache, /Date\.now\(\) - cached\.storedAt > revalidateAfter\(original\.pathname\)/);
+  assert.doesNotMatch(cache, /if \(cached\) readCache\(\)\.delete\(key\)/);
+});
+
+test("current no-store analysis callers can still reuse the navigation-session copy", () => {
   assert.match(manager, /cache: "no-store"/);
+  assert.match(cache, /const forceRefresh = mode === "reload" \|\| forceRefreshActive\(\)/);
+  assert.doesNotMatch(cache, /mode !== "reload" && mode !== "no-store"/);
 });
 
 test("specialized list caches stay authoritative for paginated high-volume pages", () => {
