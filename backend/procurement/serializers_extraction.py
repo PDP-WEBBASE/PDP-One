@@ -51,6 +51,48 @@ class ExtractionErrorSerializer(serializers.ModelSerializer):
         read_only_fields = fields
 
 
+class ExtractionRunListSerializer(serializers.ModelSerializer):
+    """Bounded summary representation used by extraction-history list screens.
+
+    Page/error detail remains available from the retrieve endpoint, but list
+    calls do not serialize every captured page/error for every historical run.
+    """
+
+    connectors = ProcurementConnectorSerializer(many=True, read_only=True)
+    status_label = serializers.CharField(source="get_status_display", read_only=True)
+    trigger_label = serializers.CharField(source="get_trigger_display", read_only=True)
+    mode_label = serializers.CharField(source="get_mode_display", read_only=True)
+    requested_by_username = serializers.CharField(source="requested_by.username", read_only=True)
+
+    class Meta:
+        model = ExtractionRun
+        fields = [
+            "id",
+            "trigger",
+            "trigger_label",
+            "mode",
+            "mode_label",
+            "lookback_days",
+            "status",
+            "status_label",
+            "connectors",
+            "requested_by",
+            "requested_by_username",
+            "started_at",
+            "finished_at",
+            "pages_processed",
+            "records_seen",
+            "records_new",
+            "records_updated",
+            "records_duplicate",
+            "records_failed",
+            "summary",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = fields
+
+
 class ExtractionRunSerializer(serializers.ModelSerializer):
     connector_ids = serializers.PrimaryKeyRelatedField(
         source="connectors",
