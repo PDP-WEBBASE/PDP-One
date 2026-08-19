@@ -109,6 +109,43 @@ def _find_exact_notice(payload: dict, resolved_type: str):
     ).first()
 
 
+def _preserve_unchanged_relative_deadline(
+    *,
+    source_link: NoticeSourceLink | None,
+    notice: ProcurementNotice,
+    parsed_deadline,
+    deadline_meta: dict,
+):
+    """Keep the first absolute deadline for an unchanged same-source duration.
+
+    Some sources publish values such as "2 days and 12 hours". Re-basing that
+    duration from timezone.now() on every extraction makes unchanged notices look
+    modified and invalidates in-flight analysis claims. Preserve the previously
+    materialized absolute deadline only when the same SourceNotice is being seen
+    again with the exact same relative raw value.
+    """
+
+    if source_link is None or parsed_deadline is None or notice.submission_deadline is None:
+        return parsed_deadline, deadline_meta
+    if deadline_meta.get("calendar_type") != "relative_duration":
+        return parsed_deadline, deadline_meta
+
+    previous_meta = ((notice.date_metadata or {}).get("deadline") or {})
+    if (
+        previous_meta.get("calendar_type") != "relative_duration"
+        or previous_meta.get("raw_value") != deadline_meta.get("raw_value")
+    ):
+        return parsed_deadline, deadline_meta
+
+    stable_deadline = notice.submission_deadline
+    return stable_deadline, {
+        **deadline_meta,
+        "normalized_date": stable_deadline.date().isoformat(),
+        "normalized_datetime": stable_deadline.isoformat(),
+        "stability_source": "preserved_existing_relative_deadline",
+    }
+
+
 @transaction.atomic
 def ingest_parsed_notice(
     connector,
@@ -166,9 +203,6 @@ def ingest_parsed_notice(
         )
 
     resolved_type = payload["content_detected_type"] or payload["source_declared_type"]
-    published_date, published_meta = parse_date_value(payload["published_raw"])
-    submission_deadline, deadline_meta = parse_deadline_value(payload["deadline_raw"])
-
     source_link = NoticeSourceLink.objects.filter(source_notice=source_notice).select_related("procurement_notice").first()
     if source_link is not None:
         notice = source_link.procurement_notice
@@ -181,6 +215,15 @@ def ingest_parsed_notice(
                 first_seen_at=now,
                 last_seen_at=now,
             )
+
+    published_date, published_meta = parse_date_value(payload["published_raw"])
+    submission_deadline, deadline_meta = parse_deadline_value(payload["deadline_raw"])
+    submission_deadline, deadline_meta = _preserve_unchanged_relative_deadline(
+        source_link=source_link,
+        notice=notice,
+        parsed_deadline=submission_deadline,
+        deadline_meta=deadline_meta,
+    )
 
     notice.resolved_notice_type = resolved_type
     notice.type_resolution_status = payload["type_resolution_status"]

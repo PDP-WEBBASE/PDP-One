@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import Counter
 from datetime import timedelta
 from math import ceil
 from typing import Any
@@ -160,17 +161,62 @@ def recent_throughput_snapshot(
     imported = 0
     duplicate_completed = 0
     import_errors = 0
-    for counts in run.imports.filter(
+    import_error_buckets = {
+        "rejected": 0,
+        "invalid_hash": 0,
+        "invalid_context": 0,
+        "error": 0,
+    }
+    error_classes: Counter[str] = Counter()
+    recent_imports: list[dict[str, Any]] = []
+
+    import_rows = run.imports.filter(
         dry_run=False,
         finished_at__gte=since,
-    ).values_list("counts", flat=True):
-        payload = counts or {}
-        imported += int(payload.get("imported", 0) or 0)
-        duplicate_completed += int(payload.get("duplicate", 0) or 0)
-        import_errors += sum(
-            int(payload.get(key, 0) or 0)
-            for key in ("rejected", "invalid_hash", "invalid_context", "error")
-        )
+    ).order_by("-finished_at").values(
+        "id",
+        "status",
+        "counts",
+        "report",
+        "finished_at",
+    )
+    for position, row in enumerate(import_rows):
+        counts = row.get("counts") or {}
+        imported += int(counts.get("imported", 0) or 0)
+        duplicate_completed += int(counts.get("duplicate", 0) or 0)
+        row_error_total = 0
+        for key in import_error_buckets:
+            value = int(counts.get(key, 0) or 0)
+            import_error_buckets[key] += value
+            row_error_total += value
+        import_errors += row_error_total
+
+        report = row.get("report") or {}
+        row_classes: Counter[str] = Counter()
+        for error in report.get("errors") or []:
+            error_name = str((error or {}).get("error") or "unknown")
+            row_classes[error_name] += 1
+            error_classes[error_name] += 1
+
+        if position < 20:
+            recent_imports.append(
+                {
+                    "id": str(row["id"]),
+                    "status": row.get("status"),
+                    "finished_at": row["finished_at"].isoformat() if row.get("finished_at") else None,
+                    "counts": {
+                        "total": int(counts.get("total", 0) or 0),
+                        "imported": int(counts.get("imported", 0) or 0),
+                        "duplicate": int(counts.get("duplicate", 0) or 0),
+                        "rejected": int(counts.get("rejected", 0) or 0),
+                        "invalid_hash": int(counts.get("invalid_hash", 0) or 0),
+                        "invalid_context": int(counts.get("invalid_context", 0) or 0),
+                        "error": int(counts.get("error", 0) or 0),
+                    },
+                    "error_classes_sampled": dict(sorted(row_classes.items())),
+                    "errors_truncated": int(report.get("errors_truncated", 0) or 0),
+                }
+            )
 
     lease_expired = 0
     for payload in AuditEvent.objects.filter(
@@ -188,6 +234,9 @@ def recent_throughput_snapshot(
         "duplicate_completed": duplicate_completed,
         "completed_delta": imported + duplicate_completed,
         "import_errors": import_errors,
+        "import_error_buckets": import_error_buckets,
+        "import_error_classes_sampled": dict(sorted(error_classes.items())),
+        "recent_imports": recent_imports,
         "lease_expired": lease_expired,
     }
 
