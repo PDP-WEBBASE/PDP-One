@@ -13,6 +13,10 @@ $ProgressPreference = "SilentlyContinue"
 Set-StrictMode -Version Latest
 . (Join-Path $PSScriptRoot "PDPOne.Common.ps1")
 . (Join-Path $PSScriptRoot "PDPOne.OperationLock.ps1")
+$stateCompatibilityScript = Join-Path $PSScriptRoot "PDPOne.DeploymentStateCompatibility.ps1"
+if (Test-Path -LiteralPath $stateCompatibilityScript) {
+    . $stateCompatibilityScript
+}
 
 $projectRoot = Get-PDPOneProjectRoot
 $guardScript = Join-Path $PSScriptRoot "Invoke-PDPOneDiskGuard.ps1"
@@ -28,6 +32,7 @@ $predeployGuardReport = ""
 $postdeployGuardReport = ""
 $rancherPolicyReport = ""
 $deploymentLease = $null
+$legacyStateUpgraded = $false
 
 if (-not (Test-Path -LiteralPath $innerScript)) {
     throw "Registry-backed fast deployment implementation was not found."
@@ -59,6 +64,13 @@ try {
         } catch {
             Write-Warning "Pre-deployment cleanup could not finish. Registry deployment will still be attempted until Docker reports an actual write failure."
         }
+    }
+
+    if ($innerScript -eq $scopedScript) {
+        if (-not (Get-Command Update-PDPOneLegacyDeploymentStateForScopedEngine -ErrorAction SilentlyContinue)) {
+            throw "Scoped deployment state-compatibility helper is missing."
+        }
+        $legacyStateUpgraded = [bool](Update-PDPOneLegacyDeploymentStateForScopedEngine -AgentRoot $AgentRoot)
     }
 
     # Keep this stable stage name for existing deployment-operation observers and
@@ -109,6 +121,7 @@ if ($deploymentReport -and (Test-Path -LiteralPath $deploymentReport)) {
         $report | Add-Member -NotePropertyName local_image_build_performed -NotePropertyValue $false -Force
         $report | Add-Member -NotePropertyName image_source -NotePropertyValue "github_container_registry" -Force
         $report | Add-Member -NotePropertyName deployment_engine -NotePropertyValue $deploymentEngine -Force
+        $report | Add-Member -NotePropertyName legacy_state_upgraded_for_scoped_engine -NotePropertyValue $legacyStateUpgraded -Force
         $retentionPolicy = if ($deploymentEngine -eq "scoped_release_manifest_v1") { "active_previous_and_inflight_release_manifests" } else { "active_previous_and_inflight_commit" }
         $report | Add-Member -NotePropertyName retained_image_policy -NotePropertyValue $retentionPolicy -Force
         $report | Add-Member -NotePropertyName kubernetes_enabled -NotePropertyValue $false -Force
