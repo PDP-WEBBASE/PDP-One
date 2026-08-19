@@ -22,6 +22,7 @@ concurrency:
 
 jobs:
   windows-parity:
+    if: github.event.pull_request.head.repo.full_name == github.repository
     runs-on: windows-latest
     steps:
       - name: Check out exact PR head
@@ -35,6 +36,9 @@ jobs:
         with:
           node-version: 22
 
-      - name: Compare Node and Windows PowerShell 5.1 fingerprints
+      - name: Compare checkout, deployment zipball, and Windows PowerShell 5.1 fingerprints
         shell: powershell
+        env:
+          PDP_PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: .\scripts\ci\Test-ComponentFingerprintParity.ps1
