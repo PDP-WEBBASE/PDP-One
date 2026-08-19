@@ -1,0 +1,30 @@
+name: Scoped deployment state compatibility
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/scoped-state-compatibility.yml"
+      - "scripts/windows/PDPOne.DeploymentStateCompatibility.ps1"
+      - "scripts/windows/Invoke-PDPOneManagedFastDeployment.ps1"
+      - "scripts/windows/tests/Test-ScopedLegacyStateCompatibility.ps1"
+      - "HOST-RUNTIME-SOURCE"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pdp-one-scoped-state-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  windows-state-compatibility:
+    runs-on: windows-latest
+    steps:
+      - name: Check out exact PR head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Run legacy-state migration regression on Windows PowerShell 5.1
+        shell: powershell
+        run: .\scripts\windows\tests\Test-ScopedLegacyStateCompatibility.ps1
