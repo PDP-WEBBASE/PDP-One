@@ -8,6 +8,12 @@ permissions:
   contents: read
   pull-requests: read
 
+# Metadata edits and rapid follow-up commits can arrive while an older boundary
+# run is still active. Only the newest state of a PR is relevant for merge.
+concurrency:
+  group: pdp-one-public-boundary-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
 jobs:
   public-boundary:
     runs-on: ubuntu-latest
