@@ -1,5 +1,6 @@
 "use client";
 
+import ProcurementStartupSessionResilience from "./ProcurementStartupSessionResilience";
 import ProcurementPaginationEnhancement from "./ProcurementPaginationEnhancement";
 import ProcurementPaginationIntegrityEnhancement from "./ProcurementPaginationIntegrityEnhancement";
 import ProcurementSubmissionResultsEnhancements from "./ProcurementSubmissionResultsEnhancements";
@@ -8,6 +9,7 @@ import ProcurementWorkspaceV22 from "./ProcurementWorkspaceV22";
 
 export default function ProcurementWorkspaceV23() {
   return <>
+    <ProcurementStartupSessionResilience />
     <ProcurementPaginationEnhancement />
     <ProcurementPaginationIntegrityEnhancement />
     <ProcurementWorkspaceV22 />
