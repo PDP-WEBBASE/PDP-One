@@ -1,5 +1,5 @@
 PDP One Windows host-orchestration source is part of the exact application commit.
 
-Revision policy: v3-scoped-release-foundation-20260819
+Revision policy: v4-scoped-state-compatibility-hotfix-20260819
 
-This public-safe marker intentionally forces one legacy exact-SHA image publication for the scoped-release migration foundation so the currently installed deployment agent can install the new governed deployment scripts. After that migration is accepted, ordinary host-only changes can reuse immutable component images through the release-manifest deployment path without changing this marker. It contains no secrets or private runtime data.
+This public-safe marker intentionally forces one legacy exact-SHA image publication for the scoped-deployment state-compatibility hotfix. The currently installed scoped engine cannot consume the legacy-shaped last-deployment state created by the Phase A migration release under Windows PowerShell StrictMode. This one migration candidate can be deployed through the documented legacy-engine fallback; the successful deployment copies the corrected managed deployment scripts back into the local agent so subsequent governed deployments can return to the scoped release-manifest path. It contains no secrets or private runtime data.
