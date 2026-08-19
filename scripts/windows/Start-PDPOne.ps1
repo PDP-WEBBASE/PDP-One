@@ -2,7 +2,8 @@
 #requires -RunAsAdministrator
 [CmdletBinding()]
 param(
-    [int]$DockerTimeoutSeconds = 300,
+    [int]$DockerTimeoutSeconds = 420,
+    [int]$RancherRecoveryTimeoutSeconds = 420,
     [int]$HealthTimeoutSeconds = 180,
     [switch]$OpenLocalPage,
     [switch]$ForceTunnelRepair
@@ -26,6 +27,7 @@ $report = [ordered]@{
     deployment_id = ""
     protected_target_commit = ""
     docker = "pending"
+    rancher_startup_report = $null
     rancher_policy_report = $null
     local_health = "pending"
     local_api_health = "pending"
@@ -71,7 +73,10 @@ try {
         $report.disk_guard_warning = ConvertTo-PDPOneRedactedText $_.Exception.Message
     }
 
-    Start-PDPOneRancherDesktop -TimeoutSeconds $DockerTimeoutSeconds
+    $rancherStartupOutput = @(& powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "Start-PDPOneRancherResilient.ps1") -InitialTimeoutSeconds $DockerTimeoutSeconds -RecoveryTimeoutSeconds $RancherRecoveryTimeoutSeconds)
+    if ($LASTEXITCODE -ne 0) { throw "Rancher Desktop/Docker recovery could not establish a ready engine." }
+    if ($rancherStartupOutput.Count -gt 0) { $report.rancher_startup_report = [string]$rancherStartupOutput[-1] }
+
     $policyOutput = @(& powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "Ensure-PDPOneRancherPolicy.ps1") -DockerTimeoutSeconds $DockerTimeoutSeconds)
     if ($LASTEXITCODE -ne 0) { throw "The Rancher policy could not be applied." }
     if ($policyOutput.Count -gt 0) { $report.rancher_policy_report = [string]$policyOutput[-1] }
