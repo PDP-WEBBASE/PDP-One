@@ -55,7 +55,7 @@ try {
     # the exact Windows scripts but the deployment agent does not execute the
     # task-registration script. Apply a versioned task policy once, then leave
     # the schedules untouched on ordinary watchdog/network-triggered runs.
-    $startupPolicyVersion = "2026-08-19-network-recovery-v1"
+    $startupPolicyVersion = "2026-08-19-low-latency-v2"
     $startupPolicyRoot = "C:\ProgramData\PDP-One\maintenance"
     $startupPolicyPath = Join-Path $startupPolicyRoot "startup-task-policy.version"
     try {
@@ -91,16 +91,10 @@ try {
         return
     }
 
-    try {
-        $diskGuardOutput = @(& powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "Invoke-PDPOneDiskGuard.ps1") -Mode startup -ProjectRoot $ProjectRoot -BuildCacheBudgetGB 2)
-        if ($diskGuardOutput.Count -gt 0) { $report.disk_guard_report = [string]$diskGuardOutput[-1] }
-        if ($LASTEXITCODE -ne 0) {
-            $report.disk_guard_warning = "Disk guard returned a non-zero code. Startup continued because capacity checks are advisory."
-        }
-    } catch {
-        $report.disk_guard_warning = ConvertTo-PDPOneRedactedText $_.Exception.Message
-    }
-
+    # Keep advisory disk maintenance out of the readiness-critical path. Normal
+    # startup uses existing images with no build or pull, while the daily Disk
+    # Guard remains registered separately. The startup-mode guard runs after the
+    # web/API/MCP/public health path is already established.
     $rancherStartupOutput = @(& powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "Start-PDPOneRancherResilient.ps1") -InitialTimeoutSeconds $DockerTimeoutSeconds -RecoveryTimeoutSeconds $RancherRecoveryTimeoutSeconds)
     if ($LASTEXITCODE -ne 0) { throw "Rancher Desktop/Docker recovery could not establish a ready engine." }
     if ($rancherStartupOutput.Count -gt 0) { $report.rancher_startup_report = [string]$rancherStartupOutput[-1] }
@@ -170,6 +164,16 @@ try {
     & powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "Test-PDPOne.ps1") -SkipChatGPTToolCheck
     if ($LASTEXITCODE -ne 0) { throw "Layered health check failed." }
 
+    try {
+        $diskGuardOutput = @(& powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "Invoke-PDPOneDiskGuard.ps1") -Mode startup -ProjectRoot $ProjectRoot -BuildCacheBudgetGB 2)
+        if ($diskGuardOutput.Count -gt 0) { $report.disk_guard_report = [string]$diskGuardOutput[-1] }
+        if ($LASTEXITCODE -ne 0) {
+            $report.disk_guard_warning = "Disk guard returned a non-zero code after readiness. PDP One remains healthy because capacity checks are advisory."
+        }
+    } catch {
+        $report.disk_guard_warning = ConvertTo-PDPOneRedactedText $_.Exception.Message
+    }
+
     $report.status = "succeeded"
     $report.completed_at = (Get-Date).ToUniversalTime().ToString('o')
     $reportDir = Join-Path $ProjectRoot "work\reports"
@@ -179,7 +183,7 @@ try {
     if ($report.public_mcp_health -eq "degraded") {
         Write-Host "The public MCP probe is temporarily degraded while public web/API and local MCP remain healthy; the existing Funnel route was preserved instead of being recreated." -ForegroundColor Yellow
     }
-    if ($report.disk_guard_warning) { Write-Host "Disk cleanup reported a warning, but startup was allowed to continue." -ForegroundColor Yellow }
+    if ($report.disk_guard_warning) { Write-Host "Disk cleanup reported a warning, but startup was already healthy." -ForegroundColor Yellow }
     if ($report.startup_task_policy_warning) { Write-Host "Windows startup task policy reported a warning, but PDP One startup continued." -ForegroundColor Yellow }
     if ($report.local_dns_degraded) {
         Write-Host "The public route is healthy through public IPv4 resolution. The local browser was opened on localhost so Windows DNS settings do not need to change." -ForegroundColor Yellow
