@@ -1,5 +1,5 @@
 PDP One Windows host-orchestration source is part of the exact application commit.
 
-Revision policy: v2-low-latency-startup-20260819
+Revision policy: v3-scoped-release-foundation-20260819
 
-This public-safe marker intentionally changes when host-only runtime orchestration requires exact-commit GHCR image publication for the governed registry deployment path. It contains no secrets or private runtime data.
+This public-safe marker intentionally forces one legacy exact-SHA image publication for the scoped-release migration foundation so the currently installed deployment agent can install the new governed deployment scripts. After that migration is accepted, ordinary host-only changes can reuse immutable component images through the release-manifest deployment path without changing this marker. It contains no secrets or private runtime data.
