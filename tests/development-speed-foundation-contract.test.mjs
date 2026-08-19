@@ -43,6 +43,9 @@ test("release manifest helper supports legacy exact-SHA and content-addressed co
   assert.match(helper, /io\.pdpone\.component\.fingerprint/);
   assert.match(helper, /pdp-one\.release-manifest\.v1/);
   assert.match(helper, /repository_digest/);
+  assert.doesNotMatch(helper, /(?im)^\s*\$host\s*=/);
+  assert.match(helper, /\$hostChanged = \$false/);
+  assert.match(helper, /host = \$hostChanged/);
   assert.deepEqual(Object.keys(policy.components).sort(), ["backend", "mcp", "web"]);
   assert.equal(policy.components.backend.root, "backend");
   assert.equal(policy.components.mcp.root, "services/pdp_mcp");
