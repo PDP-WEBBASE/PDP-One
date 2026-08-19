@@ -14,7 +14,9 @@ from unittest.mock import patch
 class DeploymentQueueTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
+        self.reports_temp = tempfile.TemporaryDirectory()
         os.environ["PDP_DEPLOYMENT_QUEUE"] = self.temp.name
+        os.environ["PDP_DEPLOYMENT_REPORTS"] = self.reports_temp.name
         os.environ["PDP_DEPLOYMENT_AGENT_SIGNING_KEY"] = "k" * 48
         os.environ["PDP_QUEUE_RESERVE_BYTES"] = str(1024 * 1024)
         os.environ["PDP_QUEUE_LOW_SPACE_BYTES"] = str(512 * 1024)
@@ -23,6 +25,8 @@ class DeploymentQueueTests(unittest.TestCase):
 
     def tearDown(self):
         self.temp.cleanup()
+        self.reports_temp.cleanup()
+        os.environ.pop("PDP_DEPLOYMENT_REPORTS", None)
         os.environ.pop("PDP_QUEUE_RESERVE_BYTES", None)
         os.environ.pop("PDP_QUEUE_LOW_SPACE_BYTES", None)
 
@@ -30,6 +34,50 @@ class DeploymentQueueTests(unittest.TestCase):
         path = Path(self.temp.name) / "incoming" / f"{result['request_id']}.json"
         envelope = json.loads(path.read_text(encoding="utf-8"))
         return path, envelope, json.loads(base64.b64decode(envelope["payload_b64"]))
+
+    def _write_failed_deployment_evidence(self, deployment_id="deploy-001"):
+        queued = self.queue.enqueue(
+            "deploy_approved_release",
+            {"commit_sha": "a" * 40, "deployment_id": deployment_id, "preview_id": "preview-1"},
+        )
+        request_path = Path(self.temp.name) / "incoming" / f"{queued['request_id']}.json"
+        rejected_root = Path(self.temp.name) / "rejected"
+        rejected_root.mkdir(parents=True, exist_ok=True)
+        request_path.replace(rejected_root / request_path.name)
+        responses_root = Path(self.temp.name) / "responses"
+        responses_root.mkdir(parents=True, exist_ok=True)
+        (responses_root / f"{queued['request_id']}.json").write_text(
+            json.dumps(
+                {
+                    "request_id": queued["request_id"],
+                    "action": "deploy_approved_release",
+                    "status": "failed",
+                    "completed_at": "2026-08-19T18:00:00+00:00",
+                    "result": {"error": "Deployment failed; see the rollback result in the deployment report."},
+                }
+            ),
+            encoding="utf-8",
+        )
+        report = {
+            "schema": "pdp-one.deployment-report.v3",
+            "deployment_id": deployment_id,
+            "preview_id": "preview-1",
+            "approved_commit": "a" * 40,
+            "previous_commit": "b" * 40,
+            "status": "failed",
+            "stage": "pulling-immutable-images",
+            "image_mode": "content-addressed-v1",
+            "production_changed": False,
+            "health_profile": "full",
+            "changed_services": ["backend", "mcp", "web"],
+            "changed_paths": ["release/component-image-mode.json"],
+            "active_images": {"backend": "ghcr.io/pdp-webbase/pdp-one-backend:content-" + "c" * 64},
+            "error": "Bearer secret-value github_pat_private-token image fingerprint mismatch",
+            "release_manifest": "C:/ProgramData/PDP-One/deployment-agent/state/release-manifests/private.json",
+            "private_path": "C:/private/not-for-mcp",
+        }
+        (Path(self.reports_temp.name) / f"{deployment_id}.json").write_text(json.dumps(report), encoding="utf-8")
+        return queued
 
     def test_only_allowlisted_action_is_written(self):
         result = self.queue.enqueue("check_deployment_health", {"deployment_id": "d-1"})
@@ -89,6 +137,28 @@ class DeploymentQueueTests(unittest.TestCase):
         self.assertIn("disk_free_bytes", status)
         self.assertIn("low_disk_space", status)
         self.assertIn("emergency_reserve_available", status)
+
+    def test_failed_deployment_response_includes_only_sanitized_whitelisted_report(self):
+        queued = self._write_failed_deployment_evidence()
+        result = self.queue.get_response(queued["request_id"])
+        report = result["deployment_report"]
+        self.assertEqual("deploy-001", report["deployment_id"])
+        self.assertEqual("pulling-immutable-images", report["stage"])
+        self.assertEqual("content-addressed-v1", report["image_mode"])
+        self.assertIn("[REDACTED]", report["error"])
+        self.assertNotIn("secret-value", report["error"])
+        self.assertNotIn("github_pat_private-token", report["error"])
+        self.assertNotIn("release_manifest", report)
+        self.assertNotIn("private_path", report)
+
+    def test_failed_report_is_not_enriched_if_rejected_envelope_signature_is_tampered(self):
+        queued = self._write_failed_deployment_evidence("deploy-002")
+        rejected = Path(self.temp.name) / "rejected" / f"{queued['request_id']}.json"
+        envelope = json.loads(rejected.read_text(encoding="utf-8"))
+        envelope["signature"] = "0" * 64
+        rejected.write_text(json.dumps(envelope), encoding="utf-8")
+        result = self.queue.get_response(queued["request_id"])
+        self.assertNotIn("deployment_report", result)
 
     def test_commit_must_be_exact_sha(self):
         with self.assertRaises(ValueError):
