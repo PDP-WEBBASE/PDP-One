@@ -12,6 +12,8 @@ test("managed deployment prefers scoped releases while retaining a legacy migrat
   assert.match(managed, /legacy_exact_sha/);
   assert.match(managed, /active_previous_and_inflight_release_manifests/);
   assert.match(managed, /Enter-PDPOneDeploymentOperation/);
+  assert.match(managed, /PDPOne\.DeploymentStateCompatibility\.ps1/);
+  assert.match(managed, /Update-PDPOneLegacyDeploymentStateForScopedEngine/);
 });
 
 test("scoped deployment reuses unchanged immutable images and restarts only affected services", async () => {
@@ -72,8 +74,9 @@ test("CI preserves required checks while moving expensive suites behind change s
   assert.match(ci, /Windows compatibility not affected/);
 });
 
-test("foundation release deliberately forces one legacy exact-SHA migration publication", async () => {
+test("host runtime marker explicitly forces the one legacy exact-SHA state-compatibility hotfix publication", async () => {
   const marker = await load("../HOST-RUNTIME-SOURCE");
-  assert.match(marker, /v3-scoped-release-foundation-20260819/);
-  assert.match(marker, /migration/);
+  assert.match(marker, /v4-scoped-state-compatibility-hotfix-20260819/);
+  assert.match(marker, /legacy exact-SHA image publication/);
+  assert.match(marker, /legacy-engine fallback/);
 });
