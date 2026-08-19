@@ -4,7 +4,7 @@
 param(
     [int]$InitialTimeoutSeconds = 420,
     [int]$RecoveryTimeoutSeconds = 420,
-    [int]$PollSeconds = 3
+    [int]$PollSeconds = 1
 )
 
 $ErrorActionPreference = "Stop"
