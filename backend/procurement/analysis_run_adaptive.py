@@ -10,12 +10,20 @@ from django.utils.dateparse import parse_datetime
 
 from core.models import AuditEvent
 
-from .analysis_run_service import _analysis_reason, _candidate_queryset, _compact_basis, _deadline_priority
+from .analysis_run_service import (
+    _analysis_reason,
+    _candidate_queryset,
+    _compact_basis,
+    _deadline_priority,
+    finalize_run_if_exhausted,
+)
+from .analysis_throughput import reconcile_redundant_reanalysis
 from .analysis_utils import notice_basis_hash
 from .models_analysis_runs import ProcurementAnalysisRun, ProcurementAnalysisRunItem
 
 
 ADMISSION_OVERLAP = timedelta(minutes=10)
+REANALYSIS_RECONCILE_INTERVAL = timedelta(minutes=10)
 SAFE_CLAIM_LIMIT = 50
 GLOBAL_ACTIVE_CLAIM_CAP = 400
 
@@ -25,6 +33,27 @@ def _admission_since(run: ProcurementAnalysisRun):
     parsed = parse_datetime(raw) if raw else None
     base = parsed or run.started_at or run.created_at
     return base - ADMISSION_OVERLAP
+
+
+def _should_reconcile_reanalysis(run: ProcurementAnalysisRun, now) -> bool:
+    raw = str((run.metadata or {}).get("last_reanalysis_reconciliation_at") or "")
+    parsed = parse_datetime(raw) if raw else None
+    return parsed is None or parsed <= now - REANALYSIS_RECONCILE_INTERVAL
+
+
+def _maybe_reconcile_reanalysis(run: ProcurementAnalysisRun, now) -> int:
+    """Scan exact-valid reanalysis at a bounded cadence, not on every package."""
+
+    if not _should_reconcile_reanalysis(run, now):
+        return 0
+    reconciled = reconcile_redundant_reanalysis(run, actor="adaptive-analysis")
+    run.metadata = {
+        **(run.metadata or {}),
+        "last_reanalysis_reconciliation_at": now.isoformat(),
+        "last_reanalysis_reconciliation_skipped": reconciled,
+    }
+    run.save(update_fields=["metadata", "updated_at"])
+    return reconciled
 
 
 @transaction.atomic
@@ -134,8 +163,60 @@ def _expire_stale_claims(run: ProcurementAnalysisRun, now) -> int:
             claimed_at=None,
             claim_expires_at=None,
             last_error="claim_lease_expired",
+            updated_at=now,
         )
     return count
+
+
+@transaction.atomic
+def renew_worker_claim(
+    run_id: str,
+    *,
+    worker_id: str,
+    lease_seconds: int = 3600,
+    actor: str = "adaptive-analysis",
+) -> dict:
+    """Extend only the caller worker's still-active claim package.
+
+    Expired claims are never resurrected. The worker identity must match the
+    active claim owner, and the extension remains bounded to the same maximum
+    lease duration used by normal claims.
+    """
+
+    run = ProcurementAnalysisRun.objects.select_for_update().get(pk=run_id)
+    now = timezone.now()
+    worker_key = worker_id[:120]
+    extension_seconds = max(60, min(int(lease_seconds), 3600))
+    new_expiry = now + timedelta(seconds=extension_seconds)
+    active = run.items.filter(
+        status=ProcurementAnalysisRunItem.Status.CLAIMED,
+        claimed_by=worker_key,
+        claim_expires_at__gte=now,
+    )
+    renewed = active.update(claim_expires_at=new_expiry, updated_at=now)
+    if renewed:
+        run.heartbeat_at = now
+        run.save(update_fields=["heartbeat_at", "updated_at"])
+        AuditEvent.objects.create(
+            actor=actor,
+            action="procurement.analysis_run.claim_lease_renewed",
+            target_type="procurement_analysis_run",
+            target_id=str(run.id),
+            payload={
+                "worker": worker_key,
+                "renewed_items": renewed,
+                "lease_seconds": extension_seconds,
+                "new_expiry": new_expiry.isoformat(),
+            },
+        )
+    return {
+        "run_id": str(run.id),
+        "worker_id": worker_key,
+        "renewed_items": renewed,
+        "lease_seconds": extension_seconds,
+        "claim_expires_at": new_expiry.isoformat() if renewed else None,
+        "expired_claims_resurrected": False,
+    }
 
 
 @transaction.atomic
@@ -146,14 +227,13 @@ def claim_newest_run_items(
     limit: int = SAFE_CLAIM_LIMIT,
     lease_seconds: int = 3600,
 ) -> list[ProcurementAnalysisRunItem]:
-    """Claim the freshest pending notices first with bounded in-flight work.
+    """Claim the freshest safe package while allowing sequential packages.
 
-    ChatGPT scheduled workers can overlap when one execution takes close to an
-    hour. The previous adaptive implementation allowed every overlap to reserve a
-    new large package, which produced thousands of expired leases and RETRY rows.
-    A worker may now own only one active package at a time and the whole run has a
-    bounded active-claim pool. This protects throughput by favoring completed
-    imports over speculative reservations.
+    One worker may own only one in-flight package and the run retains a bounded
+    global in-flight pool. After the package is successfully imported, the same
+    worker can immediately request the next package. Throughput therefore scales
+    through repeated Claim -> semantic analysis -> Import cycles instead of one
+    oversized reservation that is likely to expire.
     """
 
     run = ProcurementAnalysisRun.objects.select_for_update().select_related("context_snapshot").get(pk=run_id)
@@ -166,7 +246,24 @@ def claim_newest_run_items(
 
     now = timezone.now()
     worker_key = worker_id[:120]
-    _expire_stale_claims(run, now)
+    expired = _expire_stale_claims(run, now)
+    if expired:
+        AuditEvent.objects.create(
+            actor="analysis-claim-guard",
+            action="procurement.analysis_run.claim_lease_expired",
+            target_type="procurement_analysis_run",
+            target_id=str(run.id),
+            payload={"count": expired, "worker": worker_key},
+        )
+
+    reconciled = _maybe_reconcile_reanalysis(run, now)
+    if reconciled:
+        run = finalize_run_if_exhausted(run, actor="adaptive-analysis")
+        if run.status in {
+            ProcurementAnalysisRun.Status.COMPLETED,
+            ProcurementAnalysisRun.Status.NO_CHANGES,
+        }:
+            return []
 
     worker_has_active_claim = run.items.filter(
         status=ProcurementAnalysisRunItem.Status.CLAIMED,
@@ -234,6 +331,7 @@ def claim_newest_run_items(
         item.claimed_at = now
         item.claim_expires_at = expires
         item.attempts += 1
+        item.last_error = ""
         item.updated_at = now
     if selected:
         ProcurementAnalysisRunItem.objects.bulk_update(
@@ -245,11 +343,18 @@ def claim_newest_run_items(
                 "claimed_at",
                 "claim_expires_at",
                 "attempts",
+                "last_error",
                 "updated_at",
             ],
             batch_size=SAFE_CLAIM_LIMIT,
         )
         run.status = ProcurementAnalysisRun.Status.WAITING_FOR_RESULTS
         run.heartbeat_at = now
-        run.save(update_fields=["status", "heartbeat_at", "updated_at"])
+        run.metadata = {
+            **(run.metadata or {}),
+            "throughput_controller": "adaptive-packages-v2",
+            "safe_package_size": SAFE_CLAIM_LIMIT,
+            "global_active_claim_cap": GLOBAL_ACTIVE_CLAIM_CAP,
+        }
+        run.save(update_fields=["status", "heartbeat_at", "metadata", "updated_at"])
     return selected

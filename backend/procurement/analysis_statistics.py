@@ -2,11 +2,12 @@ from __future__ import annotations
 
 from typing import Any
 
-from django.db.models import BooleanField, Case, F, OuterRef, Q, Subquery, Value, When
+from django.db.models import BooleanField, Case, Count, F, OuterRef, Subquery, Value, When
 from django.utils import timezone
 
 from .analysis_run_adaptive import GLOBAL_ACTIVE_CLAIM_CAP, SAFE_CLAIM_LIMIT
 from .analysis_run_service import active_run
+from .analysis_throughput import analysis_throughput_snapshot
 from .models import ProcurementNotice
 from .models_analysis import NoticeAnalysisDraft
 from .models_analysis_runs import ProcurementAnalysisRun, ProcurementAnalysisRunItem
@@ -95,11 +96,14 @@ def procurement_analysis_statistics(run: ProcurementAnalysisRun | None = None) -
         "run_count": ProcurementAnalysisRun.objects.count(),
         "run_history": _run_history(),
         "active_run": None,
+        "throughput": None,
         "claim_policy": {
             "priority_policy": "newest_first",
             "safe_claim_limit": SAFE_CLAIM_LIMIT,
             "global_active_claim_cap": GLOBAL_ACTIVE_CLAIM_CAP,
             "one_active_package_per_worker": True,
+            "sequential_packages_after_successful_import": True,
+            "capacity_scales_by_package_cycles_not_claim_size": True,
         },
     }
     if run is None:
@@ -117,12 +121,19 @@ def procurement_analysis_statistics(run: ProcurementAnalysisRun | None = None) -
     run_recommended = completed.filter(draft__is_recommended=True)
     now = timezone.now()
     active_claimed = claimed.filter(claim_expires_at__gte=now)
+    throughput = analysis_throughput_snapshot(run)
 
     worker_counts: dict[str, int] = {}
     for row in active_claimed.exclude(claimed_by="").values("claimed_by"):
         worker = str(row["claimed_by"] or "")
         worker_counts[worker] = worker_counts.get(worker, 0) + 1
 
+    retry_reason_counts = {
+        str(row["last_error"] or "unspecified"): int(row["count"] or 0)
+        for row in retry.values("last_error").annotate(count=Count("id")).order_by("-count")
+    }
+
+    result["throughput"] = throughput
     result["active_run"] = {
         "id": str(run.id),
         "run_type": run.run_type,
@@ -141,8 +152,10 @@ def procurement_analysis_statistics(run: ProcurementAnalysisRun | None = None) -
         "poison": _type_counts(poison, "notice__resolved_notice_type"),
         "failed": _type_counts(failed, "notice__resolved_notice_type"),
         "remaining": _type_counts(remaining, "notice__resolved_notice_type"),
+        "effective_remaining": throughput["effective_backlog"]["effective_remaining"],
         "retry_diagnostics": {
             "claim_lease_expired": retry.filter(last_error="claim_lease_expired").count(),
+            "reason_counts": retry_reason_counts,
             "active_claimed": active_claimed.count(),
             "expired_claimed_waiting_for_recovery": claimed.filter(claim_expires_at__lt=now).count(),
             "attempts_1": remaining.filter(attempts=1).count(),
