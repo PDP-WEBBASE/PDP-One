@@ -322,7 +322,7 @@ export default function ProcurementWorkspaceV14() {
         type="button"
         onClick={() => void retryFailedEndpoint()}
         disabled={retryingFailure}
-        style={{border:0,borderRadius:8,padding:"7px 11px",background:"#991b1b",color:"white",font:"inherit",fontWeight:700,cursor:retryingFailure?"wait":"pointer",opacity:retryingFailure?.72:1}}
+        style={{border:0,borderRadius:8,padding:"7px 11px",background:"#991b1b",color:"white",font:"inherit",fontWeight:700,cursor:retryingFailure?"wait":"pointer",opacity:retryingFailure ? .72 : 1}}
       >
         {retryingFailure ? "در حال بررسی…" : "تلاش مجدد"}
       </button>
