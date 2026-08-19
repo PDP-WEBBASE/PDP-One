@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any
 
 QUEUE_ROOT = Path(os.getenv("PDP_DEPLOYMENT_QUEUE", "/deployment-agent/queue"))
+REPORT_ROOT = Path(os.getenv("PDP_DEPLOYMENT_REPORTS", "/deployment-agent/reports"))
 SIGNING_KEY = os.getenv("PDP_DEPLOYMENT_AGENT_SIGNING_KEY", "")
 COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
 IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
@@ -44,6 +45,33 @@ ALLOWED_ACTIONS = {
 EMERGENCY_RESERVE_BYTES = max(1024 * 1024, int(os.getenv("PDP_QUEUE_RESERVE_BYTES", str(8 * 1024 * 1024))))
 LOW_SPACE_BYTES = max(512 * 1024, int(os.getenv("PDP_QUEUE_LOW_SPACE_BYTES", str(2 * 1024 * 1024))))
 RESERVE_PATH = QUEUE_ROOT / ".queue-emergency-reserve"
+_SAFE_REPORT_FIELDS = (
+    "schema",
+    "deployment_id",
+    "preview_id",
+    "approved_commit",
+    "previous_commit",
+    "started_at",
+    "completed_at",
+    "status",
+    "stage",
+    "change_management_mode",
+    "image_source",
+    "image_mode",
+    "local_image_build_performed",
+    "production_changed",
+    "health_profile",
+    "changed_services",
+    "changed_paths",
+    "active_images",
+    "retained_previous_images",
+    "connectivity_repair_attempted",
+    "connectivity_repair_succeeded",
+    "error",
+)
+_SECRET_TEXT_RE = re.compile(
+    r"(?i)(?:bearer\s+\S+|github_pat_[A-Za-z0-9_]+|gh[pousr]_[A-Za-z0-9]+|authorization\s*[:=]\s*\S+)"
+)
 
 
 def _utcnow() -> datetime:
@@ -109,6 +137,61 @@ def validate_identifier(value: str, field: str) -> str:
     if not IDENTIFIER_RE.fullmatch(normalized):
         raise ValueError(f"{field} must be a safe 1-64 character identifier.")
     return normalized
+
+
+def _validated_rejected_deployment_id(request_id: str) -> str | None:
+    rejected = QUEUE_ROOT / "rejected" / f"{request_id}.json"
+    if not rejected.exists():
+        return None
+    try:
+        envelope = json.loads(rejected.read_text(encoding="utf-8-sig"))
+        payload_bytes = base64.b64decode(str(envelope.get("payload_b64", "")), validate=True)
+        signature = str(envelope.get("signature", ""))
+        expected = hmac.new(SIGNING_KEY.encode("utf-8"), payload_bytes, hashlib.sha256).hexdigest()
+        if not hmac.compare_digest(expected, signature):
+            return None
+        payload = json.loads(payload_bytes.decode("utf-8"))
+        if str(payload.get("request_id", "")) != request_id:
+            return None
+        if str(payload.get("action", "")) != "deploy_approved_release":
+            return None
+        params = payload.get("params")
+        if not isinstance(params, dict):
+            return None
+        return validate_identifier(str(params.get("deployment_id", "")), "deployment_id")
+    except (OSError, ValueError, TypeError, json.JSONDecodeError, UnicodeDecodeError):
+        return None
+
+
+def _sanitize_report_value(value: Any) -> Any:
+    if isinstance(value, str):
+        return _SECRET_TEXT_RE.sub("[REDACTED]", value)[:4000]
+    if isinstance(value, list):
+        return [_sanitize_report_value(item) for item in value[:500]]
+    if isinstance(value, dict):
+        return {str(key)[:128]: _sanitize_report_value(item) for key, item in list(value.items())[:200]}
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+    return str(value)[:1000]
+
+
+def _read_sanitized_deployment_report(deployment_id: str) -> dict[str, Any] | None:
+    normalized = validate_identifier(deployment_id, "deployment_id")
+    report_path = REPORT_ROOT / f"{normalized}.json"
+    if not report_path.exists() or not report_path.is_file():
+        return None
+    try:
+        with report_path.open("r", encoding="utf-8-sig") as handle:
+            raw = json.load(handle)
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+        return None
+    if not isinstance(raw, dict) or str(raw.get("deployment_id", "")) != normalized:
+        return None
+    return {
+        key: _sanitize_report_value(raw[key])
+        for key in _SAFE_REPORT_FIELDS
+        if key in raw
+    }
 
 
 def enqueue(
@@ -179,6 +262,12 @@ def get_response(request_id: str) -> dict[str, Any]:
     # The agent never returns secrets. Keep a strict top-level type here.
     if not isinstance(result, dict):
         raise RuntimeError("The deployment-agent response is invalid.")
+    if result.get("status") == "failed" and result.get("action") == "deploy_approved_release":
+        deployment_id = _validated_rejected_deployment_id(normalized)
+        if deployment_id:
+            runtime_report = _read_sanitized_deployment_report(deployment_id)
+            if runtime_report:
+                result = {**result, "deployment_report": runtime_report}
     return result
 
 
