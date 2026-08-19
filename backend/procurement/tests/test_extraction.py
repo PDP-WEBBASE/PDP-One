@@ -206,7 +206,7 @@ class ExtractionTaskTests(TestCase):
 
     def test_incremental_run_stops_after_two_semantically_known_pages(self):
         connector = ProcurementConnector.objects.get(key="hezareh_tenders")
-        for record_id, old_page in (("KNOWN-1", 8), ("KNOWN-2", 9)):
+        for record_id, old_page in (("900001", 8), ("900002", 9)):
             ingest_parsed_notice(
                 connector,
                 ParsedNotice(
@@ -243,11 +243,11 @@ class ExtractionTaskTests(TestCase):
         fake_fetcher.fetch_list.side_effect = [
             self._fetched(
                 "https://www.hezarehinfo.net/tenders/-%21/page-1",
-                page_html("KNOWN-1", 40),
+                page_html("900001", 40),
             ),
             self._fetched(
                 "https://www.hezarehinfo.net/tenders/-%21/page-2",
-                page_html("KNOWN-2", 40),
+                page_html("900002", 40),
             ),
         ]
         with patch("procurement.tasks.fetcher_for", return_value=fake_fetcher):
