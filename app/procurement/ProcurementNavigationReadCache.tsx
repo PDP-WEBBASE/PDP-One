@@ -17,6 +17,8 @@ type CacheWindow = Window & {
   __pdpNavigationReadPreviousFetch?: typeof window.fetch;
   __pdpNavigationReadCache?: Map<string, StoredResponse>;
   __pdpNavigationForceRefreshUntil?: number;
+  __pdpTabPageCache?: Map<string, unknown>;
+  __pdpManagementDashboardCache?: unknown;
 };
 
 const API_PREFIX = "/api/v1/procurement/";
@@ -74,6 +76,13 @@ function readCache() {
 
 function clearAll() {
   readCache().clear();
+}
+
+function clearAllNavigationCaches() {
+  const guarded = window as CacheWindow;
+  clearAll();
+  guarded.__pdpTabPageCache?.clear();
+  delete guarded.__pdpManagementDashboardCache;
 }
 
 function clearAnalysisContextEntries() {
@@ -192,7 +201,7 @@ export default function ProcurementNavigationReadCache() {
       const button = (event.target as HTMLElement | null)?.closest("button");
       if (!button || !REFRESH_LABEL.test((button.textContent || "").trim())) return;
       (window as CacheWindow).__pdpNavigationForceRefreshUntil = Date.now() + FORCE_REFRESH_WINDOW_MS;
-      clearAll();
+      clearAllNavigationCaches();
     };
 
     window.addEventListener(PROCUREMENT_UI_SYNC_EVENT, onProcurementSync);
