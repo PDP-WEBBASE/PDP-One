@@ -16,6 +16,7 @@ test("stable startup tolerates slow Rancher boot and performs one bounded non-de
 
   assert.match(rancher, /InitialTimeoutSeconds\s*=\s*420/);
   assert.match(rancher, /RecoveryTimeoutSeconds\s*=\s*420/);
+  assert.match(rancher, /PollSeconds\s*=\s*1/);
   assert.match(rancher, /bounded_restart_attempted/);
   assert.match(rancher, /rdctl\.Source shutdown/);
   assert.match(rancher, /--application\.start-in-background/);
@@ -44,11 +45,25 @@ test("startup task retries immediately on Windows network connection and keeps a
   assert.match(task, /StartWhenAvailable/);
 });
 
+test("local page polling begins immediately and advisory maintenance is outside the readiness path", async () => {
+  const startup = await load("../scripts/windows/Start-PDPOne.ps1");
+  const task = await load("../scripts/windows/Register-PDPOneStartupTask.ps1");
+
+  assert.doesNotMatch(task, /Start-Sleep -Seconds 75/);
+  assert.match(task, /-File `"\$openScript`" -TimeoutSeconds 300/);
+  assert.match(task, /Begins polling PDP One local health immediately after logon/);
+
+  const healthIndex = startup.indexOf("Test-PDPOne.ps1");
+  const diskGuardIndex = startup.indexOf("Invoke-PDPOneDiskGuard.ps1");
+  assert.ok(healthIndex >= 0, "layered health check must remain present");
+  assert.ok(diskGuardIndex > healthIndex, "advisory startup disk guard must run after readiness checks");
+});
+
 test("deployed startup source self-applies the versioned host task policy once", async () => {
   const startup = await load("../scripts/windows/Start-PDPOne.ps1");
 
   assert.match(startup, /startup-task-policy\.version/);
-  assert.match(startup, /2026-08-19-network-recovery-v1/);
+  assert.match(startup, /2026-08-19-low-latency-v2/);
   assert.match(startup, /Register-PDPOneStartupTask\.ps1/);
   assert.match(startup, /installedPolicyVersion -ne \$startupPolicyVersion/);
   assert.match(startup, /startup_task_policy = "updated"/);
