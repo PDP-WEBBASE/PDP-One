@@ -185,3 +185,153 @@ class NoticeIngestionTests(TestCase):
         self.assertEqual(notice_one.id, notice_two.id)
         self.assertEqual(NoticeSourceLink.objects.filter(procurement_notice=notice_one).count(), 2)
         self.assertEqual(SourceNoticeRevision.objects.count(), 2)
+
+
+class SetadRelativeCountdownIngestionTests(TestCase):
+    def setUp(self):
+        self.connector = ProcurementConnector.objects.get(key="setad_inquiries")
+        self.run = ExtractionRun.objects.create(status=ExtractionRun.Status.RUNNING)
+        self.run.connectors.add(self.connector)
+        self.base_time = timezone.make_aware(
+            datetime(2026, 8, 20, 10, 0, 0),
+            timezone.get_current_timezone(),
+        )
+
+    def parsed_notice(self, deadline_raw: str, *, title: str = "خدمات مطالعات و طراحی شبکه برق"):
+        return ParsedNotice(
+            source_record_id="۱۱۰۵۰۹۳۹۹۲۰۰۰۰۳۱",
+            source_url="https://eproc.setadiran.ir/eproc/needs.do",
+            detail_url=(
+                "https://eproc.setadiran.ir/eproc/needDetailsInfoModal-load.do?"
+                "reqId=7279593&domainType=1432&needId=5239285"
+            ),
+            source_declared_type="inquiry",
+            content_detected_type="inquiry",
+            type_resolution_status="resolved",
+            title=title,
+            employer="شرکت برق منطقه ای",
+            province="اصفهان",
+            published_raw="۱۴۰۵/۰۵/۲۹",
+            deadline_raw=deadline_raw,
+            summary="انتخاب تامین کننده | خدمات | فعالیت های حرفه ای، علمی و فنی",
+            description=title,
+            notice_number="۱۱۰۵۰۹۳۹۹۲۰۰۰۰۳۱",
+            detail_status="not_requested",
+            position=1,
+            metadata={
+                "setad_channel": "eproc",
+                "need_type": "انتخاب تامین کننده",
+                "category": "خدمات",
+                "relative_deadline": deadline_raw,
+                "req_id": "7279593",
+                "domain_type": "1432",
+                "need_id": "5239285",
+            },
+            raw_payload={
+                "need_number": "۱۱۰۵۰۹۳۹۹۲۰۰۰۰۳۱",
+                "title": title,
+                "employer": "شرکت برق منطقه ای",
+                "province": "اصفهان",
+                "published_raw": "۱۴۰۵/۰۵/۲۹",
+                "deadline_raw": deadline_raw,
+                "req_id": "7279593",
+                "domain_type": "1432",
+                "need_id": "5239285",
+            },
+        )
+
+    def ingest_at(self, observed_at, parsed_notice):
+        with patch("procurement.ingestion.timezone.now", return_value=observed_at):
+            return ingest_parsed_notice(
+                self.connector,
+                parsed_notice,
+                run=self.run,
+                page_number=1,
+            )
+
+    def test_natural_setad_countdown_progression_remains_duplicate_and_preserves_deadline(self):
+        source, notice, status = self.ingest_at(
+            self.base_time,
+            self.parsed_notice("۴ روز و ۸ ساعت"),
+        )
+        self.assertEqual(status, ExtractionRunItem.Status.NEW)
+        original_hash = source.content_hash
+        original_deadline = notice.submission_deadline
+        self.assertEqual(source.revisions.count(), 1)
+
+        # Emulate an existing pre-safeguard Runtime record without the new internal
+        # marker. The first post-deploy observation must bootstrap from its revision.
+        legacy_raw_payload = dict(source.raw_payload)
+        legacy_raw_payload.pop("_pdp", None)
+        source.raw_payload = legacy_raw_payload
+        source.save(update_fields=["raw_payload", "updated_at"])
+
+        source, notice, status = self.ingest_at(
+            self.base_time + timedelta(hours=1),
+            self.parsed_notice("۴ روز و ۷ ساعت"),
+        )
+        source.refresh_from_db()
+        notice.refresh_from_db()
+        self.assertEqual(status, ExtractionRunItem.Status.DUPLICATE)
+        self.assertEqual(source.content_hash, original_hash)
+        self.assertEqual(source.deadline_raw, "۴ روز و ۷ ساعت")
+        self.assertEqual(source.revisions.count(), 1)
+        self.assertIn("_pdp", source.raw_payload)
+        self.assertEqual(notice.submission_deadline, original_deadline)
+        self.assertEqual(
+            notice.date_metadata["deadline"]["stability_source"],
+            "preserved_progressing_relative_deadline",
+        )
+
+        source, notice, status = self.ingest_at(
+            self.base_time + timedelta(hours=2),
+            self.parsed_notice("۴ روز و ۶ ساعت"),
+        )
+        source.refresh_from_db()
+        notice.refresh_from_db()
+        self.assertEqual(status, ExtractionRunItem.Status.DUPLICATE)
+        self.assertEqual(source.content_hash, original_hash)
+        self.assertEqual(source.deadline_raw, "۴ روز و ۶ ساعت")
+        self.assertEqual(source.revisions.count(), 1)
+        self.assertEqual(notice.submission_deadline, original_deadline)
+
+    def test_real_setad_deadline_extension_remains_semantic_update(self):
+        source, notice, status = self.ingest_at(
+            self.base_time,
+            self.parsed_notice("۴ روز و ۸ ساعت"),
+        )
+        self.assertEqual(status, ExtractionRunItem.Status.NEW)
+        original_hash = source.content_hash
+        original_deadline = notice.submission_deadline
+
+        source, notice, status = self.ingest_at(
+            self.base_time + timedelta(hours=1),
+            self.parsed_notice("۵ روز و ۷ ساعت"),
+        )
+        source.refresh_from_db()
+        notice.refresh_from_db()
+        self.assertEqual(status, ExtractionRunItem.Status.UPDATED)
+        self.assertNotEqual(source.content_hash, original_hash)
+        self.assertEqual(source.revisions.count(), 2)
+        self.assertGreater(notice.submission_deadline, original_deadline)
+
+    def test_other_semantic_change_is_updated_during_natural_countdown(self):
+        source, _, status = self.ingest_at(
+            self.base_time,
+            self.parsed_notice("۴ روز و ۸ ساعت"),
+        )
+        self.assertEqual(status, ExtractionRunItem.Status.NEW)
+        original_hash = source.content_hash
+
+        source, notice, status = self.ingest_at(
+            self.base_time + timedelta(hours=1),
+            self.parsed_notice(
+                "۴ روز و ۷ ساعت",
+                title="خدمات مطالعات و طراحی شبکه برق ـ اصلاحیه",
+            ),
+        )
+        source.refresh_from_db()
+        self.assertEqual(status, ExtractionRunItem.Status.UPDATED)
+        self.assertNotEqual(source.content_hash, original_hash)
+        self.assertEqual(source.revisions.count(), 2)
+        self.assertEqual(notice.title, "خدمات مطالعات و طراحی شبکه برق ـ اصلاحیه")
