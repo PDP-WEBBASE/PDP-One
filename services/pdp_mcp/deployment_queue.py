@@ -27,16 +27,18 @@ IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 DEFAULT_TTL_SECONDS = 300
 MAX_TTL_SECONDS = 1800
 ACTION_TTL_SECONDS = {
-    # Layered health can wait behind a long deployment, Windows startup,
+    # Layered health and composite promotion can wait behind Windows startup,
     # agent restart, and public-route retries. Other signed actions keep
     # the shorter default lifetime.
     "check_deployment_health": 1800,
+    "promote_exact_candidate": 1800,
 }
 ALLOWED_ACTIONS = {
     "approve_release",
     "create_final_backup",
     "verify_backup_restore",
     "deploy_approved_release",
+    "promote_exact_candidate",
     "check_deployment_health",
     "run_disk_maintenance",
     "rollback_deployment",
@@ -153,7 +155,7 @@ def _validated_rejected_deployment_id(request_id: str) -> str | None:
         payload = json.loads(payload_bytes.decode("utf-8"))
         if str(payload.get("request_id", "")) != request_id:
             return None
-        if str(payload.get("action", "")) != "deploy_approved_release":
+        if str(payload.get("action", "")) not in {"deploy_approved_release", "promote_exact_candidate"}:
             return None
         params = payload.get("params")
         if not isinstance(params, dict):
@@ -262,7 +264,7 @@ def get_response(request_id: str) -> dict[str, Any]:
     # The agent never returns secrets. Keep a strict top-level type here.
     if not isinstance(result, dict):
         raise RuntimeError("The deployment-agent response is invalid.")
-    if result.get("status") == "failed" and result.get("action") == "deploy_approved_release":
+    if result.get("status") == "failed" and result.get("action") in {"deploy_approved_release", "promote_exact_candidate"}:
         deployment_id = _validated_rejected_deployment_id(normalized)
         if deployment_id:
             runtime_report = _read_sanitized_deployment_report(deployment_id)

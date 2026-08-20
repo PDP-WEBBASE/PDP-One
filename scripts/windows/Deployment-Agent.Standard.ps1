@@ -155,6 +155,46 @@ function Invoke-AgentAction($Payload) {
                 reused_verified_backup = $verifiedBackupId
             }
         }
+        "promote_exact_candidate" {
+            if (-not (Test-PDPOneDevelopmentFastMode)) {
+                throw "Exact candidate one-command promotion is available only in development-fast mode."
+            }
+            $deploymentId = Assert-SafeIdentifier ([string]$params.deployment_id) "deployment_id"
+            $previewId = Assert-SafeIdentifier ([string]$params.preview_id) "preview_id"
+            $commit = [string]$params.commit_sha
+            if ($commit -notmatch '^[0-9a-f]{40}$') { throw "Promotion commit is invalid." }
+
+            $deploymentArgs = @(
+                "-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
+                (Join-Path $scripts "Invoke-PDPOneDeployment.ps1"),
+                "-CommitSha", $commit,
+                "-DeploymentId", $deploymentId,
+                "-PreviewId", $previewId,
+                "-AgentRoot", $AgentRoot,
+                "-DevelopmentFastMode"
+            )
+            $report = @(& powershell.exe @deploymentArgs)
+            if ($LASTEXITCODE -ne 0) { throw "Exact candidate promotion deployment failed; see the deployment report." }
+            $deploymentReport = if ($report.Count -gt 0) { [string]$report[-1] } else { "" }
+
+            # This is deliberately a separate child process after exact deployment.
+            # The deployment may recreate MCP; orchestration remains in the Windows Agent.
+            & powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File (Join-Path $scripts "Test-PDPOne.ps1") -SkipChatGPTToolCheck | Out-Null
+            if ($LASTEXITCODE -ne 0) { throw "Exact candidate deployed, but independent layered health failed. Do not merge." }
+
+            return @{
+                deployment_id = $deploymentId
+                commit_sha = $commit
+                deployment_status = "healthy"
+                deployment_report = $deploymentReport
+                independent_health = "healthy"
+                runtime_accepted = $true
+                change_management_mode = "development_fast"
+                compatibility_preflight_enforced = $true
+                automatic_merge = $false
+                premerge_required = $true
+            }
+        }
         "check_deployment_health" {
             $deploymentId = Assert-SafeIdentifier ([string]$params.deployment_id) "deployment_id"
             & powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File (Join-Path $scripts "Test-PDPOne.ps1") -SkipChatGPTToolCheck | Out-Null
