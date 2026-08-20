@@ -4,6 +4,7 @@ from typing import Any
 
 import httpx
 from deployment_queue import enqueue, get_queue_status, get_response, validate_commit, validate_identifier
+from deployment_coordinator import register_tools as register_deployment_coordinator_tools
 from exact_candidate_promotion_tools import register_exact_candidate_promotion_tools
 from mcp.server.fastmcp import FastMCP
 from mcp.types import ToolAnnotations
@@ -55,6 +56,7 @@ async def api(method: str, path: str, **kwargs: Any) -> Any:
 
 register_procurement_analysis_tools(mcp, api)
 register_exact_candidate_promotion_tools(mcp, development_fast_mode)
+register_deployment_coordinator_tools(mcp)
 
 
 @mcp.tool(
