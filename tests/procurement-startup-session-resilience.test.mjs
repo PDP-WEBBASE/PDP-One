@@ -4,15 +4,15 @@ import test from "node:test";
 
 const read = (path) => readFile(new URL(`../${path}`, import.meta.url), "utf8");
 
-test("startup session resilience is installed before the existing procurement fetch guards", async () => {
+test("startup session resilience is installed before the stable procurement fetch guard", async () => {
   const workspace = await read("app/procurement/ProcurementWorkspaceV23.tsx");
   const startup = workspace.indexOf("<ProcurementStartupSessionResilience />");
-  const pagination = workspace.indexOf("<ProcurementPaginationEnhancement />");
+  const pagination = workspace.indexOf("<ProcurementPaginationStableEnhancement />");
   const baseWorkspace = workspace.indexOf("<ProcurementWorkspaceV22 />");
 
   assert.ok(startup >= 0, "startup session resilience must be mounted");
-  assert.ok(pagination > startup, "startup session resilience must precede pagination fetch wrapping");
-  assert.ok(baseWorkspace > pagination, "startup resilience must be active before V14 installs its fetch guard");
+  assert.ok(pagination > startup, "startup session resilience must precede stable pagination fetch wrapping");
+  assert.ok(baseWorkspace > pagination, "stable pagination must be active before the legacy workspace chain renders");
 });
 
 test("session startup gets bounded retries without changing ordinary procurement endpoint timeouts", async () => {
