@@ -116,6 +116,22 @@ function Get-PDPOneActivationTargets([string[]]$ChangedServices) {
     return @($targets | Select-Object -Unique)
 }
 
+function Test-PDPOneConnectivityEdgeImpact {
+    param(
+        [AllowEmptyCollection()][string[]]$Paths = @(),
+        [switch]$ConservativeFullStack
+    )
+    if ($ConservativeFullStack) { return $true }
+    foreach ($raw in @($Paths)) {
+        $path = ([string]$raw).Replace('\', '/')
+        if (-not $path) { continue }
+        if ($path -eq "docker-compose.yml" -or $path.StartsWith("infra/nginx/", [System.StringComparison]::OrdinalIgnoreCase)) {
+            return $true
+        }
+    }
+    return $false
+}
+
 $projectRoot = Get-PDPOneProjectRoot
 $envPath = Assert-PDPOneConfiguration -ProjectRoot $projectRoot
 $reportsRoot = Join-Path $AgentRoot "reports"
@@ -144,6 +160,9 @@ $imageMode = "legacy-exact-sha"
 $healthProfile = "full"
 $releaseManifestPath = ""
 $previousManifestPath = if ($null -ne $previousState -and $previousState.active_release_manifest) { [string]$previousState.active_release_manifest } else { "" }
+$edgeImpact = $false
+$activationTargets = @()
+$applicationTopologyTargets = @("backend", "worker", "beat", "mcp", "web")
 
 $report = [ordered]@{
     schema = "pdp-one.deployment-report.v3"
@@ -172,6 +191,9 @@ $report = [ordered]@{
     release_manifest = $null
     connectivity_repair_attempted = $false
     connectivity_repair_succeeded = $false
+    connectivity_edge_impacted = $false
+    connectivity_edge_refresh_performed = $false
+    connectivity_edge_preserved = $true
     error = $null
     recovery_instruction = "Redeploy the previous release commit through the governed deployment queue if the active release is unhealthy."
 }
@@ -244,6 +266,7 @@ try {
         }
     }
     $scope = Get-PDPOneChangeScope -Paths $changedPaths -ConservativeFullStack:$conservative
+    $edgeImpact = [bool](Test-PDPOneConnectivityEdgeImpact -Paths $changedPaths -ConservativeFullStack:$conservative)
     $imageMode = Get-PDPOneImageMode -SourceRoot $sourceRoot.FullName
 
     foreach ($service in @("backend", "mcp", "web")) {
@@ -270,6 +293,8 @@ try {
     $report.changed_paths = @($changedPaths)
     $report.health_profile = $healthProfile
     $report.active_images = $currentImages
+    $report.connectivity_edge_impacted = $edgeImpact
+    $report.connectivity_edge_preserved = (-not $edgeImpact)
     $report | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $reportPath -Encoding UTF8
 
     $report.stage = "pulling-immutable-images"
@@ -304,7 +329,7 @@ try {
     $activationTargets = @(Get-PDPOneActivationTargets -ChangedServices $changedServices)
     Set-Location $projectRoot
     if ($scope.topology_sensitive) {
-        Invoke-PDPOneNative -Command "docker" -Arguments @("compose", "--profile", "tunnel", "stop", "backend", "worker", "beat", "mcp", "web", "nginx", "tailscale") -FailureMessage "Application services could not be stopped cleanly." | Out-Null
+        Invoke-PDPOneNative -Command "docker" -Arguments (@("compose", "stop") + $applicationTopologyTargets) -FailureMessage "Application services could not be stopped cleanly." | Out-Null
     } elseif ($activationTargets.Count -gt 0) {
         Invoke-PDPOneNative -Command "docker" -Arguments (@("compose", "stop") + $activationTargets) -FailureMessage "Changed application services could not be stopped cleanly." | Out-Null
     }
@@ -325,9 +350,19 @@ try {
     }
 
     if ($scope.topology_sensitive) {
-        Invoke-PDPOneNative -Command "docker" -Arguments @("compose", "--profile", "tunnel", "up", "--detach", "--no-build", "--pull", "never") -FailureMessage "Updated services failed to start." | Out-Null
+        Invoke-PDPOneNative -Command "docker" -Arguments (@("compose", "up", "--detach", "--no-build", "--pull", "never", "--no-deps") + $applicationTopologyTargets) -FailureMessage "Updated application services failed to start." | Out-Null
     } elseif ($activationTargets.Count -gt 0) {
         Invoke-PDPOneNative -Command "docker" -Arguments (@("compose", "up", "--detach", "--no-build", "--pull", "never", "--no-deps") + $activationTargets) -FailureMessage "Changed services failed to start." | Out-Null
+    }
+
+    if ($edgeImpact) {
+        $report.stage = "refreshing-connectivity-edge"
+        $report | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $reportPath -Encoding UTF8
+        Invoke-PDPOneNative -Command "docker" -Arguments @("compose", "--profile", "tunnel", "stop", "tailscale", "nginx") -FailureMessage "Connectivity Edge could not be stopped cleanly." | Out-Null
+        Invoke-PDPOneNative -Command "docker" -Arguments @("compose", "up", "--detach", "--no-build", "--pull", "never", "--no-deps", "nginx") -FailureMessage "Nginx Connectivity Edge could not be started." | Out-Null
+        Invoke-PDPOneNative -Command "docker" -Arguments @("compose", "--profile", "tunnel", "up", "--detach", "--no-build", "--pull", "never", "--no-deps", "tailscale") -FailureMessage "Tailscale Connectivity Edge could not be started." | Out-Null
+        $report.connectivity_edge_refresh_performed = $true
+        $report.connectivity_edge_preserved = $false
     }
 
     $report.stage = "scope-aware-health-check"
@@ -372,6 +407,9 @@ try {
         image_mode = $imageMode
         changed_services = @($changedServices)
         health_profile = $healthProfile
+        connectivity_edge_impacted = $edgeImpact
+        connectivity_edge_refresh_performed = [bool]$report.connectivity_edge_refresh_performed
+        connectivity_edge_preserved = [bool]$report.connectivity_edge_preserved
         started_at = $report.started_at
         completed_at = [DateTime]::UtcNow.ToString("o")
         status = "healthy"
@@ -402,7 +440,11 @@ try {
     if ($report.production_changed) {
         try {
             Set-Location $projectRoot
-            Invoke-PDPOneNative -Command "docker" -Arguments @("compose", "--profile", "tunnel", "up", "--detach", "--no-build", "--pull", "never") -FailureMessage "Services could not be restarted after the failed deployment." -IgnoreFailure -Quiet | Out-Null
+            Invoke-PDPOneNative -Command "docker" -Arguments @("compose", "up", "--detach", "--no-build", "--pull", "never", "db", "redis", "backend", "worker", "beat", "mcp", "web") -FailureMessage "Application services could not be restarted after the failed deployment." -IgnoreFailure -Quiet | Out-Null
+            if ($edgeImpact) {
+                Invoke-PDPOneNative -Command "docker" -Arguments @("compose", "up", "--detach", "--no-build", "--pull", "never", "--no-deps", "nginx") -FailureMessage "Nginx Connectivity Edge could not be recovered after the failed deployment." -IgnoreFailure -Quiet | Out-Null
+                Invoke-PDPOneNative -Command "docker" -Arguments @("compose", "--profile", "tunnel", "up", "--detach", "--no-build", "--pull", "never", "--no-deps", "tailscale") -FailureMessage "Tailscale Connectivity Edge could not be recovered after the failed deployment." -IgnoreFailure -Quiet | Out-Null
+            }
         } catch { }
     }
     throw "Scoped registry deployment failed without automatic rollback. Redeploy previous release '$previousCommit'. $($report.error)"
