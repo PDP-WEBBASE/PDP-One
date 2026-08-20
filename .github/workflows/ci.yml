@@ -30,7 +30,10 @@ jobs:
           cat /tmp/pdp-changed-files.txt
 
           run_node=false
-          run_backend=false
+          run_backend_python=false
+          run_django_core=false
+          run_django_procurement=false
+          run_mcp_tests=false
           run_windows_helpers=false
           run_preview=false
           run_connector_packages=false
@@ -43,21 +46,48 @@ jobs:
               app/*|components/*|lib/*|public/*|styles/*|build/*|package.json|package-lock.json|tsconfig.json|eslint.config.*|vinext.config.*|next.config.*|scripts/build-verified.sh|scripts/sites-env.sh|scripts/install-ci.sh|infra/docker/web.Dockerfile)
                 run_node=true
                 ;;
+              tests/*-contract.test.mjs)
+                run_fast_contracts=true
+                ;;
               tests/*.test.mjs)
-                case "$path" in
-                  tests/registry-deployment-contract.test.mjs|tests/deployment-operation-lock.test.mjs|tests/disk-guard-contract.test.mjs|tests/disk-lifecycle-contract.test.mjs|tests/mcp-stability-contract.test.mjs|tests/persistent-analysis-contract.test.mjs|tests/development-speed-foundation-contract.test.mjs)
-                    run_fast_contracts=true
-                    ;;
-                  *)
-                    run_node=true
-                    ;;
-                esac
+                run_node=true
                 ;;
             esac
 
             case "$path" in
-              backend/*|services/pdp_mcp/*|docker-compose.yml|.github/workflows/ci.yml)
-                run_backend=true
+              backend/procurement/migrations/*)
+                run_backend_python=true
+                run_django_core=true
+                run_django_procurement=true
+                run_fast_contracts=true
+                ;;
+              backend/procurement/*)
+                run_backend_python=true
+                run_django_procurement=true
+                run_fast_contracts=true
+                ;;
+              backend/core/*)
+                run_backend_python=true
+                run_django_core=true
+                run_django_procurement=true
+                run_fast_contracts=true
+                ;;
+              backend/*)
+                run_backend_python=true
+                run_django_core=true
+                run_django_procurement=true
+                run_fast_contracts=true
+                ;;
+              services/pdp_mcp/*)
+                run_backend_python=true
+                run_mcp_tests=true
+                run_fast_contracts=true
+                ;;
+              docker-compose.yml|.github/workflows/ci.yml)
+                run_backend_python=true
+                run_django_core=true
+                run_django_procurement=true
+                run_mcp_tests=true
                 run_fast_contracts=true
                 ;;
             esac
@@ -90,15 +120,18 @@ jobs:
 
           {
             echo "RUN_NODE=$run_node"
-            echo "RUN_BACKEND=$run_backend"
+            echo "RUN_BACKEND_PYTHON=$run_backend_python"
+            echo "RUN_DJANGO_CORE=$run_django_core"
+            echo "RUN_DJANGO_PROCUREMENT=$run_django_procurement"
+            echo "RUN_MCP_TESTS=$run_mcp_tests"
             echo "RUN_WINDOWS_HELPERS=$run_windows_helpers"
             echo "RUN_PREVIEW=$run_preview"
             echo "RUN_CONNECTOR_PACKAGES=$run_connector_packages"
             echo "RUN_FAST_CONTRACTS=$run_fast_contracts"
           } >> "$GITHUB_ENV"
 
-          printf 'scope node=%s backend=%s windows_helpers=%s preview=%s connector_packages=%s fast_contracts=%s\n' \
-            "$run_node" "$run_backend" "$run_windows_helpers" "$run_preview" "$run_connector_packages" "$run_fast_contracts"
+          printf 'scope node=%s backend_python=%s django_core=%s django_procurement=%s mcp=%s windows_helpers=%s preview=%s connector_packages=%s fast_contracts=%s\n' \
+            "$run_node" "$run_backend_python" "$run_django_core" "$run_django_procurement" "$run_mcp_tests" "$run_windows_helpers" "$run_preview" "$run_connector_packages" "$run_fast_contracts"
 
       - name: Fast safety preflight
         shell: bash
@@ -146,15 +179,10 @@ jobs:
 
       - name: Run fast cross-component contracts
         if: env.RUN_FAST_CONTRACTS == 'true'
+        shell: bash
         run: |
-          node --test \
-            tests/registry-deployment-contract.test.mjs \
-            tests/deployment-operation-lock.test.mjs \
-            tests/disk-guard-contract.test.mjs \
-            tests/disk-lifecycle-contract.test.mjs \
-            tests/mcp-stability-contract.test.mjs \
-            tests/persistent-analysis-contract.test.mjs \
-            tests/development-speed-foundation-contract.test.mjs
+          set -euo pipefail
+          node --test tests/*-contract.test.mjs
 
       - name: Install Node dependencies
         if: env.RUN_NODE == 'true'
@@ -209,59 +237,74 @@ jobs:
           retention-days: 3
 
       - uses: actions/setup-python@v5
-        if: env.RUN_BACKEND == 'true'
+        if: env.RUN_BACKEND_PYTHON == 'true'
         with:
           python-version: "3.13"
           cache: pip
+          cache-dependency-path: |
+            backend/requirements.txt
+            services/pdp_mcp/requirements.txt
 
-      - name: Install backend dependencies
-        if: env.RUN_BACKEND == 'true'
-        run: pip install -r backend/requirements.txt
-
-      - name: Verify Python syntax and migrations
-        id: python_verify
-        if: env.RUN_BACKEND == 'true'
-        env:
-          DJANGO_SETTINGS_MODULE: config.settings_test
+      - name: Verify affected Python syntax
+        id: python_compile
+        if: env.RUN_BACKEND_PYTHON == 'true'
         shell: bash
         run: |
           set -o pipefail
           python -m compileall -q backend services/pdp_mcp 2>&1 | tee python-compile.log
-          python backend/manage.py makemigrations --check --dry-run 2>&1 | tee migration-check.log
 
-      - name: Upload failed Python and migration logs
-        if: steps.python_verify.outcome == 'failure'
-        uses: actions/upload-artifact@v4
-        with:
-          name: pdp-one-python-migration-log-${{ github.event.pull_request.head.sha }}
-          path: |
-            python-compile.log
-            migration-check.log
-          if-no-files-found: warn
-          retention-days: 3
+      - name: Install backend dependencies
+        if: env.RUN_DJANGO_CORE == 'true' || env.RUN_DJANGO_PROCUREMENT == 'true'
+        run: pip install -r backend/requirements.txt
 
-      - name: Test signed deployment queue
-        if: env.RUN_BACKEND == 'true'
-        env:
-          PYTHONPATH: services/pdp_mcp
-        run: python -m unittest services.pdp_mcp.test_deployment_queue -v
-
-      - name: Run backend tests
-        id: backend_tests
-        if: env.RUN_BACKEND == 'true'
+      - name: Verify Django migration drift
+        id: migration_check
+        if: env.RUN_DJANGO_CORE == 'true' || env.RUN_DJANGO_PROCUREMENT == 'true'
         env:
           DJANGO_SETTINGS_MODULE: config.settings_test
         shell: bash
         run: |
           set -o pipefail
-          python backend/manage.py test core.tests procurement.tests -v 2 2>&1 | tee backend-test.log
+          python backend/manage.py makemigrations --check --dry-run 2>&1 | tee migration-check.log
 
-      - name: Upload failed backend test log
-        if: steps.backend_tests.outcome == 'failure'
+      - name: Install MCP dependencies
+        if: env.RUN_MCP_TESTS == 'true'
+        run: pip install -r services/pdp_mcp/requirements.txt
+
+      - name: Run MCP-focused Python tests
+        id: mcp_tests
+        if: env.RUN_MCP_TESTS == 'true'
+        env:
+          PYTHONPATH: services/pdp_mcp
+        shell: bash
+        run: |
+          set -o pipefail
+          python -m unittest discover -s services/pdp_mcp -p 'test_*.py' -v 2>&1 | tee mcp-test.log
+
+      - name: Run impacted Django tests
+        id: backend_tests
+        if: env.RUN_DJANGO_CORE == 'true' || env.RUN_DJANGO_PROCUREMENT == 'true'
+        env:
+          DJANGO_SETTINGS_MODULE: config.settings_test
+        shell: bash
+        run: |
+          set -o pipefail
+          labels=()
+          if [ "${RUN_DJANGO_CORE}" = "true" ]; then labels+=(core.tests); fi
+          if [ "${RUN_DJANGO_PROCUREMENT}" = "true" ]; then labels+=(procurement.tests); fi
+          printf 'Django impacted test labels: %s\n' "${labels[*]}"
+          python backend/manage.py test "${labels[@]}" -v 2 2>&1 | tee backend-test.log
+
+      - name: Upload failed Python logs
+        if: failure() && (steps.python_compile.outcome == 'failure' || steps.migration_check.outcome == 'failure' || steps.mcp_tests.outcome == 'failure' || steps.backend_tests.outcome == 'failure')
         uses: actions/upload-artifact@v4
         with:
-          name: pdp-one-backend-test-log-${{ github.event.pull_request.head.sha }}
-          path: backend-test.log
+          name: pdp-one-python-test-log-${{ github.event.pull_request.head.sha }}
+          path: |
+            python-compile.log
+            migration-check.log
+            mcp-test.log
+            backend-test.log
           if-no-files-found: warn
           retention-days: 3
 
@@ -367,7 +410,7 @@ jobs:
           $changed = @(git diff --name-only $env:BASE_SHA $env:HEAD_SHA)
           $required = $false
           foreach ($path in $changed) {
-            $normalized = ([string]$path).Replace('\', '/')
+            $normalized = ([string]$path).Replace('\\', '/')
             if ($normalized -like 'scripts/windows/*' -or $normalized -like '*.bat' -or $normalized -eq 'docker-compose.yml' -or $normalized -eq 'HOST-RUNTIME-SOURCE' -or $normalized -eq '.github/workflows/ci.yml') {
               $required = $true
               break
@@ -394,7 +437,7 @@ jobs:
       - name: Test DPAPI and compatibility helpers
         if: steps.windows_scope.outputs.required == 'true'
         shell: powershell
-        run: .\scripts\windows\tests\Test-WindowsPowerShell51.ps1
+        run: .\\scripts\\windows\\tests\\Test-WindowsPowerShell51.ps1
 
       - name: Windows compatibility not affected
         if: steps.windows_scope.outputs.required != 'true'

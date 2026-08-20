@@ -121,16 +121,23 @@ test("PR governance cancels superseded runs and keeps CI change-aware without ch
   assert.match(ci, /name:\s*Windows PowerShell 5\.1 compatibility/);
   assert.match(ci, /name:\s*Classify PR change scope/);
   assert.match(ci, /RUN_NODE=/);
-  assert.match(ci, /RUN_BACKEND=/);
+  assert.match(ci, /RUN_BACKEND_PYTHON=/);
+  assert.match(ci, /RUN_DJANGO_CORE=/);
+  assert.match(ci, /RUN_DJANGO_PROCUREMENT=/);
+  assert.match(ci, /RUN_MCP_TESTS=/);
   assert.match(ci, /RUN_WINDOWS_HELPERS=/);
   assert.match(ci, /RUN_PREVIEW=/);
   assert.match(ci, /RUN_CONNECTOR_PACKAGES=/);
-  assert.match(ci, /if:\s*env\.RUN_BACKEND == 'true'/);
+  assert.match(ci, /if:\s*env\.RUN_BACKEND_PYTHON == 'true'/);
+  assert.match(ci, /if:\s*env\.RUN_DJANGO_CORE == 'true' \|\| env\.RUN_DJANGO_PROCUREMENT == 'true'/);
+  assert.match(ci, /if:\s*env\.RUN_MCP_TESTS == 'true'/);
   assert.match(ci, /if:\s*env\.RUN_WINDOWS_HELPERS == 'true'/);
   assert.match(ci, /if:\s*env\.RUN_CONNECTOR_PACKAGES == 'true' && success\(\)/);
   assert.match(ci, /if:\s*steps\.frontend_lint\.outcome == 'failure'/);
-  assert.match(ci, /if:\s*steps\.python_verify\.outcome == 'failure'/);
-  assert.match(ci, /if:\s*steps\.backend_tests\.outcome == 'failure'/);
+  assert.match(ci, /steps\.python_compile\.outcome == 'failure'/);
+  assert.match(ci, /steps\.migration_check\.outcome == 'failure'/);
+  assert.match(ci, /steps\.mcp_tests\.outcome == 'failure'/);
+  assert.match(ci, /steps\.backend_tests\.outcome == 'failure'/);
   assert.match(ci, /retention-days:\s*3/);
 
   assert.match(boundary, /group:\s*pdp-one-public-boundary-pr-\$\{\{ github\.event\.pull_request\.number \}\}/);
