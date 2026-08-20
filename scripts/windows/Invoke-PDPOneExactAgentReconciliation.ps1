@@ -94,14 +94,13 @@ function Assert-ExactSteadyStateManifest($Contract) {
     return $entries
 }
 
-if (-not (Test-Path -LiteralPath $secretPath)) {
-    throw "The protected GitHub package credential is missing."
-}
-
 $credentialPointer = [IntPtr]::Zero
 $plainCredential = $null
 $records = @()
 try {
+    if (-not (Test-Path -LiteralPath $secretPath)) {
+        throw "The protected GitHub package credential is missing."
+    }
     $secureCredential = (Get-Content -LiteralPath $secretPath -Raw).Trim() | ConvertTo-SecureString
     $credentialPointer = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secureCredential)
     $plainCredential = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($credentialPointer)
@@ -196,9 +195,11 @@ try {
     $report | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $reportPath -Encoding UTF8
     Write-Output $reportPath
 } catch {
-    $report.rollback_attempted = @($records | Where-Object { $_.replaced }).Count -gt 0
+    $rollbackRecords = @($records | Where-Object { $_.replaced })
+    $report.rollback_attempted = $rollbackRecords.Count -gt 0
+    [array]::Reverse($rollbackRecords)
     $rollbackSucceeded = $true
-    foreach ($record in @($records | Where-Object { $_.replaced } | Select-Object -Reverse)) {
+    foreach ($record in $rollbackRecords) {
         try {
             if ([bool]$record.installed_before) {
                 Copy-Item -LiteralPath $record.backup_path -Destination $record.installed_path -Force
