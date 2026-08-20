@@ -58,12 +58,103 @@ function Invoke-PDPOneFullHealthFallback {
     if ($LASTEXITCODE -ne 0) { throw "Full PDP One health check failed." }
 }
 
+function Ensure-PDPOneDeploymentAgentWatchdogAcceptance {
+    param(
+        [Parameter(Mandatory = $true)][string]$ProjectRoot,
+        [Parameter(Mandatory = $true)][string]$EnvPath,
+        [int]$Timeout = 45
+    )
+
+    $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+    $principal = New-Object Security.Principal.WindowsPrincipal($identity)
+    if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+        Write-Verbose "Skipping Windows watchdog acceptance because this health invocation is not elevated."
+        return
+    }
+
+    $agentRoot = "C:\ProgramData\PDP-One\deployment-agent"
+    try {
+        $configuredAgentRoot = [string](Get-PDPOneEnvValue -Path $EnvPath -Name "PDP_DEPLOYMENT_AGENT_ROOT")
+        if (-not [string]::IsNullOrWhiteSpace($configuredAgentRoot)) {
+            $agentRoot = ($configuredAgentRoot -replace '/', '\')
+        }
+    } catch { }
+
+    $agentTaskName = "PDP One Local Deployment Agent"
+    $watchdogTaskName = "PDP One Deployment Agent Watchdog"
+    $selfTestTaskName = "PDP One Deployment Agent Watchdog Self Test"
+    $registerScript = Join-Path $ProjectRoot "scripts\windows\Register-PDPOneStartupTask.ps1"
+    $watchdogScript = Join-Path $ProjectRoot "scripts\windows\Ensure-PDPOneDeploymentAgentHealthy.ps1"
+    $selfTestScript = Join-Path $ProjectRoot "scripts\windows\Test-PDPOneDeploymentAgentWatchdogSelfHeal.ps1"
+    $watchdogReport = Join-Path $agentRoot "reports\deployment-agent-watchdog.json"
+    $selfTestMarker = Join-Path $agentRoot "state\deployment-agent-watchdog-selftest-v1.accepted"
+
+    foreach ($required in @($registerScript, $watchdogScript, $selfTestScript)) {
+        if (-not (Test-Path -LiteralPath $required)) { throw "Required autonomous Agent watchdog file is missing: $(Split-Path $required -Leaf)" }
+    }
+
+    $watchdogTask = Get-ScheduledTask -TaskName $watchdogTaskName -ErrorAction SilentlyContinue
+    if ($null -eq $watchdogTask) {
+        & powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File $registerScript -ProjectRoot $ProjectRoot
+        if ($LASTEXITCODE -ne 0) { throw "Deployment Agent watchdog task registration failed." }
+        $watchdogTask = Get-ScheduledTask -TaskName $watchdogTaskName -ErrorAction SilentlyContinue
+    }
+    if ($null -eq $watchdogTask) { throw "Deployment Agent watchdog Scheduled Task is still missing after registration." }
+    if ([string]$watchdogTask.State -eq "Disabled") {
+        Enable-ScheduledTask -TaskName $watchdogTaskName -ErrorAction Stop | Out-Null
+    }
+
+    $acceptanceStarted = [DateTimeOffset]::UtcNow
+    $watchdogTask = Get-ScheduledTask -TaskName $watchdogTaskName -ErrorAction Stop
+    if ([string]$watchdogTask.State -ne "Running") {
+        Start-ScheduledTask -TaskName $watchdogTaskName -ErrorAction Stop
+    }
+
+    $deadline = (Get-Date).AddSeconds([Math]::Max(20, $Timeout))
+    $watchdogAccepted = $false
+    while ((Get-Date) -lt $deadline) {
+        if (Test-Path -LiteralPath $watchdogReport) {
+            try {
+                $status = Get-Content -LiteralPath $watchdogReport -Raw -Encoding UTF8 | ConvertFrom-Json
+                $checkedAt = [DateTimeOffset]::Parse([string]$status.checked_at)
+                if (
+                    [string]$status.schema -eq "pdp-one.deployment-agent-watchdog.v1" -and
+                    [string]$status.status -eq "healthy" -and
+                    [string]$status.task_state_after -eq "Running" -and
+                    $checkedAt -ge $acceptanceStarted.AddSeconds(-5)
+                ) {
+                    $watchdogAccepted = $true
+                    break
+                }
+            } catch { }
+        }
+        Start-Sleep -Seconds 1
+    }
+    if (-not $watchdogAccepted) { throw "Deployment Agent watchdog did not produce fresh healthy evidence." }
+
+    if (-not (Test-Path -LiteralPath $selfTestMarker)) {
+        $arguments = "-NoLogo -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$selfTestScript`" -AgentRoot `"$agentRoot`" -AgentTaskName `"$agentTaskName`" -WatchdogTaskName `"$watchdogTaskName`" -SelfTestTaskName `"$selfTestTaskName`" -MaxWaitSeconds 120"
+        $action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument $arguments
+        $trigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddSeconds(45)
+        $taskPrincipal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel Highest
+        $settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Minutes 6) -MultipleInstances IgnoreNew -StartWhenAvailable
+        Register-ScheduledTask -TaskName $selfTestTaskName -Action $action -Trigger $trigger -Principal $taskPrincipal -Settings $settings -Description "One-time bounded proof that the fixed PDP One Deployment Agent watchdog restores the fixed Agent task after a controlled stop. No arbitrary command, data, volume, identity or credential action." -Force | Out-Null
+    }
+}
+
 $projectRoot = Get-PDPOneProjectRoot
 $envPath = Assert-PDPOneConfiguration -ProjectRoot $projectRoot
 Set-Location $projectRoot
 if (-not (Test-PDPOneDockerEngine)) { throw "Docker Engine is unavailable." }
 & docker compose config --quiet
 if ($LASTEXITCODE -ne 0) { throw "Docker Compose configuration is invalid." }
+
+# Exact registry deployments always invoke this exact-release health script after
+# copying the release to C:\PDP-One. Use that governed elevated checkpoint to
+# guarantee the Windows Deployment Agent watchdog exists and has fresh healthy
+# evidence, then schedule one bounded post-deployment self-heal proof. Ordinary
+# non-elevated manual health checks remain read-only and skip this host action.
+Ensure-PDPOneDeploymentAgentWatchdogAcceptance -ProjectRoot $projectRoot -EnvPath $envPath -Timeout 45
 
 if ($Profile -eq "full") {
     Invoke-PDPOneFullHealthFallback -SkipPublic:$SkipPublicCheck
