@@ -49,6 +49,19 @@ SEMANTIC_HASH_FIELDS = (
 )
 SETAD_EPROC_SEMANTIC_MARKER_KEY = "setad_eproc_semantic_hash_without_deadline"
 SETAD_EPROC_COUNTDOWN_TOLERANCE_SECONDS = 300
+SETAD_TENDER_SEMANTIC_FIELDS = (
+    "operationCityName",
+    "type",
+    "typeName",
+    "documentsDeadlineDate",
+    "proposalDeadlineDate",
+    "evaluationDeadlineDate",
+    "openingDate",
+    "allowedContractor",
+    "allowedConsultation",
+    "allowedCommodity",
+    "allowedServices",
+)
 
 
 def _semantic_hash(payload: dict, *, include_deadline: bool = True) -> str:
@@ -58,11 +71,76 @@ def _semantic_hash(payload: dict, *, include_deadline: bool = True) -> str:
     return stable_hash({key: payload.get(key) for key in fields})
 
 
+def _setad_tender_semantic_projection(raw_payload: dict | None) -> dict:
+    if not isinstance(raw_payload, dict):
+        return {}
+    list_payload = raw_payload.get("list") or {}
+    if not isinstance(list_payload, dict):
+        return {}
+    projection = {}
+    for field in SETAD_TENDER_SEMANTIC_FIELDS:
+        value = list_payload.get(field)
+        if isinstance(value, str):
+            value = normalize_text(value)
+        projection[field] = value
+    return projection
+
+
+def _apply_setad_tender_semantic_hash(
+    connector,
+    payload: dict,
+    *,
+    source_notice: SourceNotice | None,
+) -> None:
+    """Add material SETAD tender lifecycle semantics without legacy churn."""
+
+    if connector.key != "setad_tenders":
+        return
+
+    core_hash = payload["content_hash"]
+    projection = _setad_tender_semantic_projection(payload["raw_payload"])
+    semantic_state = {
+        "version": 1,
+        "core_hash": core_hash,
+        "projection": projection,
+    }
+
+    if source_notice is None:
+        effective_hash = stable_hash(
+            {"core_hash": core_hash, "setad_tender_lifecycle": projection}
+        )
+    else:
+        previous_raw = source_notice.raw_payload if isinstance(source_notice.raw_payload, dict) else {}
+        previous_state = previous_raw.get("_semantic_state")
+        if isinstance(previous_state, dict) and previous_state.get("version") == 1:
+            unchanged = (
+                previous_state.get("core_hash") == core_hash
+                and previous_state.get("projection") == projection
+            )
+        else:
+            unchanged = (
+                source_notice.content_hash == core_hash
+                and _setad_tender_semantic_projection(previous_raw) == projection
+            )
+
+        effective_hash = (
+            source_notice.content_hash
+            if unchanged
+            else stable_hash(
+                {"core_hash": core_hash, "setad_tender_lifecycle": projection}
+            )
+        )
+
+    payload["raw_payload"]["_semantic_state"] = semantic_state
+    payload["content_hash"] = effective_hash
+
+
 def merge_parsed_notice(parsed: ParsedNotice, detail: dict | None = None) -> dict:
     detail = detail or {}
     title = normalize_text(detail.get("title")) or parsed.title
     employer = normalize_text(detail.get("employer")) or parsed.employer
     province = normalize_text(detail.get("province")) or parsed.province
+    city = normalize_text(detail.get("city")) or normalize_text((parsed.metadata or {}).get("city"))
     published_raw = normalize_text(detail.get("published_raw")) or parsed.published_raw
     deadline_raw = normalize_text(detail.get("deadline_raw")) or parsed.deadline_raw
     detected_type = detail.get("content_detected_type") or parsed.content_detected_type
@@ -79,6 +157,7 @@ def merge_parsed_notice(parsed: ParsedNotice, detail: dict | None = None) -> dic
         "title": title,
         "employer": employer,
         "province": province,
+        "city": city,
         "published_raw": published_raw,
         "deadline_raw": deadline_raw,
         "summary": parsed.summary,
@@ -87,7 +166,7 @@ def merge_parsed_notice(parsed: ParsedNotice, detail: dict | None = None) -> dic
         "notice_number": normalize_text(detail.get("notice_number")) or parsed.notice_number,
         "contact_text": contact_text or parsed.contact_text,
         "detail_status": detail.get("detail_status") or parsed.detail_status,
-        "metadata": {**parsed.metadata, "detail": {key: value for key, value in detail.items() if key != "json_ld"}},
+        "metadata": {**(parsed.metadata or {}), "detail": {key: value for key, value in detail.items() if key != "json_ld"}},
         "raw_payload": {"list": parsed.raw_payload, "detail": detail},
     }
     payload["content_hash"] = _semantic_hash(payload)
@@ -148,13 +227,7 @@ def _natural_relative_deadline_progression(
     previous_seen_at,
     current_seen_at,
 ) -> bool:
-    """Return true when two countdown observations can describe one deadline.
-
-    SETAD eProc publishes a decreasing duration rather than an absolute deadline.
-    Treat each displayed duration as a deadline window whose width is the smallest
-    displayed unit. Natural passage of time keeps the two windows overlapping;
-    a real extension/change moves the window away from the previous one.
-    """
+    """Return true when two countdown observations can describe one deadline."""
 
     if not previous_raw or not current_raw or previous_seen_at is None:
         return False
@@ -190,9 +263,6 @@ def _previous_setad_semantic_marker(source_notice: SourceNotice) -> str:
     if marker:
         return str(marker)
 
-    # Existing records created before this safeguard do not yet have the marker.
-    # Bootstrap it from the latest semantic revision once; subsequent runs read the
-    # marker directly from SourceNotice and do not need this fallback query.
     latest_revision = source_notice.revisions.order_by("-revision_number").only("parsed_payload").first()
     if latest_revision is None or not isinstance(latest_revision.parsed_payload, dict):
         return ""
@@ -207,13 +277,7 @@ def _preserve_unchanged_relative_deadline(
     deadline_meta: dict,
     natural_relative_progression: bool = False,
 ):
-    """Keep the materialized deadline when a relative countdown is unchanged.
-
-    For ordinary sources, exact raw-duration equality retains the prior behavior.
-    For SETAD eProc, a naturally decreasing countdown may have a different raw
-    string every hour; the caller supplies `natural_relative_progression` only
-    after validating the previous/current countdown windows.
-    """
+    """Keep a materialized deadline for exact or validated progressing durations."""
 
     if source_link is None or parsed_deadline is None or notice.submission_deadline is None:
         return parsed_deadline, deadline_meta
@@ -254,12 +318,8 @@ def ingest_parsed_notice(
     now = timezone.now()
     setad_eproc = _is_setad_eproc(parsed)
     semantic_marker = _semantic_hash(payload, include_deadline=False) if setad_eproc else ""
-    source_raw_payload = (
-        _source_raw_payload_with_semantic_marker(payload["raw_payload"], semantic_marker)
-        if setad_eproc
-        else payload["raw_payload"]
-    )
-    source_values = {
+
+    initial_source_values = {
         "source_url": payload["source_url"],
         "detail_url": payload["detail_url"],
         "source_declared_type": payload["source_declared_type"],
@@ -268,7 +328,7 @@ def ingest_parsed_notice(
         "province_raw": payload["province"],
         "published_at_raw": payload["published_raw"],
         "deadline_raw": payload["deadline_raw"],
-        "raw_payload": source_raw_payload,
+        "raw_payload": payload["raw_payload"],
         "content_hash": payload["content_hash"],
         "detail_status": payload["detail_status"],
         "last_seen_at": now,
@@ -277,34 +337,49 @@ def ingest_parsed_notice(
     source_notice, created = SourceNotice.objects.get_or_create(
         connector=connector,
         source_record_id=payload["source_record_id"],
-        defaults={**source_values, "first_seen_at": now},
+        defaults={**initial_source_values, "first_seen_at": now},
     )
 
     natural_relative_progression = False
+    if not created and setad_eproc:
+        previous_content_hash = source_notice.content_hash
+        natural_relative_progression = _natural_relative_deadline_progression(
+            previous_raw=source_notice.deadline_raw,
+            current_raw=payload["deadline_raw"],
+            previous_seen_at=source_notice.last_seen_at,
+            current_seen_at=now,
+        )
+        if natural_relative_progression:
+            previous_marker = _previous_setad_semantic_marker(source_notice)
+            if previous_marker and previous_marker == semantic_marker:
+                payload["content_hash"] = previous_content_hash
+
+    if setad_eproc:
+        payload["raw_payload"] = _source_raw_payload_with_semantic_marker(
+            payload["raw_payload"], semantic_marker
+        )
+
+    _apply_setad_tender_semantic_hash(
+        connector,
+        payload,
+        source_notice=None if created else source_notice,
+    )
+
+    source_values = {
+        **initial_source_values,
+        "raw_payload": payload["raw_payload"],
+        "content_hash": payload["content_hash"],
+    }
+
     if created:
+        for field, value in source_values.items():
+            setattr(source_notice, field, value)
+        source_notice.save(update_fields=SOURCE_FIELDS + ["updated_at"])
         changed_fields = list(source_values.keys())
         semantic_changed_fields = changed_fields
         item_status = ExtractionRunItem.Status.NEW
     else:
         previous_content_hash = source_notice.content_hash
-        previous_deadline_raw = source_notice.deadline_raw
-        previous_seen_at = source_notice.last_seen_at
-
-        if setad_eproc:
-            natural_relative_progression = _natural_relative_deadline_progression(
-                previous_raw=previous_deadline_raw,
-                current_raw=payload["deadline_raw"],
-                previous_seen_at=previous_seen_at,
-                current_seen_at=now,
-            )
-            if natural_relative_progression:
-                previous_marker = _previous_setad_semantic_marker(source_notice)
-                if previous_marker and previous_marker == semantic_marker:
-                    # Preserve the last true semantic hash while still storing the
-                    # newest raw countdown and last-seen evidence on SourceNotice.
-                    payload["content_hash"] = previous_content_hash
-                    source_values["content_hash"] = previous_content_hash
-
         changed_fields = _changed_fields(source_notice, source_values)
         semantic_changed = previous_content_hash != payload["content_hash"]
         semantic_changed_fields = changed_fields if semantic_changed else []
@@ -317,8 +392,6 @@ def ingest_parsed_notice(
             setattr(source_notice, field, value)
         source_notice.save(update_fields=SOURCE_FIELDS + ["updated_at"])
 
-    # Source list-page movement, raw capture drift and a natural SETAD countdown are
-    # useful latest-state evidence, but they are not semantic notice revisions.
     if created or semantic_changed_fields:
         next_revision = (
             source_notice.revisions.aggregate(maximum=Max("revision_number"))["maximum"] or 0
@@ -368,6 +441,8 @@ def ingest_parsed_notice(
     notice.employer_name = payload["employer"]
     notice.notice_number = payload["notice_number"]
     notice.province = payload["province"]
+    if payload["city"]:
+        notice.city = payload["city"]
     notice.published_date = published_date
     notice.submission_deadline = submission_deadline
     notice.date_metadata = {"published": published_meta, "deadline": deadline_meta}
