@@ -77,6 +77,13 @@ class DeploymentCoordinatorTests(unittest.TestCase):
         self.assertTrue(status["runtime_deployments_serialized"])
         self.assertFalse(status["arbitrary_shell_allowed"])
 
+    def test_background_dispatcher_is_idempotent_and_daemonized(self):
+        self.coordinator.start_dispatcher()
+        first = self.coordinator._dispatcher_started
+        self.coordinator.start_dispatcher()
+        self.assertTrue(first)
+        self.assertTrue(self.coordinator._dispatcher_started)
+
     def test_completed_agent_response_recovers_workstream_state_and_dispatches_next(self):
         self.register("work-1")
         first = self.coordinator.queue_exact_deployment("work-1", "a" * 40, "deploy-a", "preview-a")
