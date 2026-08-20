@@ -16,6 +16,14 @@ test("managed deployment prefers scoped releases while retaining a legacy migrat
   assert.match(managed, /Update-PDPOneLegacyDeploymentStateForScopedEngine/);
 });
 
+test("deployment agent keeps the mutex holder inside the Scheduled Task process", async () => {
+  const wrapper = await load("../scripts/windows/Deployment-Agent.ps1");
+  assert.match(wrapper, /Deployment-Agent\.Standard\.ps1/);
+  assert.match(wrapper, /& \$delegate -AgentRoot \$AgentRoot -PollSeconds \$PollSeconds/);
+  assert.doesNotMatch(wrapper, /powershell\.exe\s+@arguments/i);
+  assert.match(wrapper, /Stop-ScheduledTask cannot leave an orphaned/);
+});
+
 test("scoped deployment reuses unchanged immutable images and restarts only affected services", async () => {
   const deploy = await load("../scripts/windows/Invoke-PDPOneScopedRegistryDeployment.ps1");
   assert.match(deploy, /Get-PDPOneChangedFilePaths/);

@@ -49,12 +49,13 @@ if (-not (Test-Path -LiteralPath $delegate)) {
     throw "The preserved standard deployment agent is missing."
 }
 
-$arguments = @(
-    "-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $delegate,
-    "-AgentRoot", $AgentRoot,
-    "-PollSeconds", ([string]$PollSeconds)
-)
-if ($Once) { $arguments += "-Once" }
-
-& powershell.exe @arguments
-exit $LASTEXITCODE
+# Run the preserved agent in the Scheduled Task process itself. Keeping the
+# mutex holder in-process ensures Stop-ScheduledTask cannot leave an orphaned
+# child powershell.exe that blocks the replacement agent with the global mutex.
+if ($Once) {
+    & $delegate -AgentRoot $AgentRoot -PollSeconds $PollSeconds -Once
+} else {
+    & $delegate -AgentRoot $AgentRoot -PollSeconds $PollSeconds
+}
+if (-not $?) { exit 1 }
+exit 0
