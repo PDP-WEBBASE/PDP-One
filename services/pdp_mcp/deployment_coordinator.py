@@ -12,6 +12,8 @@ import hmac
 import json
 import os
 import tempfile
+import threading
+import time
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -29,6 +31,9 @@ LOCK_TTL_MAX_MINUTES = 24 * 60
 COORDINATED_REQUEST_TTL_SECONDS = 7 * 24 * 60 * 60
 PRIORITIES = {"critical": 0, "infrastructure": 10, "normal": 50, "low": 90}
 FINAL_STATES = {"succeeded", "failed", "superseded", "cancelled"}
+DISPATCH_POLL_SECONDS = max(2, min(60, int(os.getenv("PDP_COORDINATOR_POLL_SECONDS", "5"))))
+_dispatcher_started = False
+_dispatcher_guard = threading.Lock()
 
 
 def _now() -> datetime:
@@ -350,8 +355,32 @@ def coordinator_status() -> dict[str, Any]:
     }
 
 
+def _dispatcher_loop() -> None:
+    while True:
+        try:
+            _reconcile_history()
+            _dispatch_next()
+        except Exception:
+            # A transient volume/startup error must not terminate MCP or the
+            # persistent dispatcher. The next bounded poll retries safely.
+            pass
+        time.sleep(DISPATCH_POLL_SECONDS)
+
+
+def start_dispatcher() -> None:
+    global _dispatcher_started
+    with _dispatcher_guard:
+        if _dispatcher_started:
+            return
+        thread = threading.Thread(target=_dispatcher_loop, name="pdp-deployment-coordinator", daemon=True)
+        thread.start()
+        _dispatcher_started = True
+
+
 def register_tools(mcp: Any) -> None:
     from mcp.types import ToolAnnotations
+
+    start_dispatcher()
 
     @mcp.tool(description="Register or refresh a durable PDP One development workstream and its expiring advisory soft locks.", annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, openWorldHint=False, idempotentHint=True))
     async def register_development_workstream(workstream_id: str, branch: str, changed_paths: list[str], surfaces: list[str], commit_sha: str | None = None, pull_request: int | None = None, lock_ttl_minutes: int = 120) -> dict:
