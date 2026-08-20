@@ -365,8 +365,18 @@ for ($attempt = 1; $attempt -le [Math]::Max(1, $RepairAttempts); $attempt++) {
             $state.dns_state = $result.public_dns_state
             $state.confirmation_count = $result.public_confirmation_count
             $state.repair_suppressed_deployment = $false
-            $state.consecutive_mcp_only_failures = [Math]::Max(0, [int]$state.consecutive_mcp_only_failures) + 1
             $state.cooldown_seconds_remaining = Get-PDPOneFunnelRepairCooldownRemaining -State $state
+
+            if (-not $AllowPersistentMcpEscalation) {
+                $state.status = "public_mcp_degraded_observed"
+                $result.persistent_mcp_failure_count = [int]$state.consecutive_mcp_only_failures
+                $result.funnel_repair_cooldown_remaining = [int]$state.cooldown_seconds_remaining
+                Write-PDPOnePublicMcpConnectivityState -State $state
+                Write-Host "Public web/API remain healthy while only MCP is degraded; this observer does not advance the persistent-failure counter." -ForegroundColor Yellow
+                return Complete-PDPOneConnectivityResult -BaseUrl $candidateUrl -Checks $checks -McpState "degraded"
+            }
+
+            $state.consecutive_mcp_only_failures = [Math]::Max(0, [int]$state.consecutive_mcp_only_failures) + 1
             $result.persistent_mcp_failure_count = [int]$state.consecutive_mcp_only_failures
             $result.funnel_repair_cooldown_remaining = [int]$state.cooldown_seconds_remaining
 
@@ -381,7 +391,7 @@ for ($attempt = 1; $attempt -le [Math]::Max(1, $RepairAttempts); $attempt++) {
             }
 
             $threshold = [Math]::Max(2, $McpOnlyFailureThreshold)
-            if (-not $AllowPersistentMcpEscalation -or [int]$state.consecutive_mcp_only_failures -lt $threshold -or [int]$state.cooldown_seconds_remaining -gt 0) {
+            if ([int]$state.consecutive_mcp_only_failures -lt $threshold -or [int]$state.cooldown_seconds_remaining -gt 0) {
                 Write-PDPOnePublicMcpConnectivityState -State $state
                 Write-Host "Public web/API remain healthy while only MCP is degraded; waiting for the bounded persistent-failure threshold/cooldown before Funnel refresh." -ForegroundColor Yellow
                 return Complete-PDPOneConnectivityResult -BaseUrl $candidateUrl -Checks $checks -McpState "degraded"
