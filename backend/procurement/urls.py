@@ -25,6 +25,7 @@ from .views_analysis_runs import (
 )
 from .views_analysis_statistics import analysis_statistics
 from .views_automation import ProcurementAutomationSettingsViewSet
+from .views_browse import CompactBrowseNoticeViewSet, CompactBrowseRecommendedNoticeViewSet
 from .views_case_actions import ProcurementCaseViewSet
 from .views_case_followup import case_follow_up, follow_up_summary, follow_up_users
 from .views_contract_draft import contract_draft_preview, create_contract_draft_from_case
@@ -39,6 +40,8 @@ from .views_review import AIReviewDraftViewSet, analysis_review_summary_view, re
 router = DefaultRouter()
 router.register("notices", ProcurementNoticeViewSet, basename="procurement-notice")
 router.register("recommended-notices", AIRecommendedNoticeViewSet, basename="procurement-recommended-notice")
+router.register("browse-notices", CompactBrowseNoticeViewSet, basename="procurement-browse-notice")
+router.register("browse-recommended-notices", CompactBrowseRecommendedNoticeViewSet, basename="procurement-browse-recommended-notice")
 router.register("tenders", TenderViewSet, basename="procurement-tender")
 router.register("inquiries", InquiryViewSet, basename="procurement-inquiry")
 router.register("cases", ProcurementCaseViewSet, basename="procurement-case")
