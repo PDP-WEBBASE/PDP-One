@@ -29,12 +29,103 @@ SOURCE_FIELDS = [
     "is_active",
 ]
 
+SETAD_TENDER_SEMANTIC_FIELDS = (
+    "operationCityName",
+    "type",
+    "typeName",
+    "documentsDeadlineDate",
+    "proposalDeadlineDate",
+    "evaluationDeadlineDate",
+    "openingDate",
+    "allowedContractor",
+    "allowedConsultation",
+    "allowedCommodity",
+    "allowedServices",
+)
+
+
+def _setad_tender_semantic_projection(raw_payload: dict | None) -> dict:
+    if not isinstance(raw_payload, dict):
+        return {}
+    list_payload = raw_payload.get("list") or {}
+    if not isinstance(list_payload, dict):
+        return {}
+    projection = {}
+    for field in SETAD_TENDER_SEMANTIC_FIELDS:
+        value = list_payload.get(field)
+        if isinstance(value, str):
+            value = normalize_text(value)
+        projection[field] = value
+    return projection
+
+
+def _apply_setad_tender_semantic_hash(
+    connector,
+    payload: dict,
+    *,
+    source_notice: SourceNotice | None,
+) -> None:
+    """Add material SETAD lifecycle semantics without a one-time legacy churn.
+
+    Existing SETAD tender rows already retain the complete public list JSON in
+    ``raw_payload.list``. On the first run after this logic is deployed, compare
+    the new lifecycle projection to that retained legacy evidence. If both the
+    legacy core hash and lifecycle projection are unchanged, keep the existing
+    content hash. This installs the semantic-state marker without manufacturing
+    an UPDATED revision for every historical row.
+
+    Once the marker exists, a real lifecycle-only change receives a deterministic
+    effective hash, so revisions and downstream analysis basis hashes change.
+    The original source list payload remains untouched under ``raw_payload.list``.
+    """
+
+    if connector.key != "setad_tenders":
+        return
+
+    core_hash = payload["content_hash"]
+    projection = _setad_tender_semantic_projection(payload["raw_payload"])
+    semantic_state = {
+        "version": 1,
+        "core_hash": core_hash,
+        "projection": projection,
+    }
+
+    if source_notice is None:
+        effective_hash = stable_hash(
+            {"core_hash": core_hash, "setad_tender_lifecycle": projection}
+        )
+    else:
+        previous_raw = source_notice.raw_payload if isinstance(source_notice.raw_payload, dict) else {}
+        previous_state = previous_raw.get("_semantic_state")
+        if isinstance(previous_state, dict) and previous_state.get("version") == 1:
+            unchanged = (
+                previous_state.get("core_hash") == core_hash
+                and previous_state.get("projection") == projection
+            )
+        else:
+            unchanged = (
+                source_notice.content_hash == core_hash
+                and _setad_tender_semantic_projection(previous_raw) == projection
+            )
+
+        effective_hash = (
+            source_notice.content_hash
+            if unchanged
+            else stable_hash(
+                {"core_hash": core_hash, "setad_tender_lifecycle": projection}
+            )
+        )
+
+    payload["raw_payload"]["_semantic_state"] = semantic_state
+    payload["content_hash"] = effective_hash
+
 
 def merge_parsed_notice(parsed: ParsedNotice, detail: dict | None = None) -> dict:
     detail = detail or {}
     title = normalize_text(detail.get("title")) or parsed.title
     employer = normalize_text(detail.get("employer")) or parsed.employer
     province = normalize_text(detail.get("province")) or parsed.province
+    city = normalize_text(detail.get("city")) or normalize_text(parsed.metadata.get("city"))
     published_raw = normalize_text(detail.get("published_raw")) or parsed.published_raw
     deadline_raw = normalize_text(detail.get("deadline_raw")) or parsed.deadline_raw
     detected_type = detail.get("content_detected_type") or parsed.content_detected_type
@@ -51,6 +142,7 @@ def merge_parsed_notice(parsed: ParsedNotice, detail: dict | None = None) -> dic
         "title": title,
         "employer": employer,
         "province": province,
+        "city": city,
         "published_raw": published_raw,
         "deadline_raw": deadline_raw,
         "summary": parsed.summary,
@@ -177,7 +269,19 @@ def ingest_parsed_notice(
         source_record_id=payload["source_record_id"],
         defaults={**source_values, "first_seen_at": now},
     )
+
+    _apply_setad_tender_semantic_hash(
+        connector,
+        payload,
+        source_notice=None if created else source_notice,
+    )
+    source_values["raw_payload"] = payload["raw_payload"]
+    source_values["content_hash"] = payload["content_hash"]
+
     if created:
+        for field, value in source_values.items():
+            setattr(source_notice, field, value)
+        source_notice.save(update_fields=SOURCE_FIELDS + ["updated_at"])
         changed_fields = list(source_values.keys())
         semantic_changed_fields = changed_fields
         item_status = ExtractionRunItem.Status.NEW
@@ -246,6 +350,8 @@ def ingest_parsed_notice(
     notice.employer_name = payload["employer"]
     notice.notice_number = payload["notice_number"]
     notice.province = payload["province"]
+    if payload["city"]:
+        notice.city = payload["city"]
     notice.published_date = published_date
     notice.submission_deadline = submission_deadline
     notice.date_metadata = {"published": published_meta, "deadline": deadline_meta}
