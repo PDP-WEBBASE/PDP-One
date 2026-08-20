@@ -45,17 +45,25 @@ test("startup task retries immediately on Windows network connection and keeps a
   assert.match(task, /StartWhenAvailable/);
 });
 
-test("background maintenance tasks run non-interactively without changing cadence", async () => {
+test("scheduled PowerShell tasks stay interactive but launch without a console window", async () => {
   const task = await load("../scripts/windows/Register-PDPOneStartupTask.ps1");
+  const runner = await load("../scripts/windows/Run-PDPOneHidden.vbs");
 
-  assert.match(task, /\$backgroundPrincipal\s*=\s*New-ScheduledTaskPrincipal[^\n]+-LogonType S4U[^\n]+-RunLevel Highest/);
-  assert.match(task, /\$interactivePrincipal\s*=\s*New-ScheduledTaskPrincipal[^\n]+-LogonType Interactive[^\n]+-RunLevel Highest/);
-  assert.match(task, /Register-ScheduledTask -TaskName \$StartupTaskName[^\n]+-Principal \$backgroundPrincipal/);
-  assert.match(task, /Register-ScheduledTask -TaskName \$McpWatchdogTaskName[^\n]+-Principal \$backgroundPrincipal/);
-  assert.match(task, /Register-ScheduledTask -TaskName \$DeploymentAgentWatchdogTaskName[^\n]+-Principal \$backgroundPrincipal/);
-  assert.match(task, /Register-ScheduledTask -TaskName \$DiskGuardTaskName[^\n]+-Principal \$backgroundPrincipal/);
-  assert.match(task, /Register-ScheduledTask -TaskName \$OpenWebTaskName[^\n]+-Principal \$interactivePrincipal/);
-  assert.match(task, /schtasks\.exe \/Create[^\n]+\/RU \$env:USERNAME \/NP \/RL HIGHEST/);
+  assert.match(task, /Run-PDPOneHidden\.vbs/);
+  assert.match(task, /New-PDPOneHiddenPowerShellAction/);
+  assert.match(task, /System32\\wscript\.exe/);
+  assert.match(task, /-LogonType Interactive -RunLevel Highest/);
+  assert.doesNotMatch(task, /-LogonType S4U/);
+  assert.match(task, /\$startupAction = New-PDPOneHiddenPowerShellAction/);
+  assert.match(task, /\$openAction = New-PDPOneHiddenPowerShellAction/);
+  assert.match(task, /\$mcpAction = New-PDPOneHiddenPowerShellAction/);
+  assert.match(task, /\$deploymentAgentWatchdogAction = New-PDPOneHiddenPowerShellAction/);
+  assert.match(task, /\$diskGuardAction = New-PDPOneHiddenPowerShellAction/);
+  assert.match(task, /wscript\.exe`\" \/\/B \/\/NoLogo/);
+
+  assert.match(runner, /CreateObject\("WScript\.Shell"\)/);
+  assert.match(runner, /shell\.Run\(command, 0, True\)/);
+  assert.match(runner, /powershell\.exe -NoLogo -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File/);
 
   assert.match(task, /RepetitionInterval \(New-TimeSpan -Minutes 1\)/);
   assert.match(task, /RepetitionInterval \(New-TimeSpan -Minutes 5\)/);
@@ -68,7 +76,7 @@ test("local page polling begins immediately and advisory maintenance is outside 
   const task = await load("../scripts/windows/Register-PDPOneStartupTask.ps1");
 
   assert.doesNotMatch(task, /Start-Sleep -Seconds 75/);
-  assert.match(task, /-File `"\$openScript`" -TimeoutSeconds 300/);
+  assert.match(task, /New-PDPOneHiddenPowerShellAction -ScriptPath \$openScript -ScriptArguments @\("-TimeoutSeconds", "300"\)/);
   assert.match(task, /Begins polling PDP One local health immediately after logon/);
 
   const healthIndex = startup.indexOf("Test-PDPOne.ps1");
