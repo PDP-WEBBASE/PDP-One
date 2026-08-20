@@ -40,9 +40,9 @@ test("Web image contains only the pruned Vinext runtime surface", async () => {
     "worker",
     "vite.config.ts",
   ]) {
-    assert.match(
-      dockerfile,
-      new RegExp(`COPY --from=build /app/${runtimePath.replaceAll(".", "\\\\.")}`),
+    assert.ok(
+      dockerfile.includes(`COPY --from=build /app/${runtimePath}`),
+      `missing required Web runtime path: ${runtimePath}`,
     );
   }
 
