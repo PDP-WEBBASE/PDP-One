@@ -9,6 +9,24 @@ def mojibake(value: str) -> str:
     return value.encode("utf-8").decode("cp1256")
 
 
+def eproc_row(number="۱۱۰۵۰۹۳۹۹۲۰۰۰۰۳۱", deadline="۴ روز و ۸ ساعت") -> str:
+    return f"""
+      <tr>
+        <td>۱</td>
+        <td><a href="javascript:void(0)" onclick="javascript:showPurchaseNeed(7279593,1432,5239285)">{number}</a></td>
+        <td>خدمات مطالعات و طراحی شبکه برق</td>
+        <td>شرکت برق منطقه‌ای</td>
+        <td>اصفهان</td>
+        <td>انتخاب تامین کننده</td>
+        <td>خدمات</td>
+        <td></td>
+        <td>فعالیت‌های حرفه‌ای، علمی و فنی</td>
+        <td>۱۴۰۵/۰۴/۳۱</td>
+        <td>{deadline}</td>
+      </tr>
+    """
+
+
 class SetadEtendParserTests(SimpleTestCase):
     def test_json_parser_repairs_windows_capture_encoding_and_maps_fields(self):
         payload = {
@@ -62,24 +80,10 @@ class SetadEtendParserTests(SimpleTestCase):
 
 class SetadEprocParserTests(SimpleTestCase):
     def test_html_parser_extracts_public_need_and_detail_identifiers(self):
-        html = """
+        html = f"""
         <html><body>
           <span class="pagelinks"><a href="/eproc/needs.do?pager=true&amp;d-146909-p=2">2</a></span>
-          <table class="grid" id="aList"><tbody>
-            <tr>
-              <td>۱</td>
-              <td><a href="javascript:void(0)" onclick="javascript:showPurchaseNeed(7279593,1432,5239285)">۱۱۰۵۰۹۳۹۹۲۰۰۰۰۳۱</a></td>
-              <td>خدمات مطالعات و طراحی شبکه برق</td>
-              <td>شرکت برق منطقه‌ای</td>
-              <td>اصفهان</td>
-              <td>انتخاب تامین کننده</td>
-              <td>خدمات</td>
-              <td></td>
-              <td>فعالیت‌های حرفه‌ای، علمی و فنی</td>
-              <td>۱۴۰۵/۰۴/۳۱</td>
-              <td>۴ روز و ۸ ساعت</td>
-            </tr>
-          </tbody></table>
+          <table class="grid" id="aList"><tbody>{eproc_row()}</tbody></table>
         </body></html>
         """
         parser = SetadEprocParser("https://setadiran.ir", "inquiry")
@@ -97,7 +101,109 @@ class SetadEprocParserTests(SimpleTestCase):
         self.assertIn("domainType=1432", notice.detail_url)
         self.assertIn("needId=5239285", notice.detail_url)
         self.assertEqual(notice.metadata["setad_channel"], "eproc")
+        self.assertEqual(page.reported_current_page, 1)
+        self.assertIsNone(page.reported_total_pages)
+        self.assertFalse(page.end_of_results)
         self.assertEqual(
             page.next_page_urls,
             ["https://eproc.setadiran.ir/eproc/needs.do?pager=true&d-146909-p=2"],
         )
+
+    def test_dynamic_displaytag_parameter_reports_actual_current_page(self):
+        html = f"""
+        <html><body>
+          <span class="pagelinks">
+            <a href="/eproc/needs.do?pager=true&amp;d-146909-p=4">4</a>
+            <a href="/eproc/needs.do?pager=true&amp;d-146909-p=6">6</a>
+          </span>
+          <table class="grid" id="aList"><tbody>{eproc_row()}</tbody></table>
+        </body></html>
+        """
+        parser = SetadEprocParser("https://setadiran.ir", "inquiry")
+        page = parser.parse_list(
+            html,
+            "https://eproc.setadiran.ir/eproc/needs.do?pager=true&d-146909-p=5",
+        )
+
+        self.assertEqual(page.reported_current_page, 5)
+        self.assertIsNone(page.reported_total_pages)
+        self.assertFalse(page.end_of_results)
+        self.assertEqual(page.diagnostics["visible_max_page"], 6)
+        self.assertTrue(page.diagnostics["dynamic_page_parameter"])
+
+    def test_sliding_visible_window_is_not_treated_as_total_pages(self):
+        html = f"""
+        <html><body>
+          <span class="pagelinks">
+            <a href="/eproc/needs.do?pager=true&amp;d-146909-p=8">8</a>
+            <a href="/eproc/needs.do?pager=true&amp;d-146909-p=9">9</a>
+            <a href="/eproc/needs.do?pager=true&amp;d-146909-p=11">11</a>
+            <a href="/eproc/needs.do?pager=true&amp;d-146909-p=12">12</a>
+          </span>
+          <table class="grid" id="aList"><tbody>{eproc_row()}</tbody></table>
+        </body></html>
+        """
+        parser = SetadEprocParser("https://setadiran.ir", "inquiry")
+        page = parser.parse_list(
+            html,
+            "https://eproc.setadiran.ir/eproc/needs.do?pager=true&d-146909-p=10",
+        )
+
+        self.assertEqual(page.reported_current_page, 10)
+        self.assertFalse(page.end_of_results)
+        self.assertIsNone(page.reported_total_pages)
+        self.assertEqual(page.diagnostics["future_page_numbers"], [11, 12])
+
+    def test_last_page_without_future_link_is_reported_complete(self):
+        html = f"""
+        <html><body>
+          <span class="pagelinks">
+            <a href="/eproc/needs.do?pager=true&amp;d-146909-p=18">18</a>
+            <a href="/eproc/needs.do?pager=true&amp;d-146909-p=19">19</a>
+          </span>
+          <table class="grid" id="aList"><tbody>{eproc_row()}</tbody></table>
+        </body></html>
+        """
+        parser = SetadEprocParser("https://setadiran.ir", "inquiry")
+        page = parser.parse_list(
+            html,
+            "https://eproc.setadiran.ir/eproc/needs.do?pager=true&d-146909-p=20",
+        )
+
+        self.assertEqual(page.reported_current_page, 20)
+        self.assertEqual(page.reported_total_pages, 20)
+        self.assertTrue(page.end_of_results)
+        self.assertEqual(page.diagnostics["future_page_numbers"], [])
+
+    def test_short_single_page_list_is_complete_without_pagination_parameter(self):
+        html = f"""
+        <html><body>
+          <table class="grid" id="aList"><tbody>{eproc_row()}</tbody></table>
+        </body></html>
+        """
+        parser = SetadEprocParser("https://setadiran.ir", "inquiry")
+        page = parser.parse_list(html, "https://eproc.setadiran.ir/eproc/needs.do")
+
+        self.assertEqual(page.reported_current_page, 1)
+        self.assertEqual(page.reported_total_pages, 1)
+        self.assertTrue(page.end_of_results)
+
+    def test_full_size_first_page_without_pagination_stays_unverified(self):
+        rows = "".join(
+            eproc_row(number=f"۱۱۰۵۰۹۳۹۹۲۰۰۰{index:04d}")
+            for index in range(SETAD_EPROC_PAGE_SIZE_FOR_TEST)
+        )
+        html = f"""
+        <html><body>
+          <table class="grid" id="aList"><tbody>{rows}</tbody></table>
+        </body></html>
+        """
+        parser = SetadEprocParser("https://setadiran.ir", "inquiry")
+        page = parser.parse_list(html, "https://eproc.setadiran.ir/eproc/needs.do")
+
+        self.assertEqual(page.reported_current_page, 1)
+        self.assertIsNone(page.reported_total_pages)
+        self.assertIsNone(page.end_of_results)
+
+
+SETAD_EPROC_PAGE_SIZE_FOR_TEST = 30
