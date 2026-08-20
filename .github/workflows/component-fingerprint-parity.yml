@@ -1,0 +1,44 @@
+name: Component fingerprint parity
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/component-fingerprint-parity.yml"
+      - ".github/workflows/build-images.yml"
+      - ".dockerignore"
+      - "infra/docker/pdp-images-bake.hcl"
+      - "release/component-contexts.json"
+      - "release/component-image-mode.json"
+      - "scripts/ci/component-fingerprints.mjs"
+      - "scripts/ci/Test-ComponentFingerprintParity.ps1"
+      - "scripts/windows/PDPOne.ReleaseManifest.ps1"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pdp-one-component-parity-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  windows-parity:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: windows-latest
+    steps:
+      - name: Check out exact PR head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Compare checkout, deployment zipball, and Windows PowerShell 5.1 fingerprints
+        shell: powershell
+        env:
+          PDP_PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: .\scripts\ci\Test-ComponentFingerprintParity.ps1
