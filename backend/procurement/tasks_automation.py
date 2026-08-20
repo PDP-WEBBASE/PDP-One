@@ -82,10 +82,19 @@ def _recover_stale_scheduled_extractions(*, connector_ids: list, now) -> tuple[l
     the active ExtractionRun rows are selected FOR UPDATE.
     """
 
+    active_run_ids = (
+        ExtractionRun.objects.filter(
+            status__in=ACTIVE_EXTRACTION_STATUSES,
+            connectors__in=connector_ids,
+        )
+        .values("pk")
+        .distinct()
+    )
+    # Keep DISTINCT inside the ID subquery. PostgreSQL does not allow DISTINCT on
+    # the outer SELECT FOR UPDATE query itself.
     active_runs = list(
         ExtractionRun.objects.select_for_update()
-        .filter(status__in=ACTIVE_EXTRACTION_STATUSES, connectors__in=connector_ids)
-        .distinct()
+        .filter(pk__in=active_run_ids)
         .order_by("created_at")
     )
     recovered_ids: list[str] = []
