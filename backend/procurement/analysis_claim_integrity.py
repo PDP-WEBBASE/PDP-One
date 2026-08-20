@@ -11,14 +11,28 @@ from core.models import AuditEvent
 
 from . import analysis_run_adaptive as adaptive
 from . import analysis_run_service as service
-from .models_analysis_runs import ProcurementAnalysisImport, ProcurementAnalysisRunItem
+from .analysis_utils import get_active_context
+from .models_analysis_runs import ProcurementAnalysisImport, ProcurementAnalysisRun, ProcurementAnalysisRunItem
 
 
 CLAIM_INTEGRITY_KEY = "_claim_integrity"
 CLAIM_BASIS_SCHEMA = "compact-basis-v1"
+LIVE_CONTEXT_BINDING_MODE = "latest-active-on-work-cycle"
 
+_original_admit_newest_pending_items = adaptive.admit_newest_pending_items
 _original_claim_newest_run_items = adaptive.claim_newest_run_items
+_original_renew_worker_claim = adaptive.renew_worker_claim
 _original_import_result_records = service.import_result_records
+
+_CONTEXT_RETRY_STATUSES = (
+    ProcurementAnalysisRunItem.Status.CLAIMED,
+    ProcurementAnalysisRunItem.Status.SCREENED,
+    ProcurementAnalysisRunItem.Status.WAITING_DEEP_ANALYSIS,
+)
+_CONTEXT_REBIND_STATUSES = (
+    ProcurementAnalysisRunItem.Status.PENDING,
+    ProcurementAnalysisRunItem.Status.RETRY,
+)
 
 
 def analysis_claim_basis_hash(notice) -> str:
@@ -34,6 +48,123 @@ def analysis_claim_basis_hash(notice) -> str:
 
 
 @transaction.atomic
+def sync_run_to_active_context(run_id: str, *, actor: str = "analysis-live-context") -> dict:
+    """Bind open work to the latest active Analysis Context without rewriting history.
+
+    Completed items and drafts remain attached to the immutable Context that was
+    actually used. Open work follows the latest active Context. Any in-flight
+    package from a retired Context is invalidated and returned to RETRY so stale
+    results cannot be silently imported after a Context switch.
+    """
+
+    run = (
+        ProcurementAnalysisRun.objects.select_for_update()
+        .select_related("context_snapshot")
+        .get(pk=run_id)
+    )
+    active_context = get_active_context()
+    if active_context is None:
+        raise ValueError("هیچ Context فعال تحلیل تعریف نشده است.")
+
+    previous_context = run.context_snapshot
+    if previous_context_id := getattr(run, "context_snapshot_id", None):
+        if previous_context_id == active_context.id:
+            return {
+                "changed": False,
+                "run_id": str(run.id),
+                "context_id": str(active_context.id),
+                "context_version": active_context.version,
+                "context_hash": active_context.content_hash,
+                "invalidated_in_flight": 0,
+                "rebound_open_items": 0,
+                "binding_mode": LIVE_CONTEXT_BINDING_MODE,
+            }
+
+    now = timezone.now()
+    stale_in_flight = run.items.filter(status__in=_CONTEXT_RETRY_STATUSES)
+    invalidated_in_flight = stale_in_flight.count()
+    if invalidated_in_flight:
+        stale_in_flight.update(
+            status=ProcurementAnalysisRunItem.Status.RETRY,
+            context_hash=active_context.content_hash,
+            claim_token=None,
+            claimed_by="",
+            claimed_at=None,
+            claim_expires_at=None,
+            last_error="analysis_context_changed_after_claim",
+            screening={},
+            updated_at=now,
+        )
+
+    open_items = run.items.filter(status__in=_CONTEXT_REBIND_STATUSES).exclude(
+        context_hash=active_context.content_hash
+    )
+    rebound_open_items = open_items.count()
+    if rebound_open_items:
+        open_items.update(context_hash=active_context.content_hash, updated_at=now)
+
+    metadata = dict(run.metadata or {})
+    history = list(metadata.get("context_binding_history") or [])
+    history.append(
+        {
+            "from_context_id": str(previous_context.id),
+            "from_version": previous_context.version,
+            "from_hash": previous_context.content_hash,
+            "to_context_id": str(active_context.id),
+            "to_version": active_context.version,
+            "to_hash": active_context.content_hash,
+            "switched_at": now.isoformat(),
+            "invalidated_in_flight": invalidated_in_flight,
+            "rebound_open_items": rebound_open_items,
+        }
+    )
+    run.context_snapshot = active_context
+    run.metadata = {
+        **metadata,
+        "context_binding_mode": LIVE_CONTEXT_BINDING_MODE,
+        "active_context_version": active_context.version,
+        "active_context_hash": active_context.content_hash,
+        "context_binding_history": history[-20:],
+    }
+    run.heartbeat_at = now
+    run.save(update_fields=["context_snapshot", "metadata", "heartbeat_at", "updated_at"])
+
+    AuditEvent.objects.create(
+        actor=actor,
+        action="procurement.analysis_run.bind_latest_context",
+        target_type="procurement_analysis_run",
+        target_id=str(run.id),
+        payload={
+            "from_version": previous_context.version,
+            "to_version": active_context.version,
+            "from_hash": previous_context.content_hash,
+            "to_hash": active_context.content_hash,
+            "invalidated_in_flight": invalidated_in_flight,
+            "rebound_open_items": rebound_open_items,
+            "binding_mode": LIVE_CONTEXT_BINDING_MODE,
+            "completed_history_preserved": True,
+            "draft_only": True,
+        },
+    )
+    return {
+        "changed": True,
+        "run_id": str(run.id),
+        "context_id": str(active_context.id),
+        "context_version": active_context.version,
+        "context_hash": active_context.content_hash,
+        "invalidated_in_flight": invalidated_in_flight,
+        "rebound_open_items": rebound_open_items,
+        "binding_mode": LIVE_CONTEXT_BINDING_MODE,
+    }
+
+
+@transaction.atomic
+def admit_newest_pending_items(run_id: str, *, actor: str = "adaptive-analysis") -> dict:
+    sync_run_to_active_context(run_id, actor=actor)
+    return _original_admit_newest_pending_items(run_id, actor=actor)
+
+
+@transaction.atomic
 def claim_newest_run_items(
     run_id: str,
     *,
@@ -41,13 +172,9 @@ def claim_newest_run_items(
     limit: int = adaptive.SAFE_CLAIM_LIMIT,
     lease_seconds: int = 3600,
 ):
-    """Attach an analysis-visible fingerprint to every newly claimed package.
+    """Claim work only after rebinding the run to the latest active Context."""
 
-    The legacy Notice content hash remains untouched for draft/history compatibility.
-    This extra fingerprint exists only to distinguish real semantic input changes
-    from source/normalization churn that is invisible to the analysis worker.
-    """
-
+    sync_run_to_active_context(run_id, actor=worker_id or "analysis-claim")
     items = _original_claim_newest_run_items(
         run_id,
         worker_id=worker_id,
@@ -77,6 +204,23 @@ def claim_newest_run_items(
 
 
 @transaction.atomic
+def renew_worker_claim(
+    run_id: str,
+    *,
+    worker_id: str,
+    lease_seconds: int = 3600,
+    actor: str = "adaptive-analysis",
+) -> dict:
+    sync_run_to_active_context(run_id, actor=actor)
+    return _original_renew_worker_claim(
+        run_id,
+        worker_id=worker_id,
+        lease_seconds=lease_seconds,
+        actor=actor,
+    )
+
+
+@transaction.atomic
 def import_result_records(
     *,
     run_id: str,
@@ -86,14 +230,17 @@ def import_result_records(
     result_hash: str = "",
     dry_run: bool = False,
 ):
-    """Preserve valid claims across non-semantic hash churn without weakening integrity.
+    """Reject stale Context work and preserve semantic claim integrity.
 
-    If the compact basis actually changed after Claim, the item is returned to
-    RETRY and the result is counted as invalid_hash. If the compact basis is
-    unchanged but the legacy content hash changed for an analysis-invisible reason,
-    rebase the stored/echoed legacy hash inside the same locked transaction and let
-    the original importer perform all normal validation and draft creation.
+    The run is rebound to the latest active Context before any result validation.
+    This invalidates claims issued under a retired Context, so their old tokens or
+    Context hashes cannot be accepted after a new live Context is published.
+
+    For current-Context claims, preserve valid claims across non-semantic hash
+    churn without weakening the existing Notice/content/claim integrity contract.
     """
+
+    sync_run_to_active_context(run_id, actor=actor)
 
     copied_results = [deepcopy(result) for result in results]
     normalized_results = [service._normalize_result(result) for result in copied_results]
@@ -225,7 +372,9 @@ def import_result_records(
 
 
 def install() -> None:
+    adaptive.admit_newest_pending_items = admit_newest_pending_items
     adaptive.claim_newest_run_items = claim_newest_run_items
+    adaptive.renew_worker_claim = renew_worker_claim
     service.import_result_records = import_result_records
 
 
