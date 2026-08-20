@@ -29,12 +29,12 @@ test("coordinator tools are registered without weakening stable CI identities", 
   assert.match(ci, /^    name: Windows PowerShell 5\.1 compatibility$/m);
 });
 
-test("the persistent Windows Agent promotes the next signed request without an active chat", async () => {
-  const agent = await load("../scripts/windows/Deployment-Agent.Standard.ps1");
-  assert.match(agent, /function Move-NextCoordinatedRequest/);
-  assert.match(agent, /queue\\coordinator\\pending/);
-  assert.match(agent, /Sort-Object Name/);
-  assert.match(agent, /Move-NextCoordinatedRequest \| Out-Null/);
-  assert.match(agent, /Test-AgentSignature/);
-  assert.doesNotMatch(agent, /Invoke-Expression/);
+test("the persistent MCP dispatcher promotes signed requests without an active chat", async () => {
+  const coordinator = await load("../services/pdp_mcp/deployment_coordinator.py");
+  assert.match(coordinator, /def _dispatcher_loop\(\)/);
+  assert.match(coordinator, /threading\.Thread/);
+  assert.match(coordinator, /daemon=True/);
+  assert.match(coordinator, /start_dispatcher\(\)/);
+  assert.match(coordinator, /_dispatch_next\(\)/);
+  assert.doesNotMatch(coordinator, /subprocess|os\.system|shell\s*=/);
 });
