@@ -47,6 +47,7 @@ const DIRECT_PATH = `${API_PREFIX}direct-opportunities/`;
 const COMPACT_NOTICE_PATH = `${API_PREFIX}ui/notices/`;
 const META_EVENT = "pdp-procurement-pagination-meta";
 const DATA_EVENT = "pdp-procurement-compact-notice-data";
+const DIRECT_DATA_EVENT = "pdp-procurement-direct-page-data";
 const HOST_ID = "pdp-procurement-pagination-host";
 const CACHE_TTL_MS = 5 * 60 * 1000;
 const MAX_CACHE_ENTRIES = 60;
@@ -182,9 +183,7 @@ function normalizeCompactPayload(payload: PaginatedPayload, state: ProcurementSt
   const results = Array.isArray(payload.results) ? payload.results.map((item) => {
     const normalizedItem = { ...item } as Record<string, unknown>;
     const publishedDate = String(normalizedItem.published_date || "").trim();
-    if (workflow === "recent" && publishedDate) {
-      normalizedItem.first_seen_at = `${publishedDate}T12:00:00+03:30`;
-    }
+    if (workflow === "recent" && publishedDate) normalizedItem.first_seen_at = `${publishedDate}T12:00:00+03:30`;
     if (workflow === "recommended") normalizedItem.is_recommended = true;
     return normalizedItem;
   }) : [];
@@ -196,15 +195,7 @@ function dispatchNoticeEvents(payload: PaginatedPayload, meta: PaginationMeta) {
   window.dispatchEvent(new CustomEvent<PaginationMeta>(META_EVENT, { detail: meta }));
 }
 
-async function boundedJsonFetch(
-  nativeFetch: typeof window.fetch,
-  url: string,
-  init: RequestInit | undefined,
-  cacheKey: string | null,
-  meta: PaginationMeta | undefined,
-  state: ProcurementStableViewState,
-  dispatchData = false,
-) {
+async function boundedJsonFetch(nativeFetch: typeof window.fetch, url: string, init: RequestInit | undefined, cacheKey: string | null, meta: PaginationMeta | undefined, state: ProcurementStableViewState, dispatchData = false) {
   if (cacheKey) {
     const cached = listCache().get(cacheKey);
     if (cached && Date.now() - cached.storedAt <= CACHE_TTL_MS) {
@@ -216,7 +207,6 @@ async function boundedJsonFetch(
     }
     if (cached) listCache().delete(cacheKey);
   }
-
   const response = await nativeFetch(url, init);
   if (!response.ok || !(response.headers.get("content-type") || "").includes("application/json")) return response;
   try {
@@ -248,16 +238,13 @@ function installPaginationFetchGuard() {
     const method = requestMethod(input, init);
     const original = parsedUrl(requestUrl(input));
     if (!original || original.origin !== window.location.origin) return nativeFetch(input, init);
-
     if (method !== "GET") {
       if (original.pathname.startsWith(API_PREFIX)) listCache().clear();
       return nativeFetch(input, init);
     }
-
     const isNotice = original.pathname === NOTICE_PATH || original.pathname === RECOMMENDED_PATH;
     const isDirect = original.pathname === DIRECT_PATH;
     if (!isNotice && !isDirect) return nativeFetch(input, init);
-
     const state = getProcurementStableViewState();
     const pageState = currentPageState();
     const filters = currentFilters();
@@ -269,28 +256,11 @@ function installPaginationFetchGuard() {
       params.set("workflow", workflowCode(state.workflow));
       params.set("page", String(pageState.page));
       params.set("page_size", String(pageState.pageSize));
-      // recent_days/publication_sort/actionable remain server-owned compatibility concepts.
-      // The compact endpoint applies the same three-day publication_sort and actionable semantics.
       addFilters(params, filters);
       const contextKey = JSON.stringify([state.top, state.workflow, ...Array.from(params.entries())]);
-      const meta: PaginationMeta = {
-        count: 0,
-        page: pageState.page,
-        pageSize: pageState.pageSize,
-        contextKey,
-        top: state.top,
-        workflow: state.workflow,
-      };
+      const meta: PaginationMeta = { count: 0, page: pageState.page, pageSize: pageState.pageSize, contextKey, top: state.top, workflow: state.workflow };
       const cacheKey = `notice:${contextKey}`;
-      const response = await boundedJsonFetch(
-        nativeFetch,
-        `${COMPACT_NOTICE_PATH}?${params.toString()}`,
-        init,
-        cacheKey,
-        meta,
-        state,
-        false,
-      );
+      const response = await boundedJsonFetch(nativeFetch, `${COMPACT_NOTICE_PATH}?${params.toString()}`, init, cacheKey, meta, state, false);
       if (!response.ok || !(response.headers.get("content-type") || "").includes("application/json")) return response;
       try {
         const raw = await response.clone().json() as PaginatedPayload;
@@ -329,15 +299,16 @@ function installPaginationFetchGuard() {
         const payload = await response.clone().json() as PaginatedPayload;
         const correctedMeta = { ...meta, count: Number(payload.count || 0) };
         remember(cacheKey, { payload, storedAt: Date.now(), meta: correctedMeta });
-        if (stateStillMatches(state)) window.dispatchEvent(new CustomEvent<PaginationMeta>(META_EVENT, { detail: correctedMeta }));
+        if (stateStillMatches(state)) {
+          window.dispatchEvent(new CustomEvent(DIRECT_DATA_EVENT, { detail: payload }));
+          window.dispatchEvent(new CustomEvent<PaginationMeta>(META_EVENT, { detail: correctedMeta }));
+        }
       } catch {
         // Preserve the real response.
       }
       return response;
     }
 
-    // Dashboard/management bootstrap reads stay bounded to one page so V13 never
-    // follows thousands of records in the background.
     const nextUrl = new URL(original.toString());
     nextUrl.searchParams.set("page", "1");
     nextUrl.searchParams.set("page_size", "50");
@@ -356,9 +327,7 @@ function findListSection() {
   const state = getProcurementStableViewState();
   if (state.top !== "tenders" && state.top !== "inquiries" && state.top !== "direct") return null;
   const expectedLabel = stableWorkflowLabel(state);
-  const button = Array.from(document.querySelectorAll<HTMLButtonElement>("button")).find((candidate) =>
-    !candidate.closest("nav") && normalize(candidate.textContent) === expectedLabel,
-  );
+  const button = Array.from(document.querySelectorAll<HTMLButtonElement>("button")).find((candidate) => !candidate.closest("nav") && normalize(candidate.textContent) === expectedLabel);
   return button?.closest("section") || null;
 }
 
@@ -392,22 +361,7 @@ function PaginationBar({ meta }: { meta: PaginationMeta }) {
   const tokens = useMemo(() => pageTokens(current, totalPages), [current, totalPages]);
   const buttonStyle = { minWidth:34,minHeight:32,border:"1px solid #cbd5e1",borderRadius:8,background:"white",color:"#334155",font:"inherit",cursor:"pointer" } as const;
   const activeStyle = { ...buttonStyle,background:"#155e75",color:"white",borderColor:"#155e75",fontWeight:700 } as const;
-  return <div dir="rtl" style={{marginTop:12,padding:"10px 12px",border:"1px solid #dbe3ec",borderRadius:12,background:"#f8fafc",display:"flex",alignItems:"center",justifyContent:"space-between",gap:10,flexWrap:"wrap"}}>
-    <div style={{display:"flex",alignItems:"center",gap:7,flexWrap:"wrap"}}>
-      <button type="button" disabled={current <= 1} style={{...buttonStyle,opacity:current <= 1 ? .45 : 1}} onClick={() => { setPage(current - 1); emitRefresh(); }}>قبلی</button>
-      {tokens.map((token,index) => token === "…" ? <span key={`ellipsis-${index}`}>…</span> : <button key={token} type="button" style={token === current ? activeStyle : buttonStyle} onClick={() => { setPage(token); emitRefresh(); }}>{fa.format(token)}</button>)}
-      <button type="button" disabled={current >= totalPages} style={{...buttonStyle,opacity:current >= totalPages ? .45 : 1}} onClick={() => { setPage(current + 1); emitRefresh(); }}>بعدی</button>
-    </div>
-    <div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap",fontSize:12,color:"#475569"}}>
-      <b>صفحه {fa.format(current)} از {fa.format(totalPages)}</b>
-      <span>مجموع {fa.format(meta.count)} رکورد</span>
-      <label style={{display:"flex",alignItems:"center",gap:5}}>نمایش در صفحه
-        <select value={meta.pageSize} onChange={(event) => { setPageSize(Number(event.target.value) as PageSize); emitRefresh(); }}>
-          <option value={30}>۳۰</option><option value={50}>۵۰</option><option value={100}>۱۰۰</option>
-        </select>
-      </label>
-    </div>
-  </div>;
+  return <div dir="rtl" style={{marginTop:12,padding:"10px 12px",border:"1px solid #dbe3ec",borderRadius:12,background:"#f8fafc",display:"flex",alignItems:"center",justifyContent:"space-between",gap:10,flexWrap:"wrap"}}><div style={{display:"flex",alignItems:"center",gap:7,flexWrap:"wrap"}}><button type="button" disabled={current <= 1} style={{...buttonStyle,opacity:current <= 1 ? .45 : 1}} onClick={() => { setPage(current - 1); emitRefresh(); }}>قبلی</button>{tokens.map((token,index) => token === "…" ? <span key={`ellipsis-${index}`}>…</span> : <button key={token} type="button" style={token === current ? activeStyle : buttonStyle} onClick={() => { setPage(token); emitRefresh(); }}>{fa.format(token)}</button>)}<button type="button" disabled={current >= totalPages} style={{...buttonStyle,opacity:current >= totalPages ? .45 : 1}} onClick={() => { setPage(current + 1); emitRefresh(); }}>بعدی</button></div><div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap",fontSize:12,color:"#475569"}}><b>صفحه {fa.format(current)} از {fa.format(totalPages)}</b><span>مجموع {fa.format(meta.count)} رکورد</span><label style={{display:"flex",alignItems:"center",gap:5}}>نمایش در صفحه<select value={meta.pageSize} onChange={(event) => { setPageSize(Number(event.target.value) as PageSize); emitRefresh(); }}><option value={30}>۳۰</option><option value={50}>۵۰</option><option value={100}>۱۰۰</option></select></label></div></div>;
 }
 
 export default function ProcurementPaginationStableEnhancement() {
@@ -446,7 +400,6 @@ export default function ProcurementPaginationStableEnhancement() {
       window.clearTimeout(filterTimer);
       filterTimer = window.setTimeout(() => { setPage(1); setMeta(null); emitRefresh(); }, field instanceof HTMLInputElement ? 250 : 0);
     };
-
     window.addEventListener(PROCUREMENT_STABLE_VIEW_STATE_EVENT, onState);
     window.addEventListener(META_EVENT, onMeta);
     document.addEventListener("input", onFieldChange, true);
@@ -461,6 +414,5 @@ export default function ProcurementPaginationStableEnhancement() {
       window.cancelAnimationFrame(frame);
     };
   }, []);
-
   return host && meta ? createPortal(<PaginationBar meta={meta} />, host) : null;
 }
