@@ -179,8 +179,13 @@ test("PDP One caps cache, rotates logs, retains active, previous, and in-flight 
 
   assert.match(guard, /BuildCacheBudgetGB = 2/);
   assert.match(guard, /--keep-storage/);
-  assert.match(guard, /active_previous_and_inflight_commit/);
-  assert.match(guard, /Get-PDPOneInFlightCommit/);
+  assert.match(guard, /active_previous_and_inflight_release_manifests/);
+  assert.match(guard, /Get-PDPOneManifestImageReferences/);
+  assert.match(guard, /Read-PDPOneDeploymentOperation/);
+  assert.match(guard, /active_release_manifest/);
+  assert.match(guard, /previous_release_manifest/);
+  assert.match(guard, /content-\[0-9a-f\]\{64\}/);
+  assert.match(guard, /Add-PDPOneCommitImageReferences/);
   assert.doesNotMatch(guard, /image", "prune", "--all"/);
   assert.doesNotMatch(guard, /volume\s+prune/i);
   assert.match(compose, /driver: local/);
