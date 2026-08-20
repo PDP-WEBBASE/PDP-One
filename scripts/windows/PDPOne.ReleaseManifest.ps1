@@ -246,7 +246,7 @@ function Write-PDPOneReleaseManifest {
         [Parameter(Mandatory = $true)][ValidateSet("legacy-exact-sha", "content-addressed-v1")][string]$ImageMode,
         [Parameter(Mandatory = $true)][System.Collections.IDictionary]$Images,
         [Parameter(Mandatory = $true)][System.Collections.IDictionary]$Fingerprints,
-        [Parameter(Mandatory = $true)][string[]]$ChangedServices,
+        [Parameter(Mandatory = $true)][AllowEmptyCollection()][string[]]$ChangedServices,
         [Parameter(Mandatory = $true)][string]$HealthProfile
     )
     $manifestRoot = Join-Path $AgentRoot "state\release-manifests"

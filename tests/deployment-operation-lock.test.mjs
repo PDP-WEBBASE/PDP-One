@@ -26,8 +26,13 @@ test("managed deployment holds one shared operation lock through post-deploy cle
 test("disk guard protects active, previous, and in-flight image generations", async () => {
   const guard = await load("../scripts/windows/Invoke-PDPOneDiskGuard.ps1");
 
-  assert.match(guard, /Get-PDPOneInFlightCommit/);
-  assert.match(guard, /active_previous_and_inflight_commit/);
+  assert.match(guard, /Read-PDPOneDeploymentOperation/);
+  assert.match(guard, /active_previous_and_inflight_release_manifests/);
+  assert.match(guard, /Get-PDPOneManifestImageReferences/);
+  assert.match(guard, /release-manifests/);
+  assert.match(guard, /reports\\/);
+  assert.match(guard, /active_images/);
+  assert.match(guard, /Add-PDPOneCommitImageReferences/);
   assert.match(guard, /cleanup_skipped_due_to_deployment/);
   assert.match(guard, /Mode -in @\("startup", "scheduled", "emergency"\)/);
   assert.match(guard, /Rancher VHD compaction is disabled while a deployment is in progress/);

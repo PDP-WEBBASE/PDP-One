@@ -19,6 +19,7 @@ $ProgressPreference = "SilentlyContinue"
 Set-StrictMode -Version Latest
 . (Join-Path $PSScriptRoot "PDPOne.Common.ps1")
 . (Join-Path $PSScriptRoot "PDPOne.OperationLock.ps1")
+. (Join-Path $PSScriptRoot "PDPOne.ReleaseManifest.ps1")
 
 $mutex = New-Object Threading.Mutex($false, "Global\PDP-One-Disk-Guard")
 if (-not $mutex.WaitOne(0)) { exit 0 }
@@ -158,19 +159,103 @@ function Add-PDPOneCommitImageReferences([hashtable]$Keep, [string]$Commit) {
     }
 }
 
+function Add-PDPOneImageReference([hashtable]$Keep, [string]$Reference) {
+    if ([string]::IsNullOrWhiteSpace($Reference)) { return $false }
+    $normalized = $Reference.Trim().ToLowerInvariant()
+    if ($normalized -notmatch '^ghcr\.io/pdp-webbase/pdp-one-(backend|mcp|web):(content-[0-9a-f]{64}|[0-9a-f]{40})$') { return $false }
+    $Keep[$normalized] = $true
+    return $true
+}
+
+function Add-PDPOneImageMapReferences([hashtable]$Keep, $Images) {
+    if ($null -eq $Images) { return $false }
+    $added = $false
+    foreach ($service in @("backend", "mcp", "web")) {
+        $property = $Images.PSObject.Properties[$service]
+        if ($null -ne $property -and (Add-PDPOneImageReference -Keep $Keep -Reference ([string]$property.Value))) {
+            $added = $true
+        }
+    }
+    return $added
+}
+
+function Add-PDPOneManifestImageReferences([hashtable]$Keep, [string]$ManifestPath) {
+    if ([string]::IsNullOrWhiteSpace($ManifestPath)) { return $false }
+    $references = @(Get-PDPOneManifestImageReferences -ManifestPath $ManifestPath)
+    if ($references.Count -eq 0) { return $false }
+    foreach ($reference in $references) {
+        [void](Add-PDPOneImageReference -Keep $Keep -Reference ([string]$reference))
+    }
+    return $true
+}
+
 function Get-PDPOneRetainedImageReferences {
     $keep = @{}
     $statePath = Join-Path $AgentRoot "state\last-deployment.json"
     if (Test-Path -LiteralPath $statePath) {
         try {
             $state = Get-Content -LiteralPath $statePath -Raw -Encoding UTF8 | ConvertFrom-Json
-            Add-PDPOneCommitImageReferences -Keep $keep -Commit ([string]$state.approved_commit)
-            Add-PDPOneCommitImageReferences -Keep $keep -Commit ([string]$state.previous_commit)
+
+            $activeManifest = $state.PSObject.Properties["active_release_manifest"]
+            $activeManifestProtected = $false
+            if ($null -ne $activeManifest) {
+                $activeManifestProtected = Add-PDPOneManifestImageReferences -Keep $keep -ManifestPath ([string]$activeManifest.Value)
+            }
+            $activeImages = $state.PSObject.Properties["active_images"]
+            $activeImagesProtected = $false
+            if ($null -ne $activeImages) {
+                $activeImagesProtected = Add-PDPOneImageMapReferences -Keep $keep -Images $activeImages.Value
+            }
+            if (-not $activeManifestProtected -and -not $activeImagesProtected) {
+                $approved = $state.PSObject.Properties["approved_commit"]
+                if ($null -ne $approved) { Add-PDPOneCommitImageReferences -Keep $keep -Commit ([string]$approved.Value) }
+            }
+
+            $previousManifest = $state.PSObject.Properties["previous_release_manifest"]
+            $previousManifestProtected = $false
+            if ($null -ne $previousManifest) {
+                $previousManifestProtected = Add-PDPOneManifestImageReferences -Keep $keep -ManifestPath ([string]$previousManifest.Value)
+            }
+            $previousImages = $state.PSObject.Properties["previous_images"]
+            $previousImagesProtected = $false
+            if ($null -ne $previousImages) {
+                $previousImagesProtected = Add-PDPOneImageMapReferences -Keep $keep -Images $previousImages.Value
+            }
+            if (-not $previousManifestProtected -and -not $previousImagesProtected) {
+                $previous = $state.PSObject.Properties["previous_commit"]
+                if ($null -ne $previous) { Add-PDPOneCommitImageReferences -Keep $keep -Commit ([string]$previous.Value) }
+            }
         } catch { }
     }
 
-    $inFlightCommit = Get-PDPOneInFlightCommit -AgentRoot $AgentRoot
-    Add-PDPOneCommitImageReferences -Keep $keep -Commit $inFlightCommit
+    $operation = Read-PDPOneDeploymentOperation -AgentRoot $AgentRoot -RemoveStale
+    if ($operation.Active -and $null -ne $operation.State) {
+        $inFlightCommit = [string]$operation.State.target_commit
+        $inFlightProtected = $false
+        if ($inFlightCommit -match '^[0-9a-f]{40}$') {
+            $manifestPath = Join-Path $AgentRoot ("state\release-manifests\" + $inFlightCommit + ".json")
+            $inFlightProtected = Add-PDPOneManifestImageReferences -Keep $keep -ManifestPath $manifestPath
+        }
+
+        $deploymentId = [string]$operation.State.deployment_id
+        if (-not [string]::IsNullOrWhiteSpace($deploymentId)) {
+            $reportPath = Join-Path $AgentRoot ("reports\" + $deploymentId + ".json")
+            if (Test-Path -LiteralPath $reportPath) {
+                try {
+                    $report = Get-Content -LiteralPath $reportPath -Raw -Encoding UTF8 | ConvertFrom-Json
+                    $reportImages = $report.PSObject.Properties["active_images"]
+                    if ($null -ne $reportImages -and (Add-PDPOneImageMapReferences -Keep $keep -Images $reportImages.Value)) {
+                        $inFlightProtected = $true
+                    }
+                } catch { }
+            }
+        }
+
+        if (-not $inFlightProtected) {
+            Add-PDPOneCommitImageReferences -Keep $keep -Commit $inFlightCommit
+        }
+    }
+
     return $keep
 }
 
@@ -182,7 +267,7 @@ function Invoke-PDPOneImageRetention([ref]$RemovedImages, [ref]$DockerActions) {
         $reference = ([string]$raw).Trim()
         if (-not $reference -or $reference.EndsWith(":<none>")) { continue }
         $lower = $reference.ToLowerInvariant()
-        $isRegistryImage = $lower -match '^ghcr\.io/pdp-webbase/pdp-one-(backend|mcp|web):[0-9a-f]{40}$'
+        $isRegistryImage = $lower -match '^ghcr\.io/pdp-webbase/pdp-one-(backend|mcp|web):(content-[0-9a-f]{64}|[0-9a-f]{40})$'
         $isLegacyImage = $lower -match '^pdp-one-(backend|mcp|web):(candidate-[0-9a-f]+|local)$'
         if (-not $isRegistryImage -and -not $isLegacyImage) { continue }
         if ($keep.ContainsKey($lower)) { continue }
@@ -349,7 +434,7 @@ try {
         cleanup_threshold_gb = $CleanupThresholdGB
         target_free_gb = $TargetFreeGB
         build_cache_budget_gb = $BuildCacheBudgetGB
-        image_retention = "active_previous_and_inflight_commit"
+        image_retention = "active_previous_and_inflight_release_manifests"
         deployment_in_progress = [bool]$deploymentOperation.Active
         deployment_id = $deploymentId
         protected_target_commit = $targetCommit
@@ -383,7 +468,7 @@ try {
         completed_at = [DateTime]::UtcNow.ToString("o")
         status = "guard_error"
         build_cache_budget_gb = $BuildCacheBudgetGB
-        image_retention = "active_previous_and_inflight_commit"
+        image_retention = "active_previous_and_inflight_release_manifests"
         deployment_in_progress = [bool]$deploymentOperation.Active
         deployment_id = $deploymentId
         protected_target_commit = $targetCommit
