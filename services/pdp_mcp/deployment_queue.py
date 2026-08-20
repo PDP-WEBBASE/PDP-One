@@ -244,6 +244,60 @@ def _read_agent_watchdog_status() -> dict[str, Any]:
         return unavailable
 
 
+def _read_public_mcp_connectivity_status() -> dict[str, Any]:
+    report_path = REPORT_ROOT / "public-mcp-connectivity.json"
+    unavailable = {
+        "available": False,
+        "status": "unknown",
+        "checked_at": None,
+        "age_seconds": None,
+        "stale": True,
+        "local_mcp": "unknown",
+        "public_web": "unknown",
+        "public_api": "unknown",
+        "public_mcp": "unknown",
+        "dns_state": "unknown",
+        "consecutive_mcp_only_failures": 0,
+        "last_funnel_repair_at": None,
+        "last_funnel_repair_result": "unknown",
+        "cooldown_seconds_remaining": 0,
+        "repair_suppressed_deployment": False,
+        "confirmation_count": 0,
+    }
+    if not report_path.exists() or not report_path.is_file():
+        return unavailable
+    try:
+        with report_path.open("r", encoding="utf-8-sig") as handle:
+            raw = json.load(handle)
+        if not isinstance(raw, dict) or str(raw.get("schema", "")) != "pdp-one.public-mcp-connectivity.v1":
+            return unavailable
+        checked_at_text = str(raw.get("checked_at", ""))
+        checked_at = datetime.fromisoformat(checked_at_text.replace("Z", "+00:00"))
+        if checked_at.tzinfo is None:
+            checked_at = checked_at.replace(tzinfo=timezone.utc)
+        age = max(0, int((_utcnow() - checked_at.astimezone(timezone.utc)).total_seconds()))
+        return {
+            "available": True,
+            "status": str(raw.get("status", "unknown"))[:64],
+            "checked_at": checked_at.astimezone(timezone.utc).isoformat(),
+            "age_seconds": age,
+            "stale": age > 900,
+            "local_mcp": str(raw.get("local_mcp", "unknown"))[:32],
+            "public_web": str(raw.get("public_web", "unknown"))[:32],
+            "public_api": str(raw.get("public_api", "unknown"))[:32],
+            "public_mcp": str(raw.get("public_mcp", "unknown"))[:32],
+            "dns_state": str(raw.get("dns_state", "unknown"))[:64],
+            "consecutive_mcp_only_failures": max(0, int(raw.get("consecutive_mcp_only_failures", 0))),
+            "last_funnel_repair_at": _sanitize_report_value(raw.get("last_funnel_repair_at")),
+            "last_funnel_repair_result": str(raw.get("last_funnel_repair_result", "unknown"))[:64],
+            "cooldown_seconds_remaining": max(0, int(raw.get("cooldown_seconds_remaining", 0))),
+            "repair_suppressed_deployment": bool(raw.get("repair_suppressed_deployment", False)),
+            "confirmation_count": max(0, int(raw.get("confirmation_count", 0))),
+        }
+    except (OSError, ValueError, TypeError, json.JSONDecodeError, UnicodeDecodeError):
+        return unavailable
+
+
 def _pending_request_diagnostics(incoming: Path) -> dict[str, Any]:
     result = {
         "expired_signed_requests": 0,
@@ -365,6 +419,7 @@ def get_queue_status() -> dict[str, Any]:
     pending = list(incoming.glob("*.json")) if incoming.exists() else []
     pending_diagnostics = _pending_request_diagnostics(incoming)
     watchdog = _read_agent_watchdog_status()
+    connectivity = _read_public_mcp_connectivity_status()
     return {
         "configured": configured,
         "queue_available": incoming.exists() and responses.exists(),
@@ -380,6 +435,15 @@ def get_queue_status() -> dict[str, Any]:
             and not watchdog.get("stale")
             and watchdog.get("status") == "healthy"
             and watchdog.get("task_state_after") == "Running"
+        ),
+        "public_mcp_connectivity": connectivity,
+        "public_mcp_observed_healthy": bool(
+            connectivity.get("available")
+            and not connectivity.get("stale")
+            and connectivity.get("local_mcp") == "healthy"
+            and connectivity.get("public_web") == "healthy"
+            and connectivity.get("public_api") == "healthy"
+            and connectivity.get("public_mcp") == "healthy"
         ),
         "disk_metric_scope": "deployment_queue_filesystem_not_windows_c_drive",
         "disk_free_bytes": free_bytes,

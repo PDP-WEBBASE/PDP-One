@@ -63,13 +63,6 @@ function Test-LocalMcpRoute {
     }
 }
 
-function Test-PublicMcpRoute {
-    param([string]$EnvPath, [string]$PathToken)
-    $publicBaseUrl = Get-PDPOneEnvValue -Path $EnvPath -Name "PDP_PUBLIC_BASE_URL"
-    if ([string]::IsNullOrWhiteSpace($publicBaseUrl)) { return $null }
-    return Test-PDPOnePublicHealth -Url "$($publicBaseUrl.TrimEnd('/'))/mcp/$PathToken/healthz" -ExpectedPattern "pdp-one-mcp" -TimeoutSeconds 20
-}
-
 $root = Get-InstallationRoot -RequestedRoot $ProjectRoot
 $deploymentOperation = Read-PDPOneDeploymentOperation -AgentRoot $AgentRoot -RemoveStale
 if ($deploymentOperation.Active) {
@@ -95,6 +88,7 @@ $envPath = Assert-PDPOneConfiguration -ProjectRoot $root
 $mcpPathToken = Get-PDPOneEnvValue -Path $envPath -Name "PDP_MCP_PATH_TOKEN"
 $localMcpHealthUrl = "http://127.0.0.1:8080/mcp/$mcpPathToken/healthz"
 $confirmedPublicFailure = $false
+$publicConnectivity = $null
 
 $state = Get-McpState
 if ($state.Status -eq "running" -and $state.Health -eq "healthy") {
@@ -102,12 +96,15 @@ if ($state.Status -eq "running" -and $state.Health -eq "healthy") {
     $second = Get-McpState
     if ($second.Status -eq "running" -and $second.Health -eq "healthy" -and $second.RestartCount -eq $state.RestartCount) {
         if (Test-LocalMcpRoute -Url $localMcpHealthUrl) {
-            $publicProbe = Test-PublicMcpRoute -EnvPath $envPath -PathToken $mcpPathToken
-            if ($null -eq $publicProbe -or $publicProbe.Success) { exit 0 }
-            Start-Sleep -Seconds 10
-            $publicProbe = Test-PublicMcpRoute -EnvPath $envPath -PathToken $mcpPathToken
-            if ($null -ne $publicProbe -and $publicProbe.Success) { exit 0 }
-            $confirmedPublicFailure = $true
+            # The five-minute watchdog owns bounded persistent public-MCP recovery.
+            # RepairAttempts=1 means this path can never force-recreate nginx or
+            # Tailscale for a broad route failure. It may only observe/reset state,
+            # repair unpublished DNS, or perform the thresholded Funnel-only refresh.
+            $publicConnectivity = & (Join-Path $PSScriptRoot "Repair-PDPOneConnectivity.ps1") -ProjectRoot $root -RepairAttempts 1 -AllowPersistentMcpEscalation -AgentRoot $AgentRoot
+            if ($null -ne $publicConnectivity -and [string]$publicConnectivity.status -eq "succeeded") {
+                if ([string]$publicConnectivity.public_mcp_health -eq "healthy") { exit 0 }
+                if ([string]$publicConnectivity.public_mcp_health -eq "degraded") { $confirmedPublicFailure = $true }
+            }
         }
     }
 }
@@ -123,6 +120,9 @@ $report = [ordered]@{
     local_route_health = "failed"
     public_route_health = $(if ($confirmedPublicFailure) { "degraded_observed" } else { "not_checked" })
     route_repair_performed = $false
+    funnel_registration_reset = $(if ($null -ne $publicConnectivity) { [bool]$publicConnectivity.funnel_registration_reset } else { $false })
+    persistent_mcp_failure_count = $(if ($null -ne $publicConnectivity) { [int]$publicConnectivity.persistent_mcp_failure_count } else { 0 })
+    funnel_repair_cooldown_remaining = $(if ($null -ne $publicConnectivity) { [int]$publicConnectivity.funnel_repair_cooldown_remaining } else { 0 })
     container_recreated = $false
     final_status = "failed"
     completed_at = $null
@@ -136,15 +136,12 @@ try {
     & docker compose config --quiet
     if ($LASTEXITCODE -ne 0) { throw "Docker Compose configuration is invalid." }
 
-    # The frequent five-minute watchdog must never turn a public-only transient
-    # into a disruptive outage. If Docker + local token-bound MCP are healthy,
-    # observe a confirmed public failure and leave the stable route untouched.
-    # Stable Startup / explicit connectivity repair owns public-route recovery.
     if ($state.Status -eq "running" -and $state.Health -eq "healthy" -and $confirmedPublicFailure -and (Test-LocalMcpRoute -Url $localMcpHealthUrl)) {
         $report.import_check = "not_required_container_healthy"
         $report.local_route_health = "healthy"
         $report.public_route_health = "degraded_observed"
-        $report.final_status = "healthy_local_public_degraded_observed"
+        $report.route_repair_performed = [bool]$report.funnel_registration_reset
+        $report.final_status = $(if ($report.funnel_registration_reset) { "healthy_local_public_degraded_after_bounded_funnel_refresh" } else { "healthy_local_public_degraded_observed" })
         $report.completed_at = [DateTime]::UtcNow.ToString("o")
         Write-McpReport -Root $root -Report $report
         exit 0
@@ -155,7 +152,7 @@ try {
     if ($state.Status -eq "running" -and $state.Health -eq "healthy") {
         $report.import_check = "not_required_container_healthy"
         $report.route_repair_performed = $true
-        $connectivity = & (Join-Path $PSScriptRoot "Repair-PDPOneConnectivity.ps1") -ProjectRoot $root -RepairAttempts 2
+        $connectivity = & (Join-Path $PSScriptRoot "Repair-PDPOneConnectivity.ps1") -ProjectRoot $root -RepairAttempts 2 -AgentRoot $AgentRoot
         if ($null -ne $connectivity -and [string]$connectivity.status -eq "succeeded" -and (Test-LocalMcpRoute -Url $localMcpHealthUrl)) {
             $report.local_route_health = "healthy"
             $report.public_route_health = [string]$connectivity.public_mcp_health
@@ -184,7 +181,7 @@ try {
             if ($confirmed.Status -eq "running" -and $confirmed.Health -eq "healthy" -and $confirmed.RestartCount -eq $current.RestartCount) {
                 if (-not (Test-LocalMcpRoute -Url $localMcpHealthUrl)) {
                     $report.route_repair_performed = $true
-                    $connectivity = & (Join-Path $PSScriptRoot "Repair-PDPOneConnectivity.ps1") -ProjectRoot $root -RepairAttempts 2
+                    $connectivity = & (Join-Path $PSScriptRoot "Repair-PDPOneConnectivity.ps1") -ProjectRoot $root -RepairAttempts 2 -AgentRoot $AgentRoot
                     if ($null -eq $connectivity -or [string]$connectivity.status -ne "succeeded") {
                         throw "MCP container recovered but the token-bound route could not be repaired."
                     }
