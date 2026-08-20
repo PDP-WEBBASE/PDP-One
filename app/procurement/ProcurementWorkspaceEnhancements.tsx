@@ -9,6 +9,7 @@ import AutomationControlPanel from "./AutomationControlPanel";
 import CaseContractDraftPanel from "./CaseContractDraftPanel";
 import CaseFollowUpPanel from "./CaseFollowUpPanel";
 import ManagementDashboardPanel from "./ManagementDashboardPanel";
+import InternetUsageMonitoringPanel from "./InternetUsageMonitoringPanel";
 import OpportunityWorkflowPanel from "./OpportunityWorkflowPanel";
 import ProcurementAnalysisCenterPanel from "./ProcurementAnalysisCenterPanel";
 import { emitProcurementUiSync, PROCUREMENT_UI_SYNC_EVENT, ProcurementUiSyncDetail } from "./procurementUiSync";
@@ -22,7 +23,8 @@ type ToolKey =
   | "automation"
   | "analysis"
   | "analysisSettings"
-  | "engine";
+  | "engine"
+  | "internetUsage";
 
 type RawCase = {
   id: string;
@@ -102,6 +104,7 @@ const tools: { key: ToolKey; label: string; description: string }[] = [
   { key: "analysisSettings", label: "تنظیمات تحلیل واقعی", description: "Prompt، کلیدواژه، پروفایل و نسخه فعال تحلیل" },
   { key: "automation", label: "زمان‌بندی استخراج و AI", description: "کنترل اجرای دوره‌ای استخراج و تحلیل" },
   { key: "dashboard", label: "داشبورد مدیریتی", description: "نمای مدیریتی و شاخص‌های کلیدی" },
+  { key: "internetUsage", label: "پایش مصرف اینترنت", description: "مصرف واقعی ثبت‌شده و پوشش اندازه‌گیری" },
   { key: "contract", label: "قرارداد از پرونده برنده", description: "ایجاد پیش‌نویس قرارداد از پرونده برنده" },
 ];
 
@@ -242,7 +245,7 @@ function ManagementToolbar({ onOpen }: { onOpen: (key: ToolKey) => void }) {
   return <section dir="rtl" style={{margin:"12px 0 16px",padding:14,border:"1px solid #dbe3ec",borderRadius:14,background:"#f8fafc",boxShadow:"0 5px 18px rgba(15,23,42,.05)"}}>
     <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:10,marginBottom:10,flexWrap:"wrap"}}>
       <div><strong style={{display:"block",color:"#0f172a",fontSize:17}}>ابزارهای مدیریتی زیرسامانه</strong><small style={{color:"#64748b"}}>همه ابزارهای مدیریتی و تحلیل از روی لیست فراخوان‌ها جمع شده‌اند و از این تب باز می‌شوند.</small></div>
-      <span style={{fontSize:11,padding:"4px 8px",borderRadius:999,background:"white",border:"1px solid #dbe3ec",color:"#475569"}}>۹ ابزار</span>
+      <span style={{fontSize:11,padding:"4px 8px",borderRadius:999,background:"white",border:"1px solid #dbe3ec",color:"#475569"}}>۱۰ ابزار</span>
     </div>
     <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(175px,1fr))",gap:8}}>
       {tools.map((tool) => <button key={tool.key} type="button" onClick={() => onOpen(tool.key)} style={{minHeight:62,textAlign:"right",border:"1px solid #dbe3ec",borderRadius:11,background:"white",padding:"10px 11px",font:"inherit",cursor:"pointer",color:"#0f172a",boxShadow:"0 2px 7px rgba(15,23,42,.035)"}}>
@@ -259,6 +262,7 @@ function ActiveToolPanel({ tool, onClose }: { tool: ToolKey | null; onClose: () 
   if (tool === "followup") return <CaseFollowUpPanel onClose={onClose} />;
   if (tool === "contract") return <CaseContractDraftPanel onClose={onClose} />;
   if (tool === "dashboard") return <ManagementDashboardPanel onClose={onClose} />;
+  if (tool === "internetUsage") return <InternetUsageMonitoringPanel onClose={onClose} />;
   if (tool === "automation") return <AutomationControlPanel onClose={onClose} />;
   if (tool === "analysis") return <ProcurementAnalysisCenterPanel onClose={onClose} />;
   if (tool === "analysisSettings") return <AnalysisContextManager initialSection="prompts" onClose={onClose} />;
