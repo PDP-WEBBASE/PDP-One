@@ -45,6 +45,24 @@ test("startup task retries immediately on Windows network connection and keeps a
   assert.match(task, /StartWhenAvailable/);
 });
 
+test("background maintenance tasks run non-interactively without changing cadence", async () => {
+  const task = await load("../scripts/windows/Register-PDPOneStartupTask.ps1");
+
+  assert.match(task, /\$backgroundPrincipal\s*=\s*New-ScheduledTaskPrincipal[^\n]+-LogonType S4U[^\n]+-RunLevel Highest/);
+  assert.match(task, /\$interactivePrincipal\s*=\s*New-ScheduledTaskPrincipal[^\n]+-LogonType Interactive[^\n]+-RunLevel Highest/);
+  assert.match(task, /Register-ScheduledTask -TaskName \$StartupTaskName[^\n]+-Principal \$backgroundPrincipal/);
+  assert.match(task, /Register-ScheduledTask -TaskName \$McpWatchdogTaskName[^\n]+-Principal \$backgroundPrincipal/);
+  assert.match(task, /Register-ScheduledTask -TaskName \$DeploymentAgentWatchdogTaskName[^\n]+-Principal \$backgroundPrincipal/);
+  assert.match(task, /Register-ScheduledTask -TaskName \$DiskGuardTaskName[^\n]+-Principal \$backgroundPrincipal/);
+  assert.match(task, /Register-ScheduledTask -TaskName \$OpenWebTaskName[^\n]+-Principal \$interactivePrincipal/);
+  assert.match(task, /schtasks\.exe \/Create[^\n]+\/RU \$env:USERNAME \/NP \/RL HIGHEST/);
+
+  assert.match(task, /RepetitionInterval \(New-TimeSpan -Minutes 1\)/);
+  assert.match(task, /RepetitionInterval \(New-TimeSpan -Minutes 5\)/);
+  assert.match(task, /RepetitionInterval \(New-TimeSpan -Minutes 10\)/);
+  assert.match(task, /-Daily -At 3:15am/);
+});
+
 test("local page polling begins immediately and advisory maintenance is outside the readiness path", async () => {
   const startup = await load("../scripts/windows/Start-PDPOne.ps1");
   const task = await load("../scripts/windows/Register-PDPOneStartupTask.ps1");
@@ -63,7 +81,7 @@ test("deployed startup source self-applies the versioned host task policy once",
   const startup = await load("../scripts/windows/Start-PDPOne.ps1");
 
   assert.match(startup, /startup-task-policy\.version/);
-  assert.match(startup, /2026-08-20-autonomous-ops-v3/);
+  assert.match(startup, /2026-08-21-hidden-background-tasks-v4/);
   assert.match(startup, /Register-PDPOneStartupTask\.ps1/);
   assert.match(startup, /installedPolicyVersion -ne \$startupPolicyVersion/);
   assert.match(startup, /startup_task_policy = "updated"/);
