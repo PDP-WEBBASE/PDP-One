@@ -327,7 +327,7 @@ try {
     if ($scope.topology_sensitive) {
         Invoke-PDPOneNative -Command "docker" -Arguments @("compose", "--profile", "tunnel", "up", "--detach", "--no-build", "--pull", "never") -FailureMessage "Updated services failed to start." | Out-Null
     } elseif ($activationTargets.Count -gt 0) {
-        Invoke-PDPOneNative -Command "docker" -Arguments (@("compose", "up", "--detach", "--no-build", "--pull", "never", "--no-deps") + $activationTargets) -FailureMessage "Changed services failed to start." | Out-Null
+        Invoke-PDPOneNative -Command "docker" -Arguments (@("compose", "up", "--detach", "--no-build", "--pull", "never", "--no-deps", "--force-recreate") + $activationTargets) -FailureMessage "Changed services failed to start." | Out-Null
     }
 
     $report.stage = "scope-aware-health-check"
@@ -335,7 +335,14 @@ try {
     $scopedHealthScript = Join-Path $projectRoot "scripts\windows\Test-PDPOneScopedHealth.ps1"
     if (-not (Test-Path -LiteralPath $scopedHealthScript)) { throw "Scope-aware health script is missing from the exact release." }
     try {
-        & powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File $scopedHealthScript -Profile $healthProfile -TimeoutSeconds 75
+        $scopedHealthArguments = @(
+            "-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $scopedHealthScript,
+            "-Profile", $healthProfile, "-TimeoutSeconds", "75"
+        )
+        if ("web" -in $changedServices) {
+            $scopedHealthArguments += @("-ExpectedWebBuildId", ("content-" + [string]$fingerprints.web))
+        }
+        & powershell.exe @scopedHealthArguments
         if ($LASTEXITCODE -ne 0) { throw "Scope-aware health returned a non-zero code." }
     } catch {
         $repairScript = Join-Path $projectRoot "scripts\windows\Repair-PDPOneConnectivity.ps1"
