@@ -43,6 +43,26 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # Select one healthy source for every required base image before Bake
+      # begins. This prevents a mirror outage from blocking exact GHCR images
+      # and avoids retrying/pushing partially built exact-SHA tags.
+      - name: Select reachable base image registry
+        id: base-registry
+        shell: bash
+        run: |
+          set -euo pipefail
+          for registry in docker.arvancloud.ir/library docker.io/library; do
+            echo "Checking base image registry: ${registry}"
+            if timeout 20s docker buildx imagetools inspect "${registry}/python:3.13-slim" >/dev/null 2>&1 \
+              && timeout 20s docker buildx imagetools inspect "${registry}/node:22-bookworm-slim" >/dev/null 2>&1; then
+              echo "registry=${registry}" >> "$GITHUB_OUTPUT"
+              echo "Selected base image registry: ${registry}"
+              exit 0
+            fi
+          done
+          echo "No healthy base image registry could resolve both required base images." >&2
+          exit 1
+
       # Bake keeps backend/MCP/web exact-SHA builds concurrent inside one
       # GitHub-hosted runner instead of consuming three matrix runners.
       - name: Build and push exact immutable images concurrently
@@ -57,7 +77,7 @@ jobs:
           provenance: false
           vars: |
             IMAGE_SHA=${{ env.IMAGE_SHA }}
-            PDP_DOCKER_REGISTRY=docker.arvancloud.ir/library
+            PDP_DOCKER_REGISTRY=${{ steps.base-registry.outputs.registry }}
 
       - name: Record immutable image references
         shell: bash
