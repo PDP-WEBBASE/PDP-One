@@ -3,6 +3,7 @@
 param(
     [ValidateSet("full", "backend", "mcp", "web", "host", "none")][string]$Profile = "full",
     [int]$TimeoutSeconds = 75,
+    [ValidatePattern('^$|^content-[0-9a-f]{64}$')][string]$ExpectedWebBuildId = "",
     [switch]$SkipPublicCheck
 )
 
@@ -187,7 +188,8 @@ try {
         }
         "web" {
             Wait-PDPOneContainerState -Service "web" -RequireHealthy -Timeout $TimeoutSeconds | Out-Null
-            Wait-PDPOneHttp -Url "http://127.0.0.1:8080/pdp-build.json" -ExpectedPattern '"build_id"' -Timeout $TimeoutSeconds | Out-Null
+            $buildPattern = if ($ExpectedWebBuildId) { '"build_id"\s*:\s*"' + [regex]::Escape($ExpectedWebBuildId) + '"' } else { '"build_id"' }
+            Wait-PDPOneHttp -Url "http://127.0.0.1:8080/pdp-build.json" -ExpectedPattern $buildPattern -Timeout $TimeoutSeconds | Out-Null
         }
         "host" {
             Wait-PDPOneHttp -Url "http://127.0.0.1:8080/healthz" -ExpectedPattern '(?i)(PDP One ready|ready|healthy|ok)' -Timeout $TimeoutSeconds | Out-Null
@@ -214,7 +216,8 @@ try {
                     if (-not [bool]$componentHealth.Success) { throw "Scoped public MCP health failed: $($componentHealth.Detail)" }
                 }
                 "web" {
-                    $componentHealth = Test-PDPOnePublicHealth -Url ($base + "/pdp-build.json") -ExpectedPattern '"build_id"' -TimeoutSeconds 25
+                    $buildPattern = if ($ExpectedWebBuildId) { '"build_id"\s*:\s*"' + [regex]::Escape($ExpectedWebBuildId) + '"' } else { '"build_id"' }
+                    $componentHealth = Test-PDPOnePublicHealth -Url ($base + "/pdp-build.json") -ExpectedPattern $buildPattern -TimeoutSeconds 25
                     if (-not [bool]$componentHealth.Success) { throw "Scoped public web health failed: $($componentHealth.Detail)" }
                 }
             }
@@ -222,6 +225,9 @@ try {
     }
 } catch {
     $scopedError = ConvertTo-PDPOneRedactedText $_.Exception.Message
+    if ($ExpectedWebBuildId -and $Profile -eq "web") {
+        throw "Exact web build verification failed: $scopedError"
+    }
     Write-Warning "Scoped health did not pass; running stronger full-health fallback."
     try {
         Invoke-PDPOneFullHealthFallback -SkipPublic:$SkipPublicCheck
