@@ -16,6 +16,7 @@ from .types import PageContentMismatchError, ParsedNotice, ParsedPage
 
 class ParsNamadParser:
     row_selector = "tbody#search_result_list > tr.text-center"
+    page_size_hint = 50
 
     def __init__(self, base_url: str, declared_type: str):
         self.base_url = base_url
@@ -27,7 +28,8 @@ class ParsNamadParser:
         warnings: list[str] = []
         detected_counts = {"tender": 0, "inquiry": 0}
 
-        for position, row in enumerate(soup.select(self.row_selector), start=1):
+        matched_rows = list(soup.select(self.row_selector))
+        for position, row in enumerate(matched_rows, start=1):
             cells = row.find_all(["td", "th"], recursive=False)
             if len(cells) < 7:
                 warnings.append(f"row-{position}: unexpected column count {len(cells)}")
@@ -127,16 +129,35 @@ class ParsNamadParser:
             warnings.append("no_notice_rows_found")
 
         current_page = page_number_from_url(page_url, default=1)
-        page_numbers = pagination_page_numbers([page_url, *next_page_urls])
-        total_pages = max(page_numbers) if page_numbers else None
+        visible_page_numbers = pagination_page_numbers([page_url, *next_page_urls])
+        visible_page_max = max(visible_page_numbers) if visible_page_numbers else None
+        future_page_numbers = [
+            number
+            for number in visible_page_numbers
+            if current_page is not None and number > current_page
+        ]
+
+        # Pars Namad can render only a pagination window. The largest visible page
+        # is therefore a navigation hint, not proof of the source's total pages.
+        # A visible future page proves that this is not the end. With no future
+        # page, only a non-empty short page (< the source's 50-row page size) is
+        # strong enough to prove a natural end. A full page remains fail-closed.
+        total_pages: int | None = None
         end_of_results: bool | None = None
-        if total_pages is not None and current_page is not None:
-            if notices:
-                end_of_results = current_page >= total_pages
-            elif current_page > total_pages:
-                end_of_results = True
-            else:
-                end_of_results = False
+        pagination_evidence = "unverified"
+        reported_total_pages_source = "unknown"
+        if current_page is not None and future_page_numbers:
+            end_of_results = False
+            pagination_evidence = "visible_future_page"
+        elif current_page is not None and notices and len(matched_rows) < self.page_size_hint:
+            total_pages = current_page
+            end_of_results = True
+            pagination_evidence = "short_page_without_future"
+            reported_total_pages_source = "short_page_natural_end"
+        elif current_page is not None and notices:
+            pagination_evidence = "full_page_without_future_unverified"
+        elif current_page is not None:
+            pagination_evidence = "empty_page_unverified"
 
         page_title = normalize_text(soup.title.get_text(" ", strip=True) if soup.title else "")
         return ParsedPage(
@@ -148,8 +169,14 @@ class ParsNamadParser:
             end_of_results=end_of_results,
             diagnostics={
                 "page_title": page_title[:200],
-                "matched_rows": len(soup.select(self.row_selector)),
+                "matched_rows": len(matched_rows),
                 "detected_type_counts": detected_counts,
+                "visible_pagination_pages": visible_page_numbers,
+                "visible_pagination_max": visible_page_max,
+                "visible_future_pages": future_page_numbers,
+                "pagination_evidence": pagination_evidence,
+                "reported_total_pages_source": reported_total_pages_source,
+                "page_size_hint": self.page_size_hint,
             },
         )
 
