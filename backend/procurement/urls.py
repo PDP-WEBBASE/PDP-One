@@ -37,6 +37,7 @@ from .views_management_dashboard import unified_management_dashboard
 from .views_pagination_metrics import pagination_dashboard_metrics
 from .views_recommended import AIRecommendedNoticeViewSet
 from .views_review import AIReviewDraftViewSet, analysis_review_summary_view, review_analysis_draft, select_reviewed_analysis_draft
+from .views_workflow_ui import workflow_page_metadata
 
 router = DefaultRouter()
 router.register("notices", ProcurementNoticeViewSet, basename="procurement-notice")
@@ -64,6 +65,7 @@ urlpatterns = [
     path("dashboard/", procurement_dashboard, name="procurement-dashboard"),
     path("ui/notices/", compact_notice_feed, name="procurement-compact-notice-feed"),
     path("ui/dashboard/", compact_dashboard, name="procurement-compact-dashboard"),
+    path("ui/workflow-page-metadata/", workflow_page_metadata, name="procurement-workflow-page-metadata"),
     path("ui/recommendations/dismiss-bulk/", bulk_dismiss_recommendations, name="procurement-bulk-dismiss-recommendations"),
     path("pagination-dashboard-metrics/", pagination_dashboard_metrics, name="procurement-pagination-dashboard-metrics"),
     path("management-dashboard/", unified_management_dashboard, name="procurement-management-dashboard"),
