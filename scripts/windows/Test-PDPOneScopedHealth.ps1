@@ -93,6 +93,13 @@ function Ensure-PDPOneDeploymentAgentWatchdogAcceptance {
         if (-not (Test-Path -LiteralPath $required)) { throw "Required autonomous Agent watchdog file is missing: $(Split-Path $required -Leaf)" }
     }
 
+    # Exact-release health is already an elevated governed checkpoint. Apply the
+    # versioned Scheduled Task policy here only when the marker is stale so the
+    # newly deployed host behavior takes effect immediately without changing
+    # steady-state task cadence on later health checks.
+    & powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File $registerScript -ProjectRoot $ProjectRoot -ApplyIfNeeded
+    if ($LASTEXITCODE -ne 0) { throw "Scheduled Task policy application failed." }
+
     $watchdogTask = Get-ScheduledTask -TaskName $watchdogTaskName -ErrorAction SilentlyContinue
     if ($null -eq $watchdogTask) {
         & powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File $registerScript -ProjectRoot $ProjectRoot
@@ -202,7 +209,8 @@ try {
         if ($publicBase) {
             $base = $publicBase.TrimEnd('/')
             $publicHealth = Test-PDPOnePublicHealth -Url ($base + "/healthz") -ExpectedPattern 'PDP One ready' -TimeoutSeconds 25
-            if (-not [bool]$publicHealth.Success) { throw "Scoped public health failed: $($publicHealth.Detail)" }
+            if (-not [bool]$publicHealth.Success) { throw "Scoped public health failed: $($publicHealth.Detail)"
+            }
             switch ($Profile) {
                 "backend" {
                     $componentHealth = Test-PDPOnePublicHealth -Url ($base + "/api/v1/auth/session/") -ExpectedPattern '"authenticated"' -TimeoutSeconds 25
