@@ -62,13 +62,15 @@ test('normal operations remain bounded and sensitive identities are preserved', 
   assert.doesNotMatch(maintenance, /Test-Path\s+-LiteralPath\s+\(\[string\]\$deploymentState\.backup_path\)/);
 });
 
-test('stage A compatibility relaxation is explicit, narrow and temporary', () => {
+test('steady-state compatibility protects the autonomous deployment agent', () => {
   assert.equal(contract.schema, 'pdp-one.deployment-agent-compatibility.v1');
   assert.equal(contract.protocol_version, 1);
-  assert.equal(contract.migration_stage, 'autonomous-privileged-ops-stage-a');
+  assert.equal(Object.hasOwn(contract, 'migration_stage'), false);
+  assert.equal(Object.hasOwn(contract, 'migration_note'), false);
   const files = contract.bootstrap_files.map((entry) => entry.agent_file);
-  assert.equal(files.includes('Deployment-Agent.Standard.ps1'), false);
+  assert.equal(files.includes('Deployment-Agent.Standard.ps1'), true);
   assert.deepEqual(files.sort(), [
+    'Deployment-Agent.Standard.ps1',
     'Invoke-PDPOneDeployment.ps1',
     'Invoke-PDPOneManagedFastDeployment.ps1',
     'Invoke-PDPOneScopedRegistryDeployment.ps1',
