@@ -27,6 +27,7 @@ from .views_analysis_statistics import analysis_statistics
 from .views_automation import ProcurementAutomationSettingsViewSet
 from .views_case_actions import ProcurementCaseViewSet
 from .views_case_followup import case_follow_up, follow_up_summary, follow_up_users
+from .views_compact_ui import bulk_dismiss_recommendations, compact_dashboard, compact_notice_feed
 from .views_contract_draft import contract_draft_preview, create_contract_draft_from_case
 from .views_direct import DirectOpportunityViewSet, OpportunityContactViewSet, OpportunityFollowUpViewSet, OpportunityResultViewSet
 from .views_documents import ProcurementSubmissionDocumentViewSet
@@ -60,6 +61,9 @@ router.register("automation-settings", ProcurementAutomationSettingsViewSet, bas
 urlpatterns = [
     path("", include(router.urls)),
     path("dashboard/", procurement_dashboard, name="procurement-dashboard"),
+    path("ui/notices/", compact_notice_feed, name="procurement-compact-notice-feed"),
+    path("ui/dashboard/", compact_dashboard, name="procurement-compact-dashboard"),
+    path("ui/recommendations/dismiss-bulk/", bulk_dismiss_recommendations, name="procurement-bulk-dismiss-recommendations"),
     path("pagination-dashboard-metrics/", pagination_dashboard_metrics, name="procurement-pagination-dashboard-metrics"),
     path("management-dashboard/", unified_management_dashboard, name="procurement-management-dashboard"),
     path("cases/follow-up/users/", follow_up_users, name="case-follow-up-users"),
