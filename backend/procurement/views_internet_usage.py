@@ -8,13 +8,13 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
 from .models_analysis_runs import ProcurementAnalysisDataset
-from .models_extraction import ExtractionPage, ExtractionRun
+from .models_extraction import ExtractionPage
 
 
 PERIODS = {
     "24h": timedelta(hours=24),
     "7d": timedelta(days=7),
-    "30d": timedelta(days=30),
+    "all": None,
 }
 
 
@@ -24,21 +24,30 @@ def _dataset_size(dataset: ProcurementAnalysisDataset) -> int:
 
 
 def _period_snapshot(since):
-    extraction = ExtractionPage.objects.filter(captured_at__gte=since).aggregate(
+    extraction_pages = ExtractionPage.objects.all()
+    datasets_query = ProcurementAnalysisDataset.objects.all()
+    if since is not None:
+        extraction_pages = extraction_pages.filter(captured_at__gte=since)
+        datasets_query = datasets_query.filter(created_at__gte=since)
+    extraction = extraction_pages.aggregate(
         download_bytes=Coalesce(Sum("response_bytes"), 0),
         requests=Count("id"),
     )
-    datasets = list(
-        ProcurementAnalysisDataset.objects.filter(created_at__gte=since).only("files")
-    )
+    datasets = list(datasets_query.only("files"))
+    analysis_bytes = sum(_dataset_size(item) for item in datasets)
     return {
-        "download_bytes": int(extraction["download_bytes"]),
-        "upload_bytes": 0,
-        "known_bytes": int(extraction["download_bytes"]) + sum(_dataset_size(item) for item in datasets),
-        "extraction_download_bytes": int(extraction["download_bytes"]),
-        "extraction_requests": int(extraction["requests"]),
-        "analysis_artifact_bytes": sum(_dataset_size(item) for item in datasets),
-        "analysis_dataset_count": len(datasets),
+        "extraction": {
+            "download_bytes": int(extraction["download_bytes"]),
+            "upload_bytes": None,
+            "total_bytes": int(extraction["download_bytes"]),
+            "operation_count": int(extraction["requests"]),
+        },
+        "analysis": {
+            "download_bytes": None,
+            "upload_bytes": analysis_bytes,
+            "total_bytes": analysis_bytes,
+            "operation_count": len(datasets),
+        },
     }
 
 
@@ -47,61 +56,52 @@ def _period_snapshot(since):
 def internet_usage_dashboard(request):
     """Read-only aggregation over byte counters already produced by normal work."""
     now = timezone.now()
-    periods = {key: _period_snapshot(now - delta) for key, delta in PERIODS.items()}
-    recent_runs = []
-    runs = list(ExtractionRun.objects.prefetch_related("connectors").order_by("-created_at")[:20])
-    run_ids = [run.id for run in runs]
-    page_totals = {
-        row["run_id"]: row
-        for row in ExtractionPage.objects.filter(run_id__in=run_ids).values("run_id").annotate(
-            measured_download_bytes=Coalesce(Sum("response_bytes"), 0),
-            measured_requests=Count("id"),
-        )
+    periods = {
+        key: _period_snapshot(None if delta is None else now - delta)
+        for key, delta in PERIODS.items()
     }
-    for run in runs:
-        measured = page_totals.get(run.id, {})
-        recent_runs.append({
-            "id": str(run.id),
-            "kind": "extraction",
-            "label": "، ".join(connector.key for connector in run.connectors.all()) or "استخراج",
-            "status": run.status,
-            "started_at": run.started_at,
-            "finished_at": run.finished_at,
-            "download_bytes": int(measured.get("measured_download_bytes", 0)),
-            "upload_bytes": 0,
-            "request_count": int(measured.get("measured_requests", 0)),
-            "measurement_method": "direct_response_bytes",
-        })
+    all_measured = sum(periods["all"][key]["total_bytes"] for key in ("extraction", "analysis"))
+
+    def activity(key, label, measured, method, description):
+        values = {
+            period: periods[period].get(key, {
+                "download_bytes": None,
+                "upload_bytes": None,
+                "total_bytes": None,
+                "operation_count": None,
+            })
+            for period in PERIODS
+        }
+        total = values["all"]["total_bytes"]
+        return {
+            "key": key,
+            "label": label,
+            "measured": measured,
+            "method": method,
+            "description": description,
+            "periods": values,
+            "share_percent": round((total / all_measured) * 100, 2) if measured and all_measured and total is not None else None,
+        }
+
+    activities = [
+        activity("extraction", "استخراج آگهی‌ها", True, "direct_response_bytes", "دانلود مستقیم ثبت‌شده در پاسخ‌های HTTP استخراج."),
+        activity("analysis", "تحلیل با ChatGPT", True, "artifact_file_size", "اندازه واقعی بسته‌های تحلیل آماده ارسال؛ انتقال قطعی همه فایل‌ها را اثبات نمی‌کند."),
+        activity("ci_images", "CI و ساخت Image", False, "not_instrumented", "اندازه‌گیری واقعی این فعالیت هنوز به سامانه متصل نشده است."),
+        activity("deployment", "Deploy", False, "not_instrumented", "اندازه‌گیری واقعی این فعالیت هنوز به سامانه متصل نشده است."),
+        activity("backup", "Backup", False, "not_instrumented", "اندازه‌گیری واقعی این فعالیت هنوز به سامانه متصل نشده است."),
+        activity("web_users", "کاربران وب", False, "not_instrumented", "اندازه‌گیری واقعی این فعالیت هنوز به سامانه متصل نشده است."),
+        activity("unknown", "سایر / نامشخص", False, "not_instrumented", "تا اتصال شمارنده کل شبکه، اختلاف مصرف قابل محاسبه نیست."),
+    ]
 
     return Response({
         "generated_at": now,
         "mode": "passive_read_only",
         "uses_real_data_only": True,
-        "periods": periods,
-        "categories": [
-            {
-                "key": "extraction",
-                "label": "استخراج",
-                "measured": True,
-                "method": "direct_response_bytes",
-                "description": "بایت واقعی پاسخ‌های HTTP که هنگام استخراج ثبت شده است.",
-            },
-            {
-                "key": "analysis",
-                "label": "تحلیل",
-                "measured": True,
-                "method": "artifact_file_size",
-                "description": "اندازه واقعی فایل‌های بسته تحلیل؛ به معنی دانلود قطعی همه فایل‌ها نیست.",
-            },
-            {
-                "key": "deployment_ci_backup_web",
-                "label": "استقرار، CI، پشتیبان و کاربران وب",
-                "measured": False,
-                "method": "not_instrumented",
-                "description": "در این نسخه عددی نمایش داده نمی‌شود تا داده تخمینی با مصرف واقعی مخلوط نشود.",
-            },
-        ],
-        "recent_runs": recent_runs,
+        "activities": activities,
+        "measured_totals": {
+            period: sum(periods[period][key]["total_bytes"] for key in ("extraction", "analysis"))
+            for period in PERIODS
+        },
         "performance": {
             "hot_path_writes_added": 0,
             "packet_capture": False,
