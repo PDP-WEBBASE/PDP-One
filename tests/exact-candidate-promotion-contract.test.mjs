@@ -12,9 +12,26 @@ test("development-fast compatibility preflight fails closed before production mu
   assert.equal(contract.protocol_version, 1);
   assert.ok(contract.bootstrap_files.length >= 6);
   assert.ok(contract.bootstrap_files.some((entry) => entry.agent_file === "PDPOne.ReleaseManifest.ps1"));
-  assert.ok(contract.bootstrap_files.some((entry) => entry.agent_file === "Deployment-Agent.Standard.ps1"));
   assert.ok(contract.bootstrap_files.some((entry) => entry.agent_file === "Invoke-PDPOneManagedFastDeployment.ps1"));
   assert.ok(contract.bootstrap_files.some((entry) => entry.agent_file === "Test-PDPOneExactCandidateCompatibility.ps1"));
+
+  const standardProtected = contract.bootstrap_files.some((entry) => entry.agent_file === "Deployment-Agent.Standard.ps1");
+  if (contract.migration_stage === "autonomous-privileged-ops-stage-a") {
+    assert.equal(standardProtected, false, "Stage A may omit only Standard so the current protected Agent can bootstrap its fixed self-sync action");
+    assert.match(String(contract.migration_note || ""), /Stage B immediately restores Standard/i);
+    const protectedFiles = contract.bootstrap_files.map((entry) => entry.agent_file).sort();
+    assert.deepEqual(protectedFiles, [
+      "Invoke-PDPOneDeployment.ps1",
+      "Invoke-PDPOneManagedFastDeployment.ps1",
+      "Invoke-PDPOneScopedRegistryDeployment.ps1",
+      "PDPOne.Common.ps1",
+      "PDPOne.OperationLock.ps1",
+      "PDPOne.ReleaseManifest.ps1",
+      "Test-PDPOneExactCandidateCompatibility.ps1",
+    ].sort());
+  } else {
+    assert.equal(standardProtected, true, "Deployment-Agent.Standard.ps1 must remain protected outside the one explicit Stage A migration");
+  }
 
   const compatibilityStage = managed.indexOf('Stage "deployment-compatibility-preflight"');
   const rancherStage = managed.indexOf('Stage "applying-rancher-policy"');

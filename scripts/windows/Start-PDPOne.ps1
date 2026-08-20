@@ -55,7 +55,7 @@ try {
     # the exact Windows scripts but the deployment agent does not execute the
     # task-registration script. Apply a versioned task policy once, then leave
     # the schedules untouched on ordinary watchdog/network-triggered runs.
-    $startupPolicyVersion = "2026-08-19-low-latency-v2"
+    $startupPolicyVersion = "2026-08-20-autonomous-ops-v3"
     $startupPolicyRoot = "C:\ProgramData\PDP-One\maintenance"
     $startupPolicyPath = Join-Path $startupPolicyRoot "startup-task-policy.version"
     try {

@@ -7,6 +7,7 @@ param(
     [string]$NetworkRecoveryTaskName = "PDP One Network Recovery",
     [string]$OpenWebTaskName = "PDP One Open Local Web",
     [string]$McpWatchdogTaskName = "PDP One MCP Self Heal",
+    [string]$DeploymentAgentWatchdogTaskName = "PDP One Deployment Agent Watchdog",
     [string]$DiskGuardTaskName = "PDP One Disk Guard"
 )
 
@@ -20,11 +21,13 @@ $startScript = Join-Path $ProjectRoot "scripts\windows\Start-PDPOne.ps1"
 $rancherStartupScript = Join-Path $ProjectRoot "scripts\windows\Start-PDPOneRancherResilient.ps1"
 $openScript = Join-Path $ProjectRoot "scripts\windows\Open-PDPOneLocal.ps1"
 $mcpWatchdogScript = Join-Path $ProjectRoot "scripts\windows\Ensure-PDPOneMcpHealthy.ps1"
+$deploymentAgentWatchdogScript = Join-Path $ProjectRoot "scripts\windows\Ensure-PDPOneDeploymentAgentHealthy.ps1"
 $diskGuardScript = Join-Path $ProjectRoot "scripts\windows\Invoke-PDPOneDiskGuard.ps1"
 if (-not (Test-Path -LiteralPath $startScript)) { throw "Stable startup script was not found." }
 if (-not (Test-Path -LiteralPath $rancherStartupScript)) { throw "Resilient Rancher startup helper was not found." }
 if (-not (Test-Path -LiteralPath $openScript)) { throw "Local web opener script was not found." }
 if (-not (Test-Path -LiteralPath $mcpWatchdogScript)) { throw "MCP self-heal script was not found." }
+if (-not (Test-Path -LiteralPath $deploymentAgentWatchdogScript)) { throw "Deployment Agent self-heal script was not found." }
 if (-not (Test-Path -LiteralPath $diskGuardScript)) { throw "Disk guard script was not found." }
 
 $startupArguments = "-NoLogo -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$startScript`""
@@ -63,10 +66,28 @@ $mcpPeriodicTrigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(2
 $mcpSettings = New-ScheduledTaskSettingsSet -RestartCount 6 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit (New-TimeSpan -Minutes 6) -MultipleInstances IgnoreNew -StartWhenAvailable
 Register-ScheduledTask -TaskName $McpWatchdogTaskName -Action $mcpAction -Trigger @($mcpLogonTrigger, $mcpPeriodicTrigger) -Principal $principal -Settings $mcpSettings -Description "Checks the PDP One MCP container every five minutes. If it is missing or restarting, it repairs the MCP Docker image, verifies imports, recreates only MCP, preserves tokens and never touches Docker volumes or PostgreSQL data." -Force | Out-Null
 
+# The signed queue is useful only while the Windows Agent Scheduled Task is
+# actually running. Supervise that fixed task independently of MCP/Rancher so a
+# stopped or disabled Agent cannot leave valid signed requests stranded forever.
+$agentRoot = "C:\ProgramData\PDP-One\deployment-agent"
+try {
+    $envPath = Assert-PDPOneConfiguration -ProjectRoot $ProjectRoot
+    $configuredAgentRoot = [string](Get-PDPOneEnvValue -Path $envPath -Name "PDP_DEPLOYMENT_AGENT_ROOT")
+    if (-not [string]::IsNullOrWhiteSpace($configuredAgentRoot)) {
+        $agentRoot = ($configuredAgentRoot -replace '/', '\')
+    }
+} catch { }
+$deploymentAgentWatchdogArguments = "-NoLogo -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$deploymentAgentWatchdogScript`" -AgentRoot `"$agentRoot`" -AgentTaskName `"PDP One Local Deployment Agent`""
+$deploymentAgentWatchdogAction = New-ScheduledTaskAction -Execute "powershell.exe" -Argument $deploymentAgentWatchdogArguments
+$deploymentAgentWatchdogLogonTrigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
+$deploymentAgentWatchdogPeriodicTrigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) -RepetitionInterval (New-TimeSpan -Minutes 1) -RepetitionDuration (New-TimeSpan -Days 3650)
+$deploymentAgentWatchdogSettings = New-ScheduledTaskSettingsSet -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit (New-TimeSpan -Minutes 2) -MultipleInstances IgnoreNew -StartWhenAvailable
+Register-ScheduledTask -TaskName $DeploymentAgentWatchdogTaskName -Action $deploymentAgentWatchdogAction -Trigger @($deploymentAgentWatchdogLogonTrigger, $deploymentAgentWatchdogPeriodicTrigger) -Principal $principal -Settings $deploymentAgentWatchdogSettings -Description "Keeps only the fixed PDP One Local Deployment Agent Scheduled Task running. It never executes arbitrary commands and never interrupts a Running Agent." -Force | Out-Null
+
 $diskGuardArguments = "-NoLogo -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$diskGuardScript`" -Mode scheduled -ProjectRoot `"$ProjectRoot`""
 $diskGuardAction = New-ScheduledTaskAction -Execute "powershell.exe" -Argument $diskGuardArguments
 $diskGuardDailyTrigger = New-ScheduledTaskTrigger -Daily -At 3:15am
 $diskGuardSettings = New-ScheduledTaskSettingsSet -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 5) -ExecutionTimeLimit (New-TimeSpan -Minutes 45) -MultipleInstances IgnoreNew -StartWhenAvailable
 Register-ScheduledTask -TaskName $DiskGuardTaskName -Action $diskGuardAction -Trigger $diskGuardDailyTrigger -Principal $principal -Settings $diskGuardSettings -Description "Maintains safe C drive capacity for PDP One. It prunes only unused build cache, images, stopped containers and networks, archives old restore-verified backups, compacts Rancher WSL VHDX only when needed, and never prunes Docker volumes." -Force | Out-Null
 
-Write-Host "Scheduled Tasks '$StartupTaskName', '$NetworkRecoveryTaskName', '$OpenWebTaskName', '$McpWatchdogTaskName' and '$DiskGuardTaskName' are installed." -ForegroundColor Green
+Write-Host "Scheduled Tasks '$StartupTaskName', '$NetworkRecoveryTaskName', '$OpenWebTaskName', '$McpWatchdogTaskName', '$DeploymentAgentWatchdogTaskName' and '$DiskGuardTaskName' are installed." -ForegroundColor Green

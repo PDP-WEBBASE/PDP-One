@@ -195,6 +195,137 @@ function Invoke-AgentAction($Payload) {
                 premerge_required = $true
             }
         }
+        "sync_agent_from_exact_commit" {
+            $commit = [string]$params.commit_sha
+            if ($commit -notmatch '^[0-9a-f]{40}$') { throw "Agent synchronization commit is invalid." }
+
+            $requestId = [Guid]::Parse([string]$Payload.request_id).ToString()
+            $secretPath = Join-Path $AgentRoot "secrets\github-token.dpapi"
+            if (-not (Test-Path -LiteralPath $secretPath)) { throw "The protected GitHub package credential is missing." }
+            $stageRoot = Join-Path $AgentRoot ("downloads\agent-sync-" + $requestId)
+            $backupRoot = Join-Path $AgentRoot ("state\agent-sync-backups\" + $requestId)
+            New-Item -ItemType Directory -Force -Path $stageRoot | Out-Null
+            New-Item -ItemType Directory -Force -Path $backupRoot | Out-Null
+
+            $credentialPointer = [IntPtr]::Zero
+            $plainCredential = $null
+            $records = @()
+            try {
+                $secureCredential = (Get-Content -LiteralPath $secretPath -Raw).Trim() | ConvertTo-SecureString
+                $credentialPointer = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secureCredential)
+                $plainCredential = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($credentialPointer)
+                if ([string]::IsNullOrWhiteSpace($plainCredential)) { throw "The protected GitHub credential could not be opened." }
+                $headers = @{
+                    Authorization = "Bearer $plainCredential"
+                    Accept = "application/vnd.github+json"
+                    "X-GitHub-Api-Version" = "2022-11-28"
+                    "User-Agent" = "PDP-One-Agent-Sync"
+                }
+
+                $commitResponse = Invoke-RestMethod -Uri "https://api.github.com/repos/PDP-WEBBASE/PDP-One/commits/$commit" -Headers $headers -TimeoutSec 45
+                if ([string]$commitResponse.sha -ne $commit) { throw "GitHub did not return the exact requested Agent synchronization commit." }
+
+                $contractResponse = Invoke-RestMethod -Uri "https://api.github.com/repos/PDP-WEBBASE/PDP-One/contents/release/deployment-agent-compatibility.json?ref=$commit" -Headers $headers -TimeoutSec 45
+                $contractBytes = [Convert]::FromBase64String(([string]$contractResponse.content -replace '\s', ''))
+                $contractText = [Text.Encoding]::UTF8.GetString($contractBytes)
+                $contract = $contractText | ConvertFrom-Json
+                if ([string]$contract.schema -ne "pdp-one.deployment-agent-compatibility.v1" -or [int]$contract.protocol_version -ne 1) {
+                    throw "Candidate Agent compatibility contract is unsupported."
+                }
+                $entries = @($contract.bootstrap_files)
+                if ($entries.Count -eq 0 -or $entries.Count -gt 32) { throw "Candidate Agent compatibility contract has an invalid bootstrap file count." }
+                if (-not (@($entries | ForEach-Object { [string]$_.agent_file }) -contains "Deployment-Agent.Standard.ps1")) {
+                    throw "Candidate Agent synchronization is allowed only when Deployment-Agent.Standard.ps1 is protected by the compatibility manifest."
+                }
+
+                foreach ($entry in $entries) {
+                    $repositoryPath = [string]$entry.path
+                    $agentFile = [string]$entry.agent_file
+                    if ($repositoryPath -notmatch '^scripts/windows/[A-Za-z0-9._-]+\.ps1$') { throw "Candidate Agent manifest contains an invalid repository path." }
+                    if ($agentFile -notmatch '^[A-Za-z0-9._-]+\.ps1$' -or $agentFile -ne (Split-Path $repositoryPath -Leaf)) { throw "Candidate Agent manifest contains an invalid target filename." }
+
+                    $fileResponse = Invoke-RestMethod -Uri ("https://api.github.com/repos/PDP-WEBBASE/PDP-One/contents/" + $repositoryPath + "?ref=" + $commit) -Headers $headers -TimeoutSec 45
+                    $fileBytes = [Convert]::FromBase64String(([string]$fileResponse.content -replace '\s', ''))
+                    if ($fileBytes.Length -le 0) { throw "Candidate Agent bootstrap file is empty: $agentFile" }
+                    $stagePath = Join-Path $stageRoot $agentFile
+                    [IO.File]::WriteAllBytes($stagePath, $fileBytes)
+                    $parseTokens = $null
+                    $parseErrors = $null
+                    [System.Management.Automation.Language.Parser]::ParseFile($stagePath, [ref]$parseTokens, [ref]$parseErrors) | Out-Null
+                    if (@($parseErrors).Count -gt 0) { throw "Candidate Agent bootstrap file does not parse in Windows PowerShell: $agentFile" }
+                    $candidateHash = (Get-FileHash -LiteralPath $stagePath -Algorithm SHA256).Hash.ToLowerInvariant()
+                    $destination = Join-Path $scripts $agentFile
+                    $existed = Test-Path -LiteralPath $destination
+                    $backupPath = Join-Path $backupRoot $agentFile
+                    if ($existed) { Copy-Item -LiteralPath $destination -Destination $backupPath -Force }
+                    $records += [pscustomobject]@{
+                        agent_file = $agentFile
+                        stage_path = $stagePath
+                        destination = $destination
+                        backup_path = $backupPath
+                        existed = [bool]$existed
+                        candidate_sha256 = $candidateHash
+                    }
+                }
+
+                try {
+                    foreach ($record in $records) {
+                        $temporary = ([string]$record.destination) + ".pdp-sync-new"
+                        Copy-Item -LiteralPath ([string]$record.stage_path) -Destination $temporary -Force
+                        Move-Item -LiteralPath $temporary -Destination ([string]$record.destination) -Force
+                        $installedHash = (Get-FileHash -LiteralPath ([string]$record.destination) -Algorithm SHA256).Hash.ToLowerInvariant()
+                        if (-not [string]::Equals($installedHash, [string]$record.candidate_sha256, [StringComparison]::OrdinalIgnoreCase)) {
+                            throw "Installed Agent bootstrap hash mismatch: $($record.agent_file)"
+                        }
+                    }
+                } catch {
+                    for ($index = $records.Count - 1; $index -ge 0; $index -= 1) {
+                        $record = $records[$index]
+                        if ([bool]$record.existed -and (Test-Path -LiteralPath ([string]$record.backup_path))) {
+                            Copy-Item -LiteralPath ([string]$record.backup_path) -Destination ([string]$record.destination) -Force -ErrorAction SilentlyContinue
+                        } elseif (-not [bool]$record.existed) {
+                            Remove-Item -LiteralPath ([string]$record.destination) -Force -ErrorAction SilentlyContinue
+                        }
+                    }
+                    throw
+                }
+
+                Set-Content -LiteralPath (Join-Path $AgentRoot "state\restart-agent-after-response") -Value ([DateTime]::UtcNow.ToString("o")) -Encoding ASCII
+                return @{
+                    exact_commit = $commit
+                    fixed_repository = "PDP-WEBBASE/PDP-One"
+                    synchronized_files = @($records | ForEach-Object { [string]$_.agent_file })
+                    synchronized_file_count = $records.Count
+                    hashes_verified = $true
+                    powershell_parse_verified = $true
+                    backup_created = $true
+                    rollback_on_sync_failure = $true
+                    arbitrary_shell_allowed = $false
+                    agent_restart_scheduled = $true
+                }
+            } finally {
+                if ($credentialPointer -ne [IntPtr]::Zero) { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($credentialPointer) }
+                $plainCredential = $null
+                if (Test-Path -LiteralPath $stageRoot) { Remove-Item -LiteralPath $stageRoot -Recurse -Force -ErrorAction SilentlyContinue }
+            }
+        }
+        "ensure_pdp_one_started" {
+            & powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File (Join-Path $scripts "Start-PDPOne.ps1") | Out-Null
+            if ($LASTEXITCODE -ne 0) { throw "Stable PDP One startup failed." }
+            return @{ started = $true; operation = "fixed_stable_start"; arbitrary_shell_allowed = $false }
+        }
+        "repair_pdp_one_connectivity" {
+            $projectRoot = Get-PDPOneProjectRoot
+            & powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File (Join-Path $scripts "Repair-PDPOneConnectivity.ps1") -ProjectRoot $projectRoot -RepairAttempts 1 -PublicCheckTimeoutSeconds 35 -TransientConfirmDelaySeconds 10 -DnsPublicationTimeoutSeconds 60 -DnsPollIntervalSeconds 10 | Out-Null
+            if ($LASTEXITCODE -ne 0) { throw "Bounded PDP One connectivity repair failed." }
+            return @{ repaired = $true; repair_attempts = 1; identity_reset = $false; credential_rotation = $false; arbitrary_shell_allowed = $false }
+        }
+        "collect_pdp_one_diagnostics" {
+            $output = @(& powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File (Join-Path $scripts "New-PDPOneDiagnostics.ps1") -FailureMessage "Owner-requested signed diagnostics" -Stage "signed-diagnostics")
+            if ($LASTEXITCODE -ne 0) { throw "Safe PDP One diagnostics failed." }
+            $reportPath = if ($output.Count -gt 0) { [string]$output[-1] } else { "" }
+            return @{ diagnostics_created = $true; report_file = $(if ($reportPath) { Split-Path $reportPath -Leaf } else { "" }); secret_values_returned = $false; arbitrary_shell_allowed = $false }
+        }
         "check_deployment_health" {
             $deploymentId = Assert-SafeIdentifier ([string]$params.deployment_id) "deployment_id"
             & powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File (Join-Path $scripts "Test-PDPOne.ps1") -SkipChatGPTToolCheck | Out-Null
@@ -208,8 +339,9 @@ function Invoke-AgentAction($Payload) {
             $statePath = Join-Path $AgentRoot "state\last-deployment.json"
             if (Test-Path -LiteralPath $statePath) {
                 $deploymentState = Get-Content -LiteralPath $statePath -Raw -Encoding UTF8 | ConvertFrom-Json
-                if ($null -ne $deploymentState.PSObject.Properties["backup_path"] -and (Test-Path -LiteralPath ([string]$deploymentState.backup_path))) {
-                    $protectedBackup = [string]$deploymentState.backup_path
+                $backupPathProperty = $deploymentState.PSObject.Properties["backup_path"]
+                if ($null -ne $backupPathProperty -and -not [string]::IsNullOrWhiteSpace([string]$backupPathProperty.Value) -and (Test-Path -LiteralPath ([string]$backupPathProperty.Value))) {
+                    $protectedBackup = [string]$backupPathProperty.Value
                 }
             }
             $maintenanceArgs = @(

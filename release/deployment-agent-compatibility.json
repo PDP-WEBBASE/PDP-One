@@ -1,11 +1,9 @@
 {
   "schema": "pdp-one.deployment-agent-compatibility.v1",
   "protocol_version": 1,
+  "migration_stage": "autonomous-privileged-ops-stage-a",
+  "migration_note": "One bounded migration release omits Deployment-Agent.Standard.ps1 so the already-installed preflight can install the new exact-commit self-sync action. Stage B immediately restores Standard to this protected list.",
   "bootstrap_files": [
-    {
-      "path": "scripts/windows/Deployment-Agent.Standard.ps1",
-      "agent_file": "Deployment-Agent.Standard.ps1"
-    },
     {
       "path": "scripts/windows/Invoke-PDPOneDeployment.ps1",
       "agent_file": "Invoke-PDPOneDeployment.ps1"
