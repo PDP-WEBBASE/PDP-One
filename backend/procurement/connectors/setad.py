@@ -34,6 +34,17 @@ def _organization_name(row: dict[str, Any]) -> str:
     return normalize_text(organization)
 
 
+def _optional_bool(value: Any) -> bool | None:
+    """Preserve the difference between explicit false and unknown source state."""
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return value
+    if value in (0, 1):
+        return bool(value)
+    return None
+
+
 def _setad_eproc_page_number(url: str, default: int | None = None) -> int | None:
     """Read DisplayTag's dynamic d-<id>-p page parameter before generic fallbacks."""
     match = SETAD_EPROC_PAGE_RE.search(html_module.unescape(url or ""))
@@ -98,10 +109,10 @@ class SetadEtendParser:
                 "proposal_deadline_raw": normalize_text(row.get("proposalDeadlineDate")),
                 "evaluation_deadline_raw": normalize_text(row.get("evaluationDeadlineDate")),
                 "opening_date_raw": normalize_text(row.get("openingDate")),
-                "allowed_contractor": bool(row.get("allowedContractor")),
-                "allowed_consultation": bool(row.get("allowedConsultation")),
-                "allowed_commodity": bool(row.get("allowedCommodity")),
-                "allowed_services": bool(row.get("allowedServices")),
+                "allowed_contractor": _optional_bool(row.get("allowedContractor")),
+                "allowed_consultation": _optional_bool(row.get("allowedConsultation")),
+                "allowed_commodity": _optional_bool(row.get("allowedCommodity")),
+                "allowed_services": _optional_bool(row.get("allowedServices")),
             }
             notices.append(
                 ParsedNotice(
