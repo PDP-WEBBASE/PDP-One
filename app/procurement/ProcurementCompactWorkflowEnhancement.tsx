@@ -179,7 +179,8 @@ function installCompactBrowseFetch() {
     if (original.origin !== window.location.origin || ![NOTICE_PATH, RECOMMENDED_PATH].includes(original.pathname)) return innerFetch(input, init);
 
     const filters = guarded.__pdpCompactFilters || { deadlineState: "", publishedOn: "" };
-    if (!filters.deadlineState && !filters.publishedOn) return innerFetch(input, init);
+    const sourceFilter = fieldValue("منبع");
+    if (!filters.deadlineState && !filters.publishedOn && !sourceFilter) return innerFetch(input, init);
     const top = activeTopLabel();
     if (!TOP_NOTICE_LABELS.has(top)) return innerFetch(input, init);
     const workflow = activeWorkflowLabel();
@@ -521,7 +522,6 @@ export default function ProcurementCompactWorkflowEnhancement() {
   useEffect(() => {
     const [top] = context.split("|");
     if (!TOP_NOTICE_LABELS.has(top)) {
-      setRows([]);
       patchNoticeRows(new Map());
       return;
     }
