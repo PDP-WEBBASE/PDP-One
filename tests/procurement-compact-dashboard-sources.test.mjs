@@ -3,14 +3,14 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 const wrapperPath = new URL("../app/procurement/ProcurementWorkspaceV23.tsx", import.meta.url);
-const overlayPath = new URL("../app/procurement/ProcurementCompactWorkspaceEnhancement.tsx", import.meta.url);
+const overlayPath = new URL("../app/procurement/ProcurementCompactWorkspaceStableEnhancement.tsx", import.meta.url);
 const backendPath = new URL("../backend/procurement/views_compact_ui.py", import.meta.url);
 const urlsPath = new URL("../backend/procurement/urls.py", import.meta.url);
 
-test("mounts the compact procurement enhancement after the established workspace overlays", async () => {
+test("mounts the stable compact procurement enhancement after the established workspace overlays", async () => {
   const wrapper = await readFile(wrapperPath, "utf8");
-  assert.match(wrapper, /ProcurementCompactWorkspaceEnhancement/);
-  assert.match(wrapper, /<ProcurementSubmissionResultsEnhancements \/>\s*<ProcurementCompactWorkspaceEnhancement \/>/);
+  assert.match(wrapper, /ProcurementCompactWorkspaceStableEnhancement/);
+  assert.match(wrapper, /<ProcurementSubmissionResultsEnhancements \/>\s*<ProcurementCompactWorkspaceStableEnhancement \/>/);
 });
 
 test("shows all canonical sources in Setad Hezareh Parsnamad priority without rewriting data", async () => {
@@ -28,7 +28,7 @@ test("shows all canonical sources in Setad Hezareh Parsnamad priority without re
 test("keeps bulk recommendation dismissal limited to tender inquiry recommended views and preserves notices", async () => {
   const frontend = await readFile(overlayPath, "utf8");
   const backend = await readFile(backendPath, "utf8");
-  assert.match(frontend, /activeWorkflow\(\) === "پیشنهادی"/);
+  assert.match(frontend, /activeWorkflow\(\) !== "پیشنهادی"/);
   assert.match(frontend, /top !== "مناقصات" && top !== "استعلامات"/);
   assert.match(frontend, /حذف گروهی پیشنهادها/);
   assert.match(backend, /latest_effective_recommended_notice_ids/);
