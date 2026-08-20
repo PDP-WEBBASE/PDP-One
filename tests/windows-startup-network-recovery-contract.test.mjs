@@ -85,8 +85,10 @@ test("local page polling begins immediately and advisory maintenance is outside 
   assert.ok(diskGuardIndex > healthIndex, "advisory startup disk guard must run after readiness checks");
 });
 
-test("deployed startup source self-applies the versioned host task policy once", async () => {
+test("versioned hidden task policy self-applies once during startup or exact-release health", async () => {
   const startup = await load("../scripts/windows/Start-PDPOne.ps1");
+  const registration = await load("../scripts/windows/Register-PDPOneStartupTask.ps1");
+  const scopedHealth = await load("../scripts/windows/Test-PDPOneScopedHealth.ps1");
 
   assert.match(startup, /startup-task-policy\.version/);
   assert.match(startup, /2026-08-21-hidden-background-tasks-v4/);
@@ -95,4 +97,15 @@ test("deployed startup source self-applies the versioned host task policy once",
   assert.match(startup, /startup_task_policy = "updated"/);
   assert.match(startup, /startup_task_policy = "current"/);
   assert.match(startup, /startup_task_policy_warning/);
+
+  assert.match(registration, /\[switch\]\$ApplyIfNeeded/);
+  assert.match(registration, /2026-08-21-hidden-background-tasks-v4/);
+  assert.match(registration, /startup-task-policy\.version/);
+  assert.match(registration, /\$ApplyIfNeeded -and \(Test-Path -LiteralPath \$taskPolicyPath\)/);
+  assert.match(registration, /installedPolicyVersion -eq \$taskPolicyVersion/);
+  assert.match(registration, /WriteAllText\(\$taskPolicyPath, \$taskPolicyVersion/);
+
+  assert.match(scopedHealth, /Register-PDPOneStartupTask\.ps1/);
+  assert.match(scopedHealth, /-ProjectRoot \$ProjectRoot -ApplyIfNeeded/);
+  assert.match(scopedHealth, /Scheduled Task policy application failed/);
 });
