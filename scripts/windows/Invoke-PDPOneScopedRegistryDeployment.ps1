@@ -112,7 +112,7 @@ function Get-PDPOneActivationTargets([string[]]$ChangedServices) {
     $targets = @()
     if ("backend" -in $ChangedServices) { $targets += @("backend", "worker", "beat") }
     if ("mcp" -in $ChangedServices) { $targets += "mcp" }
-    if ("web" -in $ChangedServices) { $targets += "web" }
+    if ("web" -in $ChangedServices) { $targets += @("web", "nginx") }
     return @($targets | Select-Object -Unique)
 }
 

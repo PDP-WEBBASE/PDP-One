@@ -35,6 +35,7 @@ test("scoped deployment reuses unchanged immutable images and restarts only affe
   assert.match(deploy, /serviceChanged/);
   assert.match(deploy, /Get-PDPOneActivationTargets/);
   assert.match(deploy, /@\("backend", "worker", "beat"\)/);
+  assert.match(deploy, /@\("web", "nginx"\)/);
   assert.match(deploy, /@\("compose", "stop"\) \+ \$activationTargets/);
   assert.match(deploy, /"--no-deps", "--force-recreate"\) \+ \$activationTargets/);
   assert.match(deploy, /"-ExpectedWebBuildId", \("content-" \+ \[string\]\$fingerprints\.web\)/);
