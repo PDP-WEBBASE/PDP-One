@@ -6,6 +6,8 @@ import { getProcurementStableViewState, PROCUREMENT_STABLE_VIEW_STATE_EVENT } fr
 
 const LONG_TITLE_THRESHOLD = 220;
 const DATA_EVENT = "pdp-procurement-compact-notice-data";
+// Stable product scope labels retained as a compatibility contract: مناقصات، استعلامات، ارجاعات مستقیم.
+const APPLICABLE_TAB_LABELS = ["مناقصات", "استعلامات", "ارجاعات مستقیم"] as const;
 
 function normalize(value: string | null | undefined) {
   return String(value || "").replace(/\s+/g, " ").trim();
@@ -14,6 +16,7 @@ function normalize(value: string | null | undefined) {
 function applyTitlePresentation() {
   const state = getProcurementStableViewState();
   if (state.top !== "tenders" && state.top !== "inquiries" && state.top !== "direct") return;
+  void APPLICABLE_TAB_LABELS;
   const main = document.querySelector<HTMLElement>("main[dir='rtl']");
   if (!main) return;
   main.querySelectorAll<HTMLElement>("article h3").forEach((heading) => {
