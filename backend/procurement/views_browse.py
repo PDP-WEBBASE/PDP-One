@@ -41,12 +41,16 @@ def _apply_compact_browse_filters(queryset, params):
 class CompactBrowseNoticeViewSet(ProcurementNoticeViewSet):
     """Read-only notice browse view used by the compact procurement workspace."""
 
+    http_method_names = ["get", "head", "options"]
+
     def get_queryset(self):
         return _apply_compact_browse_filters(super().get_queryset(), self.request.query_params)
 
 
 class CompactBrowseRecommendedNoticeViewSet(AIRecommendedNoticeViewSet):
     """Read-only effective-AI-recommendation browse view with the same compact filters."""
+
+    http_method_names = ["get", "head", "options"]
 
     def get_queryset(self):
         return _apply_compact_browse_filters(super().get_queryset(), self.request.query_params)
