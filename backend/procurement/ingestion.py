@@ -49,6 +49,20 @@ SEMANTIC_HASH_FIELDS = (
 )
 SETAD_EPROC_SEMANTIC_MARKER_KEY = "setad_eproc_semantic_hash_without_deadline"
 SETAD_EPROC_COUNTDOWN_TOLERANCE_SECONDS = 300
+SETAD_ETEND_LIFECYCLE_MARKER_KEY = "setad_etend_lifecycle_v1"
+SETAD_ETEND_LIFECYCLE_FIELDS = (
+    "operationCityName",
+    "type",
+    "typeName",
+    "documentsDeadlineDate",
+    "proposalDeadlineDate",
+    "evaluationDeadlineDate",
+    "openingDate",
+    "allowedContractor",
+    "allowedConsultation",
+    "allowedCommodity",
+    "allowedServices",
+)
 
 
 def _semantic_hash(payload: dict, *, include_deadline: bool = True) -> str:
@@ -58,11 +72,95 @@ def _semantic_hash(payload: dict, *, include_deadline: bool = True) -> str:
     return stable_hash({key: payload.get(key) for key in fields})
 
 
+def _setad_etend_lifecycle_projection(raw_payload: dict | None) -> dict:
+    if not isinstance(raw_payload, dict):
+        return {}
+    list_payload = raw_payload.get("list") or {}
+    if not isinstance(list_payload, dict):
+        return {}
+    projection = {}
+    for field in SETAD_ETEND_LIFECYCLE_FIELDS:
+        value = list_payload.get(field)
+        if isinstance(value, str):
+            value = normalize_text(value)
+        projection[field] = value
+    return projection
+
+
+def _setad_etend_lifecycle_state(payload: dict) -> dict:
+    return {
+        "version": 1,
+        "core_hash": payload["content_hash"],
+        "projection": _setad_etend_lifecycle_projection(payload.get("raw_payload")),
+    }
+
+
+def _source_raw_payload_with_internal(raw_payload: dict, key: str, value) -> dict:
+    stored = dict(raw_payload or {})
+    internal = dict(stored.get("_pdp") or {})
+    internal[key] = value
+    stored["_pdp"] = internal
+    return stored
+
+
+def _source_raw_payload_with_semantic_marker(raw_payload: dict, marker: str) -> dict:
+    return _source_raw_payload_with_internal(
+        raw_payload,
+        SETAD_EPROC_SEMANTIC_MARKER_KEY,
+        marker,
+    )
+
+
+def _setad_etend_effective_hash(payload: dict, source_notice: SourceNotice | None) -> str:
+    """Hash material eTender lifecycle fields without a first-deploy mass update.
+
+    Historical SETAD tender rows already retain the public JSON row in
+    ``raw_payload.list``. For an existing pre-safeguard row, compare the current
+    lifecycle projection to that retained evidence. If both the legacy core hash
+    and lifecycle projection are unchanged, keep the existing hash and only add
+    the internal marker to latest SourceNotice evidence. A real lifecycle change
+    receives a deterministic new hash and therefore a new semantic revision.
+    """
+
+    state = _setad_etend_lifecycle_state(payload)
+    if source_notice is None:
+        return stable_hash(
+            {
+                "core_hash": state["core_hash"],
+                "setad_etend_lifecycle": state["projection"],
+            }
+        )
+
+    previous_raw = source_notice.raw_payload if isinstance(source_notice.raw_payload, dict) else {}
+    previous_internal = previous_raw.get("_pdp") or {}
+    previous_state = previous_internal.get(SETAD_ETEND_LIFECYCLE_MARKER_KEY)
+    if isinstance(previous_state, dict) and previous_state.get("version") == 1:
+        unchanged = (
+            previous_state.get("core_hash") == state["core_hash"]
+            and previous_state.get("projection") == state["projection"]
+        )
+    else:
+        unchanged = (
+            source_notice.content_hash == state["core_hash"]
+            and _setad_etend_lifecycle_projection(previous_raw) == state["projection"]
+        )
+
+    if unchanged:
+        return source_notice.content_hash
+    return stable_hash(
+        {
+            "core_hash": state["core_hash"],
+            "setad_etend_lifecycle": state["projection"],
+        }
+    )
+
+
 def merge_parsed_notice(parsed: ParsedNotice, detail: dict | None = None) -> dict:
     detail = detail or {}
     title = normalize_text(detail.get("title")) or parsed.title
     employer = normalize_text(detail.get("employer")) or parsed.employer
     province = normalize_text(detail.get("province")) or parsed.province
+    city = normalize_text(detail.get("city")) or normalize_text((parsed.metadata or {}).get("city"))
     published_raw = normalize_text(detail.get("published_raw")) or parsed.published_raw
     deadline_raw = normalize_text(detail.get("deadline_raw")) or parsed.deadline_raw
     detected_type = detail.get("content_detected_type") or parsed.content_detected_type
@@ -79,6 +177,7 @@ def merge_parsed_notice(parsed: ParsedNotice, detail: dict | None = None) -> dic
         "title": title,
         "employer": employer,
         "province": province,
+        "city": city,
         "published_raw": published_raw,
         "deadline_raw": deadline_raw,
         "summary": parsed.summary,
@@ -176,12 +275,8 @@ def _is_setad_eproc(parsed: ParsedNotice) -> bool:
     return (parsed.metadata or {}).get("setad_channel") == "eproc"
 
 
-def _source_raw_payload_with_semantic_marker(raw_payload: dict, marker: str) -> dict:
-    stored = dict(raw_payload or {})
-    internal = dict(stored.get("_pdp") or {})
-    internal[SETAD_EPROC_SEMANTIC_MARKER_KEY] = marker
-    stored["_pdp"] = internal
-    return stored
+def _is_setad_etend(connector, parsed: ParsedNotice) -> bool:
+    return connector.key == "setad_tenders" and (parsed.metadata or {}).get("setad_channel") == "etend"
 
 
 def _previous_setad_semantic_marker(source_notice: SourceNotice) -> str:
@@ -253,12 +348,19 @@ def ingest_parsed_notice(
     payload = merge_parsed_notice(parsed, detail)
     now = timezone.now()
     setad_eproc = _is_setad_eproc(parsed)
+    setad_etend = _is_setad_etend(connector, parsed)
     semantic_marker = _semantic_hash(payload, include_deadline=False) if setad_eproc else ""
-    source_raw_payload = (
-        _source_raw_payload_with_semantic_marker(payload["raw_payload"], semantic_marker)
-        if setad_eproc
-        else payload["raw_payload"]
-    )
+
+    source_raw_payload = payload["raw_payload"]
+    if setad_eproc:
+        source_raw_payload = _source_raw_payload_with_semantic_marker(source_raw_payload, semantic_marker)
+    if setad_etend:
+        source_raw_payload = _source_raw_payload_with_internal(
+            source_raw_payload,
+            SETAD_ETEND_LIFECYCLE_MARKER_KEY,
+            _setad_etend_lifecycle_state(payload),
+        )
+
     source_values = {
         "source_url": payload["source_url"],
         "detail_url": payload["detail_url"],
@@ -280,8 +382,22 @@ def ingest_parsed_notice(
         defaults={**source_values, "first_seen_at": now},
     )
 
+    if setad_etend:
+        payload["content_hash"] = _setad_etend_effective_hash(
+            payload,
+            None if created else source_notice,
+        )
+        source_values["content_hash"] = payload["content_hash"]
+
     natural_relative_progression = False
     if created:
+        # eTender effective hashing is computed after identity lookup so existing
+        # legacy rows can bootstrap without churn. A newly-created eTender row is
+        # therefore updated once in-place before its first semantic revision.
+        if setad_etend:
+            for field, value in source_values.items():
+                setattr(source_notice, field, value)
+            source_notice.save(update_fields=SOURCE_FIELDS + ["updated_at"])
         changed_fields = list(source_values.keys())
         semantic_changed_fields = changed_fields
         item_status = ExtractionRunItem.Status.NEW
@@ -317,8 +433,8 @@ def ingest_parsed_notice(
             setattr(source_notice, field, value)
         source_notice.save(update_fields=SOURCE_FIELDS + ["updated_at"])
 
-    # Source list-page movement, raw capture drift and a natural SETAD countdown are
-    # useful latest-state evidence, but they are not semantic notice revisions.
+    # Source list-page movement, raw capture drift, internal semantic markers and a
+    # natural SETAD countdown are latest-state evidence rather than revisions.
     if created or semantic_changed_fields:
         next_revision = (
             source_notice.revisions.aggregate(maximum=Max("revision_number"))["maximum"] or 0
@@ -368,6 +484,8 @@ def ingest_parsed_notice(
     notice.employer_name = payload["employer"]
     notice.notice_number = payload["notice_number"]
     notice.province = payload["province"]
+    if payload["city"]:
+        notice.city = payload["city"]
     notice.published_date = published_date
     notice.submission_deadline = submission_deadline
     notice.date_metadata = {"published": published_meta, "deadline": deadline_meta}
