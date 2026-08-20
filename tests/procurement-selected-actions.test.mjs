@@ -34,6 +34,12 @@ test("internet usage monitoring is passive, lazy, and transparent about coverage
   assert.match(panel, /پسیو، خواندنی و بدون دخالت در عملیات/);
   assert.match(panel, /داده اندازه‌گیری‌نشده با عدد تخمینی نمایش داده نمی‌شود/);
   assert.match(panel, /شنود بسته/);
+  assert.match(panel, /۲۴ ساعت گذشته/);
+  assert.match(panel, /۷ روز گذشته/);
+  assert.match(panel, /کل دوره/);
+  assert.match(panel, /مصرف به تفکیک فعالیت و بازه زمانی/);
+  assert.match(panel, /اندازه‌گیری نشده/);
+  assert.doesNotMatch(panel, /آخرین اجراهای استخراج/);
 });
 
 test("loads only selected case details instead of paginating the entire tender and inquiry archive", async () => {
