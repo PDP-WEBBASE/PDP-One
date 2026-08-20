@@ -34,6 +34,7 @@ from .views_documents import ProcurementSubmissionDocumentViewSet
 from .views_extraction import ExtractionRunViewSet
 from .views_extraction_observability import latest_extraction_run
 from .views_management_dashboard import unified_management_dashboard
+from .views_internet_usage import internet_usage_dashboard
 from .views_pagination_metrics import pagination_dashboard_metrics
 from .views_recommended import AIRecommendedNoticeViewSet
 from .views_review import AIReviewDraftViewSet, analysis_review_summary_view, review_analysis_draft, select_reviewed_analysis_draft
@@ -67,6 +68,7 @@ urlpatterns = [
     path("ui/recommendations/dismiss-bulk/", bulk_dismiss_recommendations, name="procurement-bulk-dismiss-recommendations"),
     path("pagination-dashboard-metrics/", pagination_dashboard_metrics, name="procurement-pagination-dashboard-metrics"),
     path("management-dashboard/", unified_management_dashboard, name="procurement-management-dashboard"),
+    path("internet-usage-dashboard/", internet_usage_dashboard, name="procurement-internet-usage-dashboard"),
     path("cases/follow-up/users/", follow_up_users, name="case-follow-up-users"),
     path("cases/follow-up/summary/", follow_up_summary, name="case-follow-up-summary"),
     path("cases/<uuid:case_id>/follow-up/", case_follow_up, name="case-follow-up"),
