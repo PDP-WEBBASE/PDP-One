@@ -2,7 +2,7 @@ from django.urls import include, path
 from rest_framework.routers import DefaultRouter
 
 from .views import InquiryViewSet, ProcurementConnectorViewSet, ProcurementNoticeViewSet, ProcurementSourceViewSet, TenderViewSet, procurement_dashboard
-from .views_analysis import AnalysisBatchViewSet, AnalysisRequestViewSet, active_analysis_context, analysis_context_manifest, analysis_queue, latest_extraction_run, notice_analysis_context
+from .views_analysis import AnalysisBatchViewSet, AnalysisRequestViewSet, active_analysis_context, analysis_context_manifest, analysis_queue, notice_analysis_context
 from .views_analysis_adaptive import claim_analysis_work_adaptive
 from .views_analysis_engine import analysis_engine_work, finish_analysis_engine, start_analysis_engine
 from .views_analysis_management import ManagedAnalysisContextAttachmentViewSet, ManagedAnalysisContextSnapshotViewSet
@@ -31,6 +31,7 @@ from .views_contract_draft import contract_draft_preview, create_contract_draft_
 from .views_direct import DirectOpportunityViewSet, OpportunityContactViewSet, OpportunityFollowUpViewSet, OpportunityResultViewSet
 from .views_documents import ProcurementSubmissionDocumentViewSet
 from .views_extraction import ExtractionRunViewSet
+from .views_extraction_observability import latest_extraction_run
 from .views_management_dashboard import unified_management_dashboard
 from .views_pagination_metrics import pagination_dashboard_metrics
 from .views_recommended import AIRecommendedNoticeViewSet
