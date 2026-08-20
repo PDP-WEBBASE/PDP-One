@@ -2,7 +2,7 @@
 
 import dynamic from "next/dynamic";
 import ProcurementStartupSessionResilience from "./ProcurementStartupSessionResilience";
-import ProcurementPaginationEnhancement from "./ProcurementPaginationEnhancement";
+import ProcurementPaginationStableEnhancement from "./ProcurementPaginationStableEnhancement";
 import ProcurementTabCacheEnhancement from "./ProcurementTabCacheEnhancement";
 import ProcurementManagementPerformanceEnhancement from "./ProcurementManagementPerformanceEnhancement";
 import ProcurementNavigationReadCache from "./ProcurementNavigationReadCache";
@@ -13,15 +13,15 @@ import ProcurementSubmissionResultsEnhancements from "./ProcurementSubmissionRes
 import ProcurementWorkspaceEnhancements from "./ProcurementWorkspaceEnhancements";
 import ProcurementWorkspaceV22 from "./ProcurementWorkspaceV22";
 
-const ProcurementCompactWorkspaceEnhancement = dynamic(
-  () => import("./ProcurementCompactWorkspaceEnhancement"),
+const ProcurementCompactWorkspaceStableEnhancement = dynamic(
+  () => import("./ProcurementCompactWorkspaceStableEnhancement"),
   { ssr: false },
 );
 
 export default function ProcurementWorkspaceV23() {
   return <>
     <ProcurementStartupSessionResilience />
-    <ProcurementPaginationEnhancement />
+    <ProcurementPaginationStableEnhancement />
     <ProcurementTabCacheEnhancement />
     <ProcurementManagementPerformanceEnhancement />
     <ProcurementNavigationReadCache />
@@ -30,7 +30,7 @@ export default function ProcurementWorkspaceV23() {
     <ProcurementWorkspaceV22 />
     <ProcurementWorkspaceEnhancements />
     <ProcurementSubmissionResultsEnhancements />
-    <ProcurementCompactWorkspaceEnhancement />
+    <ProcurementCompactWorkspaceStableEnhancement />
     <ProcurementFullTitleEnhancement />
   </>;
 }
