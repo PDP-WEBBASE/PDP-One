@@ -176,7 +176,6 @@ function Invoke-AgentAction($Payload) {
             $report = @(& powershell.exe @deploymentArgs)
             if ($LASTEXITCODE -ne 0) { throw "Exact candidate promotion deployment failed; see the deployment report." }
             $deploymentReport = if ($report.Count -gt 0) { [string]$report[-1] } else { "" }
-
             # This is deliberately a separate child process after exact deployment.
             # The deployment may recreate MCP; orchestration remains in the Windows Agent.
             & powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File (Join-Path $scripts "Test-PDPOne.ps1") -SkipChatGPTToolCheck | Out-Null
@@ -208,8 +207,9 @@ function Invoke-AgentAction($Payload) {
             $statePath = Join-Path $AgentRoot "state\last-deployment.json"
             if (Test-Path -LiteralPath $statePath) {
                 $deploymentState = Get-Content -LiteralPath $statePath -Raw -Encoding UTF8 | ConvertFrom-Json
-                if ($null -ne $deploymentState.PSObject.Properties["backup_path"] -and (Test-Path -LiteralPath ([string]$deploymentState.backup_path))) {
-                    $protectedBackup = [string]$deploymentState.backup_path
+                $backupPathProperty = $deploymentState.PSObject.Properties["backup_path"]
+                if ($null -ne $backupPathProperty -and -not [string]::IsNullOrWhiteSpace([string]$backupPathProperty.Value) -and (Test-Path -LiteralPath ([string]$backupPathProperty.Value))) {
+                    $protectedBackup = [string]$backupPathProperty.Value
                 }
             }
             $maintenanceArgs = @(
