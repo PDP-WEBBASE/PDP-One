@@ -8,6 +8,8 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, '..');
 const agent = fs.readFileSync(path.join(root, 'scripts', 'windows', 'Deployment-Agent.Standard.ps1'), 'utf8');
 const tools = fs.readFileSync(path.join(root, 'services', 'pdp_mcp', 'exact_candidate_promotion_tools.py'), 'utf8');
+const scopedHealth = fs.readFileSync(path.join(root, 'scripts', 'windows', 'Test-PDPOneScopedHealth.ps1'), 'utf8');
+const watchdogSelfTest = fs.readFileSync(path.join(root, 'scripts', 'windows', 'Test-PDPOneDeploymentAgentWatchdogSelfHeal.ps1'), 'utf8');
 const contract = JSON.parse(fs.readFileSync(path.join(root, 'release', 'deployment-agent-compatibility.json'), 'utf8'));
 
 const privilegedActions = [
@@ -60,6 +62,35 @@ test('normal operations remain bounded and sensitive identities are preserved', 
   const maintenance = agent.slice(maintenanceStart, maintenanceEnd);
   assert.match(maintenance, /IsNullOrWhiteSpace\(\[string\]\$backupPathProperty\.Value\)/);
   assert.doesNotMatch(maintenance, /Test-Path\s+-LiteralPath\s+\(\[string\]\$deploymentState\.backup_path\)/);
+});
+
+test('exact-release health self-registers and acceptance-checks the fixed Agent watchdog', () => {
+  assert.match(scopedHealth, /Ensure-PDPOneDeploymentAgentWatchdogAcceptance/);
+  assert.match(scopedHealth, /Register-PDPOneStartupTask\.ps1/);
+  assert.match(scopedHealth, /PDP One Deployment Agent Watchdog/);
+  assert.match(scopedHealth, /Start-ScheduledTask -TaskName \$watchdogTaskName/);
+  assert.match(scopedHealth, /deployment-agent-watchdog\.json/);
+  assert.match(scopedHealth, /pdp-one\.deployment-agent-watchdog\.v1/);
+  assert.match(scopedHealth, /task_state_after -eq "Running"/);
+  assert.match(scopedHealth, /PDP One Deployment Agent Watchdog Self Test/);
+  assert.match(scopedHealth, /Register-ScheduledTask -TaskName \$selfTestTaskName/);
+  assert.match(scopedHealth, /deployment-agent-watchdog-selftest-v1\.accepted/);
+  assert.doesNotMatch(scopedHealth, /Invoke-Expression|\biex\b|cmd\.exe\s+\/c/i);
+});
+
+test('watchdog self-test is bounded, lane-aware and fails safe', () => {
+  assert.match(watchdogSelfTest, /PDP One Local Deployment Agent/);
+  assert.match(watchdogSelfTest, /PDP One Deployment Agent Watchdog/);
+  assert.match(watchdogSelfTest, /deployment-in-progress\.json/);
+  assert.match(watchdogSelfTest, /queue\\incoming/);
+  assert.match(watchdogSelfTest, /Stop-ScheduledTask -TaskName \$AgentTaskName/);
+  assert.match(watchdogSelfTest, /recovered_by_watchdog = \$true/);
+  assert.match(watchdogSelfTest, /safety_fallback_started = \$true/);
+  assert.match(watchdogSelfTest, /Start-ScheduledTask -TaskName \$AgentTaskName/);
+  assert.match(watchdogSelfTest, /deployment-agent-watchdog-selftest-v1\.accepted/);
+  assert.match(watchdogSelfTest, /Unregister-ScheduledTask -TaskName \$SelfTestTaskName/);
+  assert.doesNotMatch(watchdogSelfTest, /Invoke-Expression|\biex\b|cmd\.exe\s+\/c/i);
+  assert.doesNotMatch(watchdogSelfTest, /docker\s+(?:volume|system)\s+prune|tailscale\s+logout|Remove-Item[^\n]+\.env/i);
 });
 
 test('steady-state compatibility protects the autonomous deployment agent', () => {
