@@ -21,6 +21,7 @@ if (Test-Path -LiteralPath $stateCompatibilityScript) {
 $projectRoot = Get-PDPOneProjectRoot
 $guardScript = Join-Path $PSScriptRoot "Invoke-PDPOneDiskGuard.ps1"
 $policyScript = Join-Path $PSScriptRoot "Ensure-PDPOneRancherPolicy.ps1"
+$compatibilityPreflightScript = Join-Path $PSScriptRoot "Test-PDPOneExactCandidateCompatibility.ps1"
 $scopedScript = Join-Path $PSScriptRoot "Invoke-PDPOneScopedRegistryDeployment.ps1"
 $legacyScript = Join-Path $PSScriptRoot "Invoke-PDPOneRegistryFastDeployment.ps1"
 $innerScript = if (Test-Path -LiteralPath $scopedScript) { $scopedScript } else { $legacyScript }
@@ -28,6 +29,7 @@ $deploymentEngine = if ($innerScript -eq $scopedScript) { "scoped_release_manife
 $downloadRoot = Join-Path $AgentRoot ("downloads\" + $DeploymentId)
 $deploymentOutput = @()
 $deploymentExitCode = 1
+$compatibilityPreflightReport = ""
 $predeployGuardReport = ""
 $postdeployGuardReport = ""
 $rancherPolicyReport = ""
@@ -49,6 +51,47 @@ if ($null -eq $deploymentLease) {
 }
 
 try {
+    Write-PDPOneDeploymentOperation -Lease $deploymentLease -Stage "deployment-compatibility-preflight"
+    if (-not (Test-Path -LiteralPath $compatibilityPreflightScript)) {
+        throw "Deployment compatibility preflight is missing from the installed Agent. Bootstrap the exact accepted preflight helper before retrying."
+    }
+    $preflightOutput = @(& powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File $compatibilityPreflightScript -CommitSha $CommitSha -DeploymentId $DeploymentId -AgentRoot $AgentRoot 2>&1)
+    $preflightExitCode = $LASTEXITCODE
+    if ($preflightExitCode -ne 0) {
+        $preflightMessage = ConvertTo-PDPOneRedactedText (($preflightOutput | ForEach-Object { [string]$_ }) -join [Environment]::NewLine)
+        if ([string]::IsNullOrWhiteSpace($preflightMessage)) {
+            $preflightMessage = "Deployment compatibility preflight failed without a diagnostic message."
+        }
+        $failureReportRoot = Join-Path $AgentRoot "reports"
+        New-Item -ItemType Directory -Force -Path $failureReportRoot | Out-Null
+        $failureReportPath = Join-Path $failureReportRoot ($DeploymentId + ".json")
+        [ordered]@{
+            schema = "pdp-one.deployment-report.v3"
+            deployment_id = $DeploymentId
+            preview_id = $PreviewId
+            approved_commit = $CommitSha
+            previous_commit = ""
+            started_at = [DateTime]::UtcNow.ToString("o")
+            completed_at = [DateTime]::UtcNow.ToString("o")
+            status = "failed"
+            stage = "deployment-compatibility-preflight"
+            change_management_mode = "development_fast"
+            image_source = "github_container_registry"
+            local_image_build_performed = $false
+            production_changed = $false
+            health_profile = "none"
+            changed_services = @()
+            changed_paths = @()
+            active_images = @{}
+            retained_previous_images = @{}
+            connectivity_repair_attempted = $false
+            connectivity_repair_succeeded = $false
+            error = $preflightMessage
+        } | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $failureReportPath -Encoding UTF8
+        throw "Deployment compatibility preflight failed before production changes. $preflightMessage"
+    }
+    if ($preflightOutput.Count -gt 0) { $compatibilityPreflightReport = [string]$preflightOutput[-1] }
+
     Write-PDPOneDeploymentOperation -Lease $deploymentLease -Stage "applying-rancher-policy"
     if (Test-Path -LiteralPath $policyScript) {
         $policyOutput = @(& powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File $policyScript -DockerTimeoutSeconds 300)
@@ -109,6 +152,8 @@ $deploymentReport = if ($deploymentOutput.Count -gt 0) { [string]$deploymentOutp
 if ($deploymentReport -and (Test-Path -LiteralPath $deploymentReport)) {
     try {
         $report = Get-Content -LiteralPath $deploymentReport -Raw -Encoding UTF8 | ConvertFrom-Json
+        $report | Add-Member -NotePropertyName compatibility_preflight_report -NotePropertyValue $compatibilityPreflightReport -Force
+        $report | Add-Member -NotePropertyName compatibility_preflight_passed -NotePropertyValue $true -Force
         $report | Add-Member -NotePropertyName rancher_policy_report -NotePropertyValue $rancherPolicyReport -Force
         $report | Add-Member -NotePropertyName predeploy_disk_guard_report -NotePropertyValue $predeployGuardReport -Force
         $report | Add-Member -NotePropertyName postdeploy_disk_guard_report -NotePropertyValue $postdeployGuardReport -Force
