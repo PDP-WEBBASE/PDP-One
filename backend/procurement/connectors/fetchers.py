@@ -140,20 +140,28 @@ class SessionFetcherBase:
 class HezarehSessionFetcher(SessionFetcherBase):
     """Use one ordinary public cookie session for a complete Hezareh connector run.
 
-    This does not solve or bypass a CAPTCHA/security challenge. It only avoids
-    presenting every list/detail request as a brand-new browser-less visitor and
-    preserves cookies issued by the public site during normal navigation.
+    This does not solve or bypass a CAPTCHA/security challenge. It only preserves
+    cookies and normal page-to-page navigation state issued by the public site.
     """
 
     HOME_URL = "https://www.hezarehinfo.net/"
 
-    def __init__(self, *, allowed_host: str, timeout_seconds: int, retry_count: int):
+    def __init__(
+        self,
+        *,
+        allowed_host: str,
+        timeout_seconds: int,
+        retry_count: int,
+        list_delay_ms: int = 1200,
+    ):
         super().__init__(
             allowed_host=allowed_host,
             timeout_seconds=timeout_seconds,
             retry_count=retry_count,
         )
         self.session_initialized = False
+        self.last_list_url = ""
+        self.list_delay_ms = max(0, min(int(list_delay_ms), 3000))
 
     def _ensure_session(self) -> None:
         if self.session_initialized:
@@ -172,14 +180,14 @@ class HezarehSessionFetcher(SessionFetcherBase):
         )
         self.session_initialized = True
 
-    def _fetch_html(self, url: str) -> FetchedPage:
+    def _fetch_html(self, url: str, *, referer: str | None = None) -> FetchedPage:
         self._ensure_session()
         request = Request(
             url,
             headers={
                 "User-Agent": USER_AGENT,
                 "Accept": "text/html,application/xhtml+xml",
-                "Referer": self.HOME_URL,
+                "Referer": referer or self.HOME_URL,
             },
         )
         return self._fetch(
@@ -188,10 +196,15 @@ class HezarehSessionFetcher(SessionFetcherBase):
         )
 
     def fetch_list(self, page_number: int, page_url: str) -> FetchedPage:
-        return self._fetch_html(page_url)
+        if self.last_list_url and self.list_delay_ms:
+            time.sleep(self.list_delay_ms / 1000)
+        referer = self.last_list_url or self.HOME_URL
+        fetched = self._fetch_html(page_url, referer=referer)
+        self.last_list_url = fetched.url
+        return fetched
 
     def fetch_detail(self, detail_url: str) -> FetchedPage:
-        return self._fetch_html(detail_url)
+        return self._fetch_html(detail_url, referer=self.last_list_url or self.HOME_URL)
 
 
 class SetadEtendFetcher(SessionFetcherBase):
@@ -349,7 +362,15 @@ def fetcher_for(connector, *, allowed_host: str):
         "retry_count": connector.retry_count,
     }
     if connector.key in {"hezareh_tenders", "hezareh_inquiries"}:
-        return HezarehSessionFetcher(**options)
+        configuration = connector.source.configuration or {}
+        try:
+            list_delay_ms = int(configuration.get("hezareh_list_delay_ms", 1200))
+        except (TypeError, ValueError):
+            list_delay_ms = 1200
+        return HezarehSessionFetcher(
+            list_delay_ms=max(0, min(list_delay_ms, 3000)),
+            **options,
+        )
     if connector.key == "setad_tenders":
         return SetadEtendFetcher(rows=connector.page_size_hint or 30, **options)
     if connector.key == "setad_inquiries":
