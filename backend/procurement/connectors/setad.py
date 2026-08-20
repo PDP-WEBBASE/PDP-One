@@ -6,15 +6,12 @@ from urllib.parse import urlencode, urljoin
 
 from bs4 import BeautifulSoup
 
-from .base import (
-    detect_notice_type,
-    normalize_text,
-    page_number_from_url,
-    pagination_page_numbers,
-)
+from .base import detect_notice_type, normalize_text, page_number_from_url
 from .types import ParsedNotice, ParsedPage
 
 MOJIBAKE_MARKERS = ("ط§", "ط±", "ظ…", "غŒ", "ع©", "ظ‡", "ط´")
+SETAD_EPROC_PAGE_RE = re.compile(r"(?:[?&])d-\d+-p=(\d+)")
+SETAD_EPROC_PAGE_SIZE = 30
 
 
 def repair_setad_text(value: Any) -> Any:
@@ -35,6 +32,25 @@ def _organization_name(row: dict[str, Any]) -> str:
     if isinstance(organization, dict):
         return normalize_text(organization.get("name"))
     return normalize_text(organization)
+
+
+def _optional_bool(value: Any) -> bool | None:
+    """Preserve the difference between explicit false and unknown source state."""
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return value
+    if value in (0, 1):
+        return bool(value)
+    return None
+
+
+def _setad_eproc_page_number(url: str, default: int | None = None) -> int | None:
+    """Read DisplayTag's dynamic d-<id>-p page parameter before generic fallbacks."""
+    match = SETAD_EPROC_PAGE_RE.search(html_module.unescape(url or ""))
+    if match:
+        return int(match.group(1))
+    return page_number_from_url(url, default=default)
 
 
 class SetadEtendParser:
@@ -93,10 +109,10 @@ class SetadEtendParser:
                 "proposal_deadline_raw": normalize_text(row.get("proposalDeadlineDate")),
                 "evaluation_deadline_raw": normalize_text(row.get("evaluationDeadlineDate")),
                 "opening_date_raw": normalize_text(row.get("openingDate")),
-                "allowed_contractor": bool(row.get("allowedContractor")),
-                "allowed_consultation": bool(row.get("allowedConsultation")),
-                "allowed_commodity": bool(row.get("allowedCommodity")),
-                "allowed_services": bool(row.get("allowedServices")),
+                "allowed_contractor": _optional_bool(row.get("allowedContractor")),
+                "allowed_consultation": _optional_bool(row.get("allowedConsultation")),
+                "allowed_commodity": _optional_bool(row.get("allowedCommodity")),
+                "allowed_services": _optional_bool(row.get("allowedServices")),
             }
             notices.append(
                 ParsedNotice(
@@ -160,7 +176,7 @@ class SetadEprocParser:
     def parse_list(self, html: str, page_url: str) -> ParsedPage:
         soup = BeautifulSoup(html, "html.parser")
         table = soup.select_one(self.TABLE_SELECTOR)
-        current_page = page_number_from_url(page_url, default=1)
+        current_page = _setad_eproc_page_number(page_url, default=1)
         if table is None:
             body = normalize_text(soup.get_text(" ", strip=True))
             security_challenge = "کد امنیتی" in body
@@ -272,25 +288,47 @@ class SetadEprocParser:
 
         next_page_urls: list[str] = []
         seen: set[str] = set()
+        visible_page_numbers: set[int] = set()
         for anchor in soup.select('a[href*="needs.do"][href*="pager=true"]'):
             href = html_module.unescape(anchor.get("href") or "")
             url = urljoin(page_url, href)
+            page_number = _setad_eproc_page_number(url)
+            if page_number is not None:
+                visible_page_numbers.add(page_number)
             if url not in seen:
                 seen.add(url)
                 next_page_urls.append(url)
         if not notices:
             warnings.append("no_notice_rows_found")
 
-        page_numbers = pagination_page_numbers([page_url, *next_page_urls])
-        total_pages = max(page_numbers) if page_numbers else None
+        future_page_numbers = sorted(
+            page_number
+            for page_number in visible_page_numbers
+            if current_page is not None and page_number > current_page
+        )
+        visible_max_page = max(visible_page_numbers) if visible_page_numbers else None
+        total_pages: int | None = None
         end_of_results: bool | None = None
-        if total_pages is not None and current_page is not None:
-            if notices:
-                end_of_results = current_page >= total_pages
-            elif current_page > total_pages:
-                end_of_results = True
-            else:
+        if current_page is not None:
+            if future_page_numbers:
                 end_of_results = False
+            elif visible_page_numbers:
+                # DisplayTag commonly exposes only a sliding pagination window. The
+                # visible maximum becomes authoritative only when no future page is
+                # linked from the current page, which is a safe end-of-results signal.
+                end_of_results = True
+                total_pages = max(current_page, visible_max_page or current_page)
+            elif not notices:
+                # An empty first list with the expected table is a valid zero-result
+                # list; later empty pages remain unverified and are handled as such.
+                end_of_results = current_page == 1
+                if end_of_results:
+                    total_pages = 0
+            elif current_page == 1 and len(notices) < SETAD_EPROC_PAGE_SIZE:
+                # A short first page with no pagination links is a complete one-page
+                # result. A full-size page without links stays unknown/fail-closed.
+                end_of_results = True
+                total_pages = 1
 
         page_title = normalize_text(soup.title.get_text(" ", strip=True) if soup.title else "")
         return ParsedPage(
@@ -304,6 +342,10 @@ class SetadEprocParser:
                 "page_title": page_title[:200],
                 "table_found": True,
                 "matched_rows": len(rows),
+                "visible_page_numbers": sorted(visible_page_numbers),
+                "visible_max_page": visible_max_page,
+                "future_page_numbers": future_page_numbers,
+                "dynamic_page_parameter": bool(SETAD_EPROC_PAGE_RE.search(html_module.unescape(page_url or ""))),
             },
         )
 
