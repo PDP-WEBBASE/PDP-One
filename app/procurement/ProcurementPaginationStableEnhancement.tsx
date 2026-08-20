@@ -3,6 +3,13 @@
 import { useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import { emitProcurementUiSync } from "./procurementUiSync";
+import {
+  getProcurementStableViewState,
+  installProcurementStableViewState,
+  PROCUREMENT_STABLE_VIEW_STATE_EVENT,
+  stableWorkflowLabel,
+  type ProcurementStableViewState,
+} from "./procurementStableViewState";
 
 type PageSize = 30 | 50 | 100;
 type PaginationMeta = {
@@ -10,35 +17,39 @@ type PaginationMeta = {
   page: number;
   pageSize: PageSize;
   contextKey: string;
-  top?: string;
-  workflow?: string;
+  top: ProcurementStableViewState["top"];
+  workflow: ProcurementStableViewState["workflow"];
 };
-type PaginatedPayload<T = unknown> = {
+type PaginatedPayload<T = Record<string, unknown>> = {
   count?: number;
   next?: string | null;
   previous?: string | null;
   results?: T[];
+  page?: number;
+  page_size?: number;
   [key: string]: unknown;
 };
+type CachedPage = { payload: PaginatedPayload; storedAt: number; meta?: PaginationMeta };
 type PaginationWindow = Window & {
   __pdpPaginationInstalled?: boolean;
   __pdpPaginationNativeFetch?: typeof window.fetch;
   __pdpPaginationPage?: number;
   __pdpPaginationPageSize?: PageSize;
-  __pdpPaginationContextKey?: string;
+  __pdpStableListCache?: Map<string, CachedPage>;
+  __pdpCompactDeadlineStatus?: string;
+  __pdpCompactPublishedOn?: string;
 };
 
-const META_EVENT = "pdp-procurement-pagination-meta";
-const HOST_ID = "pdp-procurement-pagination-host";
 const API_PREFIX = "/api/v1/procurement/";
 const NOTICE_PATH = `${API_PREFIX}notices/`;
 const RECOMMENDED_PATH = `${API_PREFIX}recommended-notices/`;
 const DIRECT_PATH = `${API_PREFIX}direct-opportunities/`;
-const TOP_LABELS = new Set(["داشبورد مدیریتی", "مناقصات", "استعلامات", "ارجاعات مستقیم", "مدیریت زیرسامانه"]);
-const WORKFLOW_LABELS = new Set([
-  "کل مناقصات", "مناقصات ۳ روز اخیر", "کل استعلامات", "استعلامات ۳ روز اخیر", "کل ارجاعات مستقیم",
-  "پیشنهادی", "منتخب", "ارسال‌شده", "نتایج",
-]);
+const COMPACT_NOTICE_PATH = `${API_PREFIX}ui/notices/`;
+const META_EVENT = "pdp-procurement-pagination-meta";
+const DATA_EVENT = "pdp-procurement-compact-notice-data";
+const HOST_ID = "pdp-procurement-pagination-host";
+const CACHE_TTL_MS = 5 * 60 * 1000;
+const MAX_CACHE_ENTRIES = 60;
 const fa = new Intl.NumberFormat("fa-IR");
 
 function normalize(value: string | null | undefined) {
@@ -63,30 +74,8 @@ function requestMethod(input: RequestInfo | URL, init?: RequestInit) {
   return (init?.method || (input instanceof Request ? input.method : "GET")).toUpperCase();
 }
 
-function selectedButtonLabel(labels: Set<string>, excludeNav = false) {
-  const buttons = Array.from(document.querySelectorAll<HTMLButtonElement>("button"));
-  const selected = buttons.find((button) => {
-    if (excludeNav && button.closest("nav")) return false;
-    const label = normalize(button.textContent);
-    if (!labels.has(label)) return false;
-    if (button.getAttribute("aria-selected") === "true" || button.getAttribute("aria-pressed") === "true") return true;
-    return Boolean(normalize(button.getAttribute("class")));
-  });
-  return normalize(selected?.textContent);
-}
-
-function activeTopTab() {
-  return selectedButtonLabel(TOP_LABELS);
-}
-
-function activeWorkflow() {
-  return selectedButtonLabel(WORKFLOW_LABELS, true);
-}
-
 function fieldValue(labelPrefix: string) {
-  const section = findListSection();
-  const root: ParentNode = section || document;
-  const label = Array.from(root.querySelectorAll<HTMLLabelElement>("label")).find((candidate) =>
+  const label = Array.from(document.querySelectorAll<HTMLLabelElement>("label")).find((candidate) =>
     normalize(candidate.textContent).startsWith(labelPrefix),
   );
   const field = label?.querySelector<HTMLInputElement | HTMLSelectElement>("input,select");
@@ -94,6 +83,7 @@ function fieldValue(labelPrefix: string) {
 }
 
 function currentFilters() {
+  const guarded = window as PaginationWindow;
   return {
     search: fieldValue("جست‌وجو"),
     source: fieldValue("منبع"),
@@ -101,41 +91,26 @@ function currentFilters() {
     importance: fieldValue("اهمیت"),
     urgency: fieldValue("فوریت"),
     directType: fieldValue("نوع ارجاع"),
+    deadlineStatus: guarded.__pdpCompactDeadlineStatus || "",
+    publishedOn: guarded.__pdpCompactPublishedOn || "",
   };
 }
 
-function buildContextKey(top: string, workflow: string, filters: ReturnType<typeof currentFilters>) {
-  return JSON.stringify([top, workflow, filters.search, filters.source, filters.province, filters.importance, filters.urgency, filters.directType]);
+function listCache() {
+  const guarded = window as PaginationWindow;
+  if (!guarded.__pdpStableListCache) guarded.__pdpStableListCache = new Map();
+  return guarded.__pdpStableListCache;
 }
 
-function addCommonFilters(url: URL, filters: ReturnType<typeof currentFilters>) {
-  if (filters.search) url.searchParams.set("search", filters.search);
-  else url.searchParams.delete("search");
-  if (filters.province) url.searchParams.set("province", filters.province);
-  else url.searchParams.delete("province");
-  if (filters.importance) url.searchParams.set("importance", filters.importance);
-  else url.searchParams.delete("importance");
-  if (filters.urgency) url.searchParams.set("urgency", filters.urgency);
-  else url.searchParams.delete("urgency");
-}
-
-function jsonResponse(response: Response, payload: unknown) {
-  const headers = new Headers(response.headers);
-  headers.set("Content-Type", "application/json");
-  headers.delete("Content-Length");
-  headers.delete("Content-Encoding");
-  return new Response(JSON.stringify(payload), {
-    status: response.status,
-    statusText: response.statusText,
-    headers,
-  });
-}
-
-function emptyCollectionResponse() {
-  return new Response(JSON.stringify({ count: 0, next: null, previous: null, results: [] }), {
-    status: 200,
-    headers: { "Content-Type": "application/json" },
-  });
+function remember(key: string, value: CachedPage) {
+  const cache = listCache();
+  cache.delete(key);
+  cache.set(key, value);
+  while (cache.size > MAX_CACHE_ENTRIES) {
+    const oldest = cache.keys().next().value as string | undefined;
+    if (!oldest) break;
+    cache.delete(oldest);
+  }
 }
 
 function currentPageState() {
@@ -160,136 +135,231 @@ function emitRefresh() {
   emitProcurementUiSync({ source: "pagination", bulkWorkspace: true });
 }
 
-function configureNoticeRequest(url: URL, top: string, workflow: string, filters: ReturnType<typeof currentFilters>) {
-  url.pathname = workflow === "پیشنهادی" ? RECOMMENDED_PATH : NOTICE_PATH;
-  url.search = "";
-  url.searchParams.set("resolved_notice_type", top === "مناقصات" ? "tender" : "inquiry");
-  url.searchParams.set("ordering", "-publication_sort,-last_seen_at,-id");
+function jsonResponse(response: Response, payload: unknown) {
+  const headers = new Headers(response.headers);
+  headers.set("Content-Type", "application/json");
+  headers.delete("Content-Length");
+  headers.delete("Content-Encoding");
+  return new Response(JSON.stringify(payload), {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
+}
 
-  if (workflow === "مناقصات ۳ روز اخیر" || workflow === "استعلامات ۳ روز اخیر") {
-    url.searchParams.set("recent_days", "3");
-  } else if (workflow === "پیشنهادی") {
-    url.searchParams.set("actionable", "true");
-  } else if (workflow === "منتخب") {
-    url.searchParams.set("workflow_view", "selected");
-  } else if (workflow === "ارسال‌شده") {
-    url.searchParams.set("workflow_view", "submitted");
-  } else if (workflow === "نتایج") {
-    url.searchParams.set("workflow_view", "results");
+function emptyCollectionResponse() {
+  return new Response(JSON.stringify({ count: 0, next: null, previous: null, results: [] }), {
+    status: 200,
+    headers: { "Content-Type": "application/json" },
+  });
+}
+
+function stateStillMatches(expected: ProcurementStableViewState) {
+  const current = getProcurementStableViewState();
+  return current.top === expected.top && current.workflow === expected.workflow;
+}
+
+function workflowCode(workflow: ProcurementStableViewState["workflow"]) {
+  if (workflow === "recommended") return "recommended";
+  if (workflow === "selected") return "selected";
+  if (workflow === "submitted") return "submitted";
+  if (workflow === "results") return "results";
+  return "recent";
+}
+
+function addFilters(params: URLSearchParams, filters: ReturnType<typeof currentFilters>) {
+  if (filters.search) params.set("search", filters.search);
+  if (filters.source) params.set("source_name", filters.source);
+  if (filters.province) params.set("province", filters.province);
+  if (filters.importance) params.set("importance", filters.importance);
+  if (filters.urgency) params.set("urgency", filters.urgency);
+  if (filters.deadlineStatus) params.set("deadline_status", filters.deadlineStatus);
+  if (filters.publishedOn) params.set("published_on", filters.publishedOn);
+}
+
+function normalizeCompactPayload(payload: PaginatedPayload, state: ProcurementStableViewState) {
+  const workflow = workflowCode(state.workflow);
+  const results = Array.isArray(payload.results) ? payload.results.map((item) => {
+    const normalizedItem = { ...item } as Record<string, unknown>;
+    const publishedDate = String(normalizedItem.published_date || "").trim();
+    if (workflow === "recent" && publishedDate) {
+      normalizedItem.first_seen_at = `${publishedDate}T12:00:00+03:30`;
+    }
+    if (workflow === "recommended") normalizedItem.is_recommended = true;
+    return normalizedItem;
+  }) : [];
+  return { ...payload, next: null, previous: null, results };
+}
+
+function dispatchNoticeEvents(payload: PaginatedPayload, meta: PaginationMeta) {
+  window.dispatchEvent(new CustomEvent(DATA_EVENT, { detail: payload }));
+  window.dispatchEvent(new CustomEvent<PaginationMeta>(META_EVENT, { detail: meta }));
+}
+
+async function boundedJsonFetch(
+  nativeFetch: typeof window.fetch,
+  url: string,
+  init: RequestInit | undefined,
+  cacheKey: string | null,
+  meta: PaginationMeta | undefined,
+  state: ProcurementStableViewState,
+  dispatchData = false,
+) {
+  if (cacheKey) {
+    const cached = listCache().get(cacheKey);
+    if (cached && Date.now() - cached.storedAt <= CACHE_TTL_MS) {
+      if (cached.meta && stateStillMatches(state)) {
+        if (dispatchData) window.dispatchEvent(new CustomEvent(DATA_EVENT, { detail: cached.payload }));
+        window.dispatchEvent(new CustomEvent<PaginationMeta>(META_EVENT, { detail: cached.meta }));
+      }
+      return new Response(JSON.stringify(cached.payload), { status: 200, headers: { "Content-Type": "application/json" } });
+    }
+    if (cached) listCache().delete(cacheKey);
   }
 
-  addCommonFilters(url, filters);
-  if (filters.source) url.searchParams.set("source_name", filters.source);
-}
-
-function configureDirectRequest(url: URL, workflow: string, filters: ReturnType<typeof currentFilters>) {
-  url.pathname = DIRECT_PATH;
-  url.search = "";
-  url.searchParams.set("ordering", "-last_activity_at,-id");
-  if (workflow === "پیشنهادی") url.searchParams.set("workflow_view", "recommended");
-  else if (workflow === "منتخب") url.searchParams.set("workflow_view", "selected");
-  else if (workflow === "ارسال‌شده") url.searchParams.set("workflow_view", "submitted");
-  else if (workflow === "نتایج") url.searchParams.set("workflow_view", "results");
-  addCommonFilters(url, filters);
-  if (filters.directType) url.searchParams.set("opportunity_type", filters.directType);
-}
-
-function configureDashboardRequest(url: URL, isDirect: boolean) {
-  url.search = "";
-  if (isDirect) {
-    url.pathname = DIRECT_PATH;
-    url.searchParams.set("workflow_view", "active");
-    url.searchParams.set("ordering", "-last_activity_at,-id");
-  } else {
-    url.pathname = NOTICE_PATH;
-    url.searchParams.set("workflow_view", "active");
-    url.searchParams.set("ordering", "-publication_sort,-last_seen_at,-id");
+  const response = await nativeFetch(url, init);
+  if (!response.ok || !(response.headers.get("content-type") || "").includes("application/json")) return response;
+  try {
+    const raw = await response.clone().json() as PaginatedPayload;
+    const payload = { ...raw, next: null, previous: null };
+    if (cacheKey) remember(cacheKey, { payload, storedAt: Date.now(), meta });
+    if (meta && stateStillMatches(state)) {
+      if (dispatchData) dispatchNoticeEvents(payload, meta);
+      else window.dispatchEvent(new CustomEvent<PaginationMeta>(META_EVENT, { detail: meta }));
+    }
+    return jsonResponse(response, payload);
+  } catch {
+    return response;
   }
 }
 
 function installPaginationFetchGuard() {
   if (typeof window === "undefined") return;
+  installProcurementStableViewState();
   const guarded = window as PaginationWindow;
   if (guarded.__pdpPaginationInstalled) return;
+  guarded.__pdpPaginationInstalled = true;
+  guarded.__pdpPaginationPage = guarded.__pdpPaginationPage || 1;
+  guarded.__pdpPaginationPageSize = guarded.__pdpPaginationPageSize || 50;
   const nativeFetch = window.fetch.bind(window);
   guarded.__pdpPaginationNativeFetch = nativeFetch;
-  guarded.__pdpPaginationInstalled = true;
-  guarded.__pdpPaginationPage = 1;
-  guarded.__pdpPaginationPageSize = 50;
 
   window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
-    if (requestMethod(input, init) !== "GET") return nativeFetch(input, init);
+    const method = requestMethod(input, init);
     const original = parsedUrl(requestUrl(input));
     if (!original || original.origin !== window.location.origin) return nativeFetch(input, init);
-    const isNoticeCollection = original.pathname === NOTICE_PATH || original.pathname === RECOMMENDED_PATH;
-    const isDirectCollection = original.pathname === DIRECT_PATH;
-    if (!isNoticeCollection && !isDirectCollection) return nativeFetch(input, init);
 
-    const top = activeTopTab();
-    const workflow = activeWorkflow();
+    if (method !== "GET") {
+      if (original.pathname.startsWith(API_PREFIX)) listCache().clear();
+      return nativeFetch(input, init);
+    }
+
+    const isNotice = original.pathname === NOTICE_PATH || original.pathname === RECOMMENDED_PATH;
+    const isDirect = original.pathname === DIRECT_PATH;
+    if (!isNotice && !isDirect) return nativeFetch(input, init);
+
+    const state = getProcurementStableViewState();
+    const pageState = currentPageState();
     const filters = currentFilters();
-    const contextKey = buildContextKey(top, workflow, filters);
-    const activeNoticeTab = top === "مناقصات" || top === "استعلامات";
-    const activeDirectTab = top === "ارجاعات مستقیم";
-    const dashboard = top === "داشبورد مدیریتی" || !top;
 
-    if (!dashboard && isNoticeCollection && !activeNoticeTab) return emptyCollectionResponse();
-    if (!dashboard && isDirectCollection && !activeDirectTab) return emptyCollectionResponse();
-
-    if (!dashboard && guarded.__pdpPaginationContextKey !== contextKey) {
-      guarded.__pdpPaginationContextKey = contextKey;
-      guarded.__pdpPaginationPage = 1;
-    }
-    const state = currentPageState();
-    const nextUrl = new URL(original.toString());
-
-    if (dashboard) {
-      configureDashboardRequest(nextUrl, isDirectCollection);
-      nextUrl.searchParams.set("page", "1");
-      nextUrl.searchParams.set("page_size", "50");
-    } else if (activeNoticeTab && isNoticeCollection) {
-      configureNoticeRequest(nextUrl, top, workflow, filters);
-      nextUrl.searchParams.set("page", String(state.page));
-      nextUrl.searchParams.set("page_size", String(state.pageSize));
-    } else if (activeDirectTab && isDirectCollection) {
-      configureDirectRequest(nextUrl, workflow, filters);
-      nextUrl.searchParams.set("page", String(state.page));
-      nextUrl.searchParams.set("page_size", String(state.pageSize));
-    }
-
-    const response = await nativeFetch(`${nextUrl.pathname}${nextUrl.search}`, init);
-    if (!response.ok || !(response.headers.get("content-type") || "").includes("application/json")) return response;
-    try {
-      const payload = await response.clone().json() as PaginatedPayload;
-      if (!Array.isArray(payload) && Array.isArray(payload.results)) {
-        if (!dashboard) {
-          window.dispatchEvent(new CustomEvent<PaginationMeta>(META_EVENT, { detail: {
-            count: Number(payload.count || 0),
-            page: state.page,
-            pageSize: state.pageSize,
-            contextKey,
-            top,
-            workflow,
-          } }));
-        }
-        return jsonResponse(response, { ...payload, next: null, previous: null });
+    if (state.top === "tenders" || state.top === "inquiries") {
+      if (isDirect) return emptyCollectionResponse();
+      const params = new URLSearchParams();
+      params.set("notice_type", state.top === "tenders" ? "tender" : "inquiry");
+      params.set("workflow", workflowCode(state.workflow));
+      params.set("page", String(pageState.page));
+      params.set("page_size", String(pageState.pageSize));
+      // recent_days/publication_sort/actionable remain server-owned compatibility concepts.
+      // The compact endpoint applies the same three-day publication_sort and actionable semantics.
+      addFilters(params, filters);
+      const contextKey = JSON.stringify([state.top, state.workflow, ...Array.from(params.entries())]);
+      const meta: PaginationMeta = {
+        count: 0,
+        page: pageState.page,
+        pageSize: pageState.pageSize,
+        contextKey,
+        top: state.top,
+        workflow: state.workflow,
+      };
+      const cacheKey = `notice:${contextKey}`;
+      const response = await boundedJsonFetch(
+        nativeFetch,
+        `${COMPACT_NOTICE_PATH}?${params.toString()}`,
+        init,
+        cacheKey,
+        meta,
+        state,
+        false,
+      );
+      if (!response.ok || !(response.headers.get("content-type") || "").includes("application/json")) return response;
+      try {
+        const raw = await response.clone().json() as PaginatedPayload;
+        const normalized = normalizeCompactPayload(raw, state);
+        const correctedMeta = { ...meta, count: Number(normalized.count || 0) };
+        remember(cacheKey, { payload: normalized, storedAt: Date.now(), meta: correctedMeta });
+        if (stateStillMatches(state)) dispatchNoticeEvents(normalized, correctedMeta);
+        return jsonResponse(response, normalized);
+      } catch {
+        return response;
       }
-    } catch {
+    }
+
+    if (state.top === "direct") {
+      if (isNotice) return emptyCollectionResponse();
+      const nextUrl = new URL(original.toString());
+      nextUrl.search = "";
+      nextUrl.searchParams.set("ordering", "-last_activity_at,-id");
+      if (state.workflow === "recommended") nextUrl.searchParams.set("workflow_view", "recommended");
+      else if (state.workflow === "selected") nextUrl.searchParams.set("workflow_view", "selected");
+      else if (state.workflow === "submitted") nextUrl.searchParams.set("workflow_view", "submitted");
+      else if (state.workflow === "results") nextUrl.searchParams.set("workflow_view", "results");
+      if (filters.search) nextUrl.searchParams.set("search", filters.search);
+      if (filters.province) nextUrl.searchParams.set("province", filters.province);
+      if (filters.importance) nextUrl.searchParams.set("importance", filters.importance);
+      if (filters.urgency) nextUrl.searchParams.set("urgency", filters.urgency);
+      if (filters.directType) nextUrl.searchParams.set("opportunity_type", filters.directType);
+      nextUrl.searchParams.set("page", String(pageState.page));
+      nextUrl.searchParams.set("page_size", String(pageState.pageSize));
+      const contextKey = JSON.stringify([state.top, state.workflow, nextUrl.search]);
+      const meta: PaginationMeta = { count: 0, page: pageState.page, pageSize: pageState.pageSize, contextKey, top: state.top, workflow: state.workflow };
+      const cacheKey = `direct:${contextKey}`;
+      const response = await boundedJsonFetch(nativeFetch, `${nextUrl.pathname}${nextUrl.search}`, init, cacheKey, meta, state);
+      if (!response.ok || !(response.headers.get("content-type") || "").includes("application/json")) return response;
+      try {
+        const payload = await response.clone().json() as PaginatedPayload;
+        const correctedMeta = { ...meta, count: Number(payload.count || 0) };
+        remember(cacheKey, { payload, storedAt: Date.now(), meta: correctedMeta });
+        if (stateStillMatches(state)) window.dispatchEvent(new CustomEvent<PaginationMeta>(META_EVENT, { detail: correctedMeta }));
+      } catch {
+        // Preserve the real response.
+      }
       return response;
     }
-    return response;
+
+    // Dashboard/management bootstrap reads stay bounded to one page so V13 never
+    // follows thousands of records in the background.
+    const nextUrl = new URL(original.toString());
+    nextUrl.searchParams.set("page", "1");
+    nextUrl.searchParams.set("page_size", "50");
+    if (isNotice) {
+      nextUrl.searchParams.set("workflow_view", "active");
+      nextUrl.searchParams.set("ordering", "-publication_sort,-last_seen_at,-id");
+    } else {
+      nextUrl.searchParams.set("workflow_view", "active");
+      nextUrl.searchParams.set("ordering", "-last_activity_at,-id");
+    }
+    return boundedJsonFetch(nativeFetch, `${nextUrl.pathname}${nextUrl.search}`, init, null, undefined, state);
   };
 }
 
 function findListSection() {
-  const top = activeTopTab();
-  if (!new Set(["مناقصات", "استعلامات", "ارجاعات مستقیم"]).has(top)) return null;
-  const workflow = activeWorkflow();
-  if (!workflow) return null;
-  const workflowButton = Array.from(document.querySelectorAll<HTMLButtonElement>("button")).find((button) =>
-    normalize(button.textContent) === workflow && Boolean(normalize(button.getAttribute("class"))),
+  const state = getProcurementStableViewState();
+  if (state.top !== "tenders" && state.top !== "inquiries" && state.top !== "direct") return null;
+  const expectedLabel = stableWorkflowLabel(state);
+  const button = Array.from(document.querySelectorAll<HTMLButtonElement>("button")).find((candidate) =>
+    !candidate.closest("nav") && normalize(candidate.textContent) === expectedLabel,
   );
-  return workflowButton?.closest("section") || null;
+  return button?.closest("section") || null;
 }
 
 function ensureHost() {
@@ -320,25 +390,20 @@ function PaginationBar({ meta }: { meta: PaginationMeta }) {
   const totalPages = Math.max(1, Math.ceil(meta.count / meta.pageSize));
   const current = Math.min(meta.page, totalPages);
   const tokens = useMemo(() => pageTokens(current, totalPages), [current, totalPages]);
-  const buttonStyle = {
-    minWidth: 34, minHeight: 32, border: "1px solid #cbd5e1", borderRadius: 8,
-    background: "white", color: "#334155", font: "inherit", cursor: "pointer",
-  } as const;
-  const activeStyle = { ...buttonStyle, background: "#155e75", color: "white", borderColor: "#155e75", fontWeight: 700 } as const;
-
+  const buttonStyle = { minWidth:34,minHeight:32,border:"1px solid #cbd5e1",borderRadius:8,background:"white",color:"#334155",font:"inherit",cursor:"pointer" } as const;
+  const activeStyle = { ...buttonStyle,background:"#155e75",color:"white",borderColor:"#155e75",fontWeight:700 } as const;
   return <div dir="rtl" style={{marginTop:12,padding:"10px 12px",border:"1px solid #dbe3ec",borderRadius:12,background:"#f8fafc",display:"flex",alignItems:"center",justifyContent:"space-between",gap:10,flexWrap:"wrap"}}>
     <div style={{display:"flex",alignItems:"center",gap:7,flexWrap:"wrap"}}>
-      <button type="button" disabled={current <= 1} style={{...buttonStyle,opacity:current <= 1 ? 0.45 : 1}} onClick={() => { setPage(current - 1); emitRefresh(); }}>قبلی</button>
-      {tokens.map((token, index) => token === "…" ? <span key={`ellipsis-${index}`} style={{padding:"0 2px"}}>…</span> : <button key={token} type="button" style={token === current ? activeStyle : buttonStyle} onClick={() => { setPage(token); emitRefresh(); }}>{fa.format(token)}</button>)}
-      <button type="button" disabled={current >= totalPages} style={{...buttonStyle,opacity:current >= totalPages ? 0.45 : 1}} onClick={() => { setPage(current + 1); emitRefresh(); }}>بعدی</button>
+      <button type="button" disabled={current <= 1} style={{...buttonStyle,opacity:current <= 1 ? .45 : 1}} onClick={() => { setPage(current - 1); emitRefresh(); }}>قبلی</button>
+      {tokens.map((token,index) => token === "…" ? <span key={`ellipsis-${index}`}>…</span> : <button key={token} type="button" style={token === current ? activeStyle : buttonStyle} onClick={() => { setPage(token); emitRefresh(); }}>{fa.format(token)}</button>)}
+      <button type="button" disabled={current >= totalPages} style={{...buttonStyle,opacity:current >= totalPages ? .45 : 1}} onClick={() => { setPage(current + 1); emitRefresh(); }}>بعدی</button>
     </div>
     <div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap",fontSize:12,color:"#475569"}}>
-      <b>صفحه {fa.format(current)} از {fa.format(totalPages)} — مجموع {fa.format(meta.count)} رکورد</b>
-      <label style={{display:"flex",alignItems:"center",gap:6}}>نمایش در صفحه
-        <select value={meta.pageSize} onChange={(event) => { setPageSize(Number(event.target.value) as PageSize); emitRefresh(); }} style={{minHeight:32,border:"1px solid #cbd5e1",borderRadius:8,background:"white",padding:"4px 8px",font:"inherit"}}>
-          <option value={30}>۳۰</option>
-          <option value={50}>۵۰</option>
-          <option value={100}>۱۰۰</option>
+      <b>صفحه {fa.format(current)} از {fa.format(totalPages)}</b>
+      <span>مجموع {fa.format(meta.count)} رکورد</span>
+      <label style={{display:"flex",alignItems:"center",gap:5}}>نمایش در صفحه
+        <select value={meta.pageSize} onChange={(event) => { setPageSize(Number(event.target.value) as PageSize); emitRefresh(); }}>
+          <option value={30}>۳۰</option><option value={50}>۵۰</option><option value={100}>۱۰۰</option>
         </select>
       </label>
     </div>
@@ -347,116 +412,53 @@ function PaginationBar({ meta }: { meta: PaginationMeta }) {
 
 export default function ProcurementPaginationStableEnhancement() {
   installPaginationFetchGuard();
-  const [host, setHost] = useState<HTMLElement | null>(null);
   const [meta, setMeta] = useState<PaginationMeta | null>(null);
+  const [host, setHost] = useState<HTMLElement | null>(null);
 
   useEffect(() => {
-    let searchTimer = 0;
-    let syncTimer = 0;
-    let hostFrame = 0;
-    let transitionFrame = 0;
-
-    const refreshHost = () => {
-      if (hostFrame) return;
-      hostFrame = window.requestAnimationFrame(() => {
-        hostFrame = 0;
-        const nextHost = ensureHost();
-        setHost((current) => current === nextHost ? current : nextHost);
-      });
+    let filterTimer = 0;
+    let frame = 0;
+    const scheduleHost = () => {
+      window.cancelAnimationFrame(frame);
+      frame = window.requestAnimationFrame(() => setHost(ensureHost()));
     };
-
-    const runRefresh = () => {
+    const refreshForState = () => {
+      setMeta(null);
       setPage(1);
-      emitRefresh();
-      refreshHost();
+      scheduleHost();
+      window.requestAnimationFrame(emitRefresh);
     };
-
-    const refreshAfterCommit = (expectedLabel = "", topLevel = false, attempt = 0) => {
-      window.cancelAnimationFrame(transitionFrame);
-      transitionFrame = window.requestAnimationFrame(() => {
-        const active = topLevel ? activeTopTab() : activeWorkflow();
-        if (expectedLabel && active !== expectedLabel && attempt < 3) {
-          refreshAfterCommit(expectedLabel, topLevel, attempt + 1);
-          return;
-        }
-        runRefresh();
-      });
-    };
-
-    const resetAndRefresh = (delay = 0) => {
-      window.clearTimeout(syncTimer);
-      syncTimer = window.setTimeout(() => refreshAfterCommit(), delay);
-    };
-
+    const onState = () => refreshForState();
     const onMeta = (event: Event) => {
       const detail = (event as CustomEvent<PaginationMeta>).detail;
       if (!detail) return;
-      const top = activeTopTab();
-      const workflow = activeWorkflow();
-      if (detail.top && detail.top !== top) return;
-      if (detail.workflow && detail.workflow !== workflow) return;
+      const state = getProcurementStableViewState();
+      if (detail.top !== state.top || detail.workflow !== state.workflow) return;
       setMeta(detail);
-      refreshHost();
+      scheduleHost();
+    };
+    const onFieldChange = (event: Event) => {
+      const field = event.target instanceof HTMLInputElement || event.target instanceof HTMLSelectElement ? event.target : null;
+      const label = field?.closest("label");
+      if (!field || !label || !findListSection()?.contains(field)) return;
+      const text = normalize(label.textContent);
+      if (!["جست‌وجو","منبع","استان","اهمیت","فوریت","نوع ارجاع"].some((prefix) => text.startsWith(prefix))) return;
+      window.clearTimeout(filterTimer);
+      filterTimer = window.setTimeout(() => { setPage(1); setMeta(null); emitRefresh(); }, field instanceof HTMLInputElement ? 250 : 0);
     };
 
-    const onClick = (event: MouseEvent) => {
-      const button = (event.target as HTMLElement | null)?.closest("button");
-      const label = normalize(button?.textContent);
-      if (TOP_LABELS.has(label)) {
-        setMeta(null);
-        refreshAfterCommit(label, true);
-        return;
-      }
-      if (WORKFLOW_LABELS.has(label)) {
-        setMeta(null);
-        refreshAfterCommit(label, false);
-        return;
-      }
-      if (label === "پاک‌کردن") {
-        setMeta(null);
-        refreshAfterCommit();
-      }
-    };
-
-    const onInput = (event: Event) => {
-      const target = event.target as HTMLInputElement | null;
-      if (!target || target.tagName !== "INPUT") return;
-      const label = target.closest("label");
-      if (!label || !normalize(label.textContent).startsWith("جست‌وجو")) return;
-      setMeta(null);
-      window.clearTimeout(searchTimer);
-      searchTimer = window.setTimeout(() => resetAndRefresh(0), 350);
-    };
-
-    const onChange = (event: Event) => {
-      const target = event.target as HTMLSelectElement | null;
-      if (!target || target.tagName !== "SELECT" || target.closest(`#${HOST_ID}`)) return;
-      const label = target.closest("label");
-      const text = normalize(label?.textContent);
-      if (["منبع", "استان", "اهمیت", "فوریت", "نوع ارجاع"].some((prefix) => text.startsWith(prefix))) {
-        setMeta(null);
-        refreshAfterCommit();
-      }
-    };
-
-    const observer = new MutationObserver(refreshHost);
-    observer.observe(document.body, { childList: true, subtree: true });
+    window.addEventListener(PROCUREMENT_STABLE_VIEW_STATE_EVENT, onState);
     window.addEventListener(META_EVENT, onMeta);
-    document.addEventListener("click", onClick);
-    document.addEventListener("input", onInput);
-    document.addEventListener("change", onChange);
-    refreshHost();
-
+    document.addEventListener("input", onFieldChange, true);
+    document.addEventListener("change", onFieldChange, true);
+    scheduleHost();
     return () => {
-      observer.disconnect();
+      window.removeEventListener(PROCUREMENT_STABLE_VIEW_STATE_EVENT, onState);
       window.removeEventListener(META_EVENT, onMeta);
-      document.removeEventListener("click", onClick);
-      document.removeEventListener("input", onInput);
-      document.removeEventListener("change", onChange);
-      window.clearTimeout(searchTimer);
-      window.clearTimeout(syncTimer);
-      window.cancelAnimationFrame(hostFrame);
-      window.cancelAnimationFrame(transitionFrame);
+      document.removeEventListener("input", onFieldChange, true);
+      document.removeEventListener("change", onFieldChange, true);
+      window.clearTimeout(filterTimer);
+      window.cancelAnimationFrame(frame);
     };
   }, []);
 
