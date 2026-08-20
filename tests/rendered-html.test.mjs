@@ -101,7 +101,7 @@ test("keeps approved V12 structure and compact list enhancements", async () => {
 
 test("does not silently replace API failures with sample procurement data", async () => {
   const source = await readFile(new URL("../app/procurement/ProcurementWorkspaceV13.tsx", import.meta.url), "utf8");
-  assert.match(source, /setLoadError/);
+  assert.match(source, /setMode\(error instanceof Error && error\.message === "unauthorized" \? "unauthorized" : "error"\)/);
   assert.match(source, /داده نمونه نمایش داده نمی‌شود/);
   assert.doesNotMatch(source, /fallbackNotices/);
   assert.doesNotMatch(source, /sampleNotices/);
