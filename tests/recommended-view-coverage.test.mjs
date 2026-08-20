@@ -4,14 +4,14 @@ import test from "node:test";
 
 const v23 = fs.readFileSync("app/procurement/ProcurementWorkspaceV23.tsx", "utf8");
 const v22 = fs.readFileSync("app/procurement/ProcurementWorkspaceV22.tsx", "utf8");
-const pagination = fs.readFileSync("app/procurement/ProcurementPaginationEnhancement.tsx", "utf8");
+const pagination = fs.readFileSync("app/procurement/ProcurementPaginationStableEnhancement.tsx", "utf8");
 const baseWorkspace = fs.readFileSync("app/procurement/ProcurementWorkspaceV13.tsx", "utf8");
 const page = fs.readFileSync("app/procurement/page.tsx", "utf8");
 const backendView = fs.readFileSync("backend/procurement/views_recommended.py", "utf8");
 
-test("procurement page activates V23 with server pagination", () => {
+test("procurement page activates V23 with stable server pagination", () => {
   assert.match(page, /ProcurementWorkspaceV23/);
-  assert.match(v23, /ProcurementPaginationEnhancement/);
+  assert.match(v23, /ProcurementPaginationStableEnhancement/);
   assert.match(v23, /ProcurementWorkspaceV22/);
   assert.match(v22, /ProcurementWorkspaceV21/);
 });
