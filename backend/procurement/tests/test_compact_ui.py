@@ -76,17 +76,24 @@ class CompactProcurementUiTests(APITestCase):
         )
 
     def link_source(self, notice, *, key, name, record_id):
-        source = ProcurementSource.objects.create(
+        source, _ = ProcurementSource.objects.get_or_create(
             key=key,
-            name=name,
-            base_url=f"https://{key}.example.com",
+            defaults={
+                "name": name,
+                "base_url": f"https://{key}.example.com",
+            },
         )
-        connector = ProcurementConnector.objects.create(
+        connector = ProcurementConnector.objects.filter(
             source=source,
-            key=f"{key}_{notice.resolved_notice_type}",
             notice_type=notice.resolved_notice_type,
-            list_url_template=f"https://{key}.example.com/list?page={{page}}",
-        )
+        ).first()
+        if connector is None:
+            connector = ProcurementConnector.objects.create(
+                source=source,
+                key=f"test_{key}_{notice.resolved_notice_type}",
+                notice_type=notice.resolved_notice_type,
+                list_url_template=f"https://{key}.example.com/list?page={{page}}",
+            )
         source_notice = SourceNotice.objects.create(
             connector=connector,
             source_record_id=record_id,
@@ -108,24 +115,32 @@ class CompactProcurementUiTests(APITestCase):
             match_type=NoticeSourceLink.MatchType.EXACT,
             confidence=100,
         )
+        return source
 
     def test_compact_feed_returns_all_sources_in_requested_priority(self):
         notice = self.make_notice("فراخوان چندمنبعی")
         self.link_source(notice, key="parsnamad", name="پارس‌نماد داده", record_id="p-1")
-        self.link_source(notice, key="hezareh", name="هزاره", record_id="h-1")
+        hezareh = self.link_source(notice, key="hezareh", name="هزاره", record_id="h-1")
         self.link_source(notice, key="setad", name="ستاد ایران", record_id="s-1")
 
         response = self.client.get("/api/v1/procurement/ui/notices/?notice_type=inquiry&workflow=recent&page=1&page_size=50")
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.data["count"], 1)
         row = response.data["results"][0]
-        self.assertEqual([item["name"] for item in row["sources"]], ["ستاد ایران", "هزاره", "پارس‌نماد داده"])
-        self.assertEqual(row["source_name"], "ستاد ایران")
+        self.assertEqual([item["key"] for item in row["sources"]], ["setad", "hezareh", "parsnamad"])
+        self.assertEqual(row["sources"][0]["key"], "setad")
 
-        filtered = self.client.get("/api/v1/procurement/ui/notices/?notice_type=inquiry&workflow=recent&source_name=هزاره")
+        filtered = self.client.get(
+            "/api/v1/procurement/ui/notices/",
+            {
+                "notice_type": "inquiry",
+                "workflow": "recent",
+                "source_name": hezareh.name,
+            },
+        )
         self.assertEqual(filtered.status_code, 200)
         self.assertEqual(filtered.data["count"], 1)
-        self.assertEqual(filtered.data["results"][0]["source_name"], "هزاره")
+        self.assertEqual(filtered.data["results"][0]["source_name"], hezareh.name)
         self.assertEqual(len(filtered.data["results"][0]["sources"]), 3)
 
     def test_deadline_status_and_published_date_are_server_side_filters(self):
