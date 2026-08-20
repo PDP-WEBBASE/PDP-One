@@ -108,20 +108,33 @@ test("does not silently replace API failures with sample procurement data", asyn
 });
 
 test("analysis settings are persisted through versioned live APIs", async () => {
-  const source = await readFile(new URL("../app/procurement/AnalysisContextManager.tsx", import.meta.url), "utf8");
-  assert.match(source, /analysis-context\/active/);
-  assert.match(source, /analysis-context\/versions/);
-  assert.match(source, /analysis-context\/activate/);
-  assert.match(source, /analysis-context\/draft/);
-  assert.match(source, /method:\s*"POST"/);
-  assert.match(source, /X-CSRFToken/);
+  const manager = await readFile(new URL("../app/procurement/AnalysisContextManager.tsx", import.meta.url), "utf8");
+  const wrapper = await readFile(new URL("../app/procurement/ProcurementWorkspaceV14.tsx", import.meta.url), "utf8");
+  assert.match(manager, /analysis-contexts\/create-draft/);
+  assert.match(manager, /analysis-context-files/);
+  assert.match(manager, /\/activate\//);
+  assert.match(manager, /method:\s*"PATCH"/);
+  assert.match(manager, /method:\s*"DELETE"/);
+  assert.match(manager, /ذخیره و قفل/);
+  assert.match(manager, /فعال‌سازی نسخه/);
+  assert.match(manager, /کلیدواژه‌های فعال/);
+  assert.match(manager, /پروفایل خلاصه شرکت/);
+  assert.match(wrapper, /تنظیمات تحلیل واقعی/);
 });
 
 test("PDP engine creates guarded requests and keeps results as human-reviewed drafts", async () => {
-  const source = await readFile(new URL("../app/procurement/AnalysisEnginePanel.tsx", import.meta.url), "utf8");
-  assert.match(source, /analysis-engine\/requests/);
-  assert.match(source, /analysis-engine\/runs/);
-  assert.match(source, /method:\s*"POST"/);
-  assert.match(source, /X-CSRFToken/);
-  assert.match(source, /پیش‌نویس/);
+  const panel = await readFile(new URL("../app/procurement/AnalysisEnginePanel.tsx", import.meta.url), "utf8");
+  const wrapper = await readFile(new URL("../app/procurement/ProcurementWorkspaceV14.tsx", import.meta.url), "utf8");
+  const mcp = await readFile(new URL("../services/pdp_mcp/server.py", import.meta.url), "utf8");
+  assert.match(wrapper, /موتور تحلیل PDP/);
+  assert.match(panel, /const ENGINE_API = `\$\{API_BASE\}\/procurement\/analysis\/engine`/);
+  assert.match(panel, /fetch\(`\$\{ENGINE_API\}\/start\//);
+  assert.match(panel, /پیش‌نویس ChatGPT/);
+  assert.match(panel, /review_status/);
+  assert.match(panel, /شروع درخواست PDP/);
+  assert.match(mcp, /start_procurement_analysis/);
+  assert.match(mcp, /get_procurement_analysis_work/);
+  assert.match(mcp, /save_procurement_notice_analysis/);
+  assert.match(mcp, /finish_procurement_analysis/);
+  assert.match(mcp, /Human review is always required/);
 });
