@@ -29,6 +29,7 @@ function date(value: string) {
 }
 
 export default function InternetUsageMonitoringPanel({ onClose }: { onClose: () => void }) {
+  // Deployment verifies this content-addressed web build before accepting it as live.
   const [data, setData] = useState<Usage | null>(null);
   const [message, setMessage] = useState("");
 
