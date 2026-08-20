@@ -8,7 +8,8 @@ param(
     [string]$OpenWebTaskName = "PDP One Open Local Web",
     [string]$McpWatchdogTaskName = "PDP One MCP Self Heal",
     [string]$DeploymentAgentWatchdogTaskName = "PDP One Deployment Agent Watchdog",
-    [string]$DiskGuardTaskName = "PDP One Disk Guard"
+    [string]$DiskGuardTaskName = "PDP One Disk Guard",
+    [switch]$ApplyIfNeeded
 )
 
 $ErrorActionPreference = "Stop"
@@ -17,6 +18,17 @@ Set-StrictMode -Version Latest
 
 if (-not $ProjectRoot) { $ProjectRoot = Get-PDPOneProjectRoot }
 $ProjectRoot = (Resolve-Path -LiteralPath $ProjectRoot).Path
+$taskPolicyVersion = "2026-08-21-hidden-background-tasks-v4"
+$taskPolicyRoot = "C:\ProgramData\PDP-One\maintenance"
+$taskPolicyPath = Join-Path $taskPolicyRoot "startup-task-policy.version"
+if ($ApplyIfNeeded -and (Test-Path -LiteralPath $taskPolicyPath)) {
+    $installedPolicyVersion = ([IO.File]::ReadAllText($taskPolicyPath)).Trim()
+    if ($installedPolicyVersion -eq $taskPolicyVersion) {
+        Write-Host "PDP One Scheduled Task policy is already current." -ForegroundColor DarkGreen
+        return
+    }
+}
+
 $startScript = Join-Path $ProjectRoot "scripts\windows\Start-PDPOne.ps1"
 $rancherStartupScript = Join-Path $ProjectRoot "scripts\windows\Start-PDPOneRancherResilient.ps1"
 $openScript = Join-Path $ProjectRoot "scripts\windows\Open-PDPOneLocal.ps1"
@@ -112,4 +124,6 @@ $diskGuardDailyTrigger = New-ScheduledTaskTrigger -Daily -At 3:15am
 $diskGuardSettings = New-ScheduledTaskSettingsSet -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 5) -ExecutionTimeLimit (New-TimeSpan -Minutes 45) -MultipleInstances IgnoreNew -StartWhenAvailable
 Register-ScheduledTask -TaskName $DiskGuardTaskName -Action $diskGuardAction -Trigger $diskGuardDailyTrigger -Principal $principal -Settings $diskGuardSettings -Description "Maintains safe C drive capacity for PDP One. It prunes only unused build cache, images, stopped containers and networks, archives old restore-verified backups, compacts Rancher WSL VHDX only when needed, and never prunes Docker volumes." -Force | Out-Null
 
+New-Item -ItemType Directory -Force -Path $taskPolicyRoot | Out-Null
+[IO.File]::WriteAllText($taskPolicyPath, $taskPolicyVersion, [Text.UTF8Encoding]::new($false))
 Write-Host "Scheduled Tasks '$StartupTaskName', '$NetworkRecoveryTaskName', '$OpenWebTaskName', '$McpWatchdogTaskName', '$DeploymentAgentWatchdogTaskName' and '$DiskGuardTaskName' are installed." -ForegroundColor Green
