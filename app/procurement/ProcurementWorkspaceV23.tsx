@@ -7,8 +7,8 @@ import ProcurementManagementPerformanceEnhancement from "./ProcurementManagement
 import ProcurementNavigationReadCache from "./ProcurementNavigationReadCache";
 import ProcurementAnalysisContextInlineEnhancement from "./ProcurementAnalysisContextInlineEnhancement";
 import ProcurementFullTitleEnhancement from "./ProcurementFullTitleEnhancement";
-import ProcurementSubmissionResultsEnhancements from "./ProcurementSubmissionResultsEnhancements";
-import ProcurementWorkspaceEnhancements from "./ProcurementWorkspaceEnhancements";
+import ProcurementWorkflowActionsStableEnhancement from "./ProcurementWorkflowActionsStableEnhancement";
+import ProcurementManagementToolsStableEnhancement from "./ProcurementManagementToolsStableEnhancement";
 import ProcurementWorkspaceV22 from "./ProcurementWorkspaceV22";
 
 const ProcurementCompactWorkspaceStableEnhancement = dynamic(
@@ -24,8 +24,8 @@ export default function ProcurementWorkspaceV23() {
     <ProcurementNavigationReadCache />
     <ProcurementAnalysisContextInlineEnhancement />
     <ProcurementWorkspaceV22 />
-    <ProcurementWorkspaceEnhancements />
-    <ProcurementSubmissionResultsEnhancements />
+    <ProcurementManagementToolsStableEnhancement />
+    <ProcurementWorkflowActionsStableEnhancement />
     <ProcurementCompactWorkspaceStableEnhancement />
     <ProcurementFullTitleEnhancement />
   </>;
