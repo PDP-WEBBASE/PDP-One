@@ -22,7 +22,18 @@ test("organizes all management tools in a dedicated workspace tab and hides lega
   assert.match(source, /تنظیمات تحلیل واقعی/);
   assert.match(source, /AnalysisContextManager/);
   assert.match(source, /AnalysisEnginePanel/);
-  assert.match(source, /۹ ابزار/);
+  assert.match(source, /پایش مصرف اینترنت/);
+  assert.match(source, /InternetUsageMonitoringPanel/);
+  assert.match(source, /۱۰ ابزار/);
+});
+
+test("internet usage monitoring is passive, lazy, and transparent about coverage", async () => {
+  const panel = await readFile(new URL("../app/procurement/InternetUsageMonitoringPanel.tsx", import.meta.url), "utf8");
+
+  assert.match(panel, /internet-usage-dashboard/);
+  assert.match(panel, /پسیو، خواندنی و بدون دخالت در عملیات/);
+  assert.match(panel, /داده اندازه‌گیری‌نشده با عدد تخمینی نمایش داده نمی‌شود/);
+  assert.match(panel, /شنود بسته/);
 });
 
 test("loads only selected case details instead of paginating the entire tender and inquiry archive", async () => {
