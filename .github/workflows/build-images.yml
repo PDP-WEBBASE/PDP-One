@@ -7,21 +7,18 @@ on:
       - "docs/**"
       - "**/*.md"
       - "scripts/windows/**"
-      - "release/**"
       - "tests/**"
 
 permissions:
   contents: read
   packages: write
 
-# Only the newest head of a PR needs immutable images. Superseded heads are
-# intentionally cancelled so rapid follow-up commits do not keep stale builds.
 concurrency:
   group: pdp-one-images-pr-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
 env:
-  IMAGE_SHA: ${{ github.event.pull_request.head.sha }}
+  RELEASE_SHA: ${{ github.event.pull_request.head.sha }}
 
 jobs:
   build-and-push:
@@ -31,7 +28,8 @@ jobs:
       - name: Check out exact source commit
         uses: actions/checkout@v4
         with:
-          ref: ${{ env.IMAGE_SHA }}
+          ref: ${{ env.RELEASE_SHA }}
+          fetch-depth: 0
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
@@ -43,11 +41,69 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # Select one healthy source for every required base image before Bake
-      # begins. This prevents a mirror outage from blocking exact GHCR images
-      # and avoids retrying/pushing partially built exact-SHA tags.
+      - name: Compute deterministic component fingerprints
+        id: fingerprints
+        shell: bash
+        run: node scripts/ci/component-fingerprints.mjs --github-output "$GITHUB_OUTPUT"
+
+      - name: Plan missing immutable component images
+        id: plan
+        shell: bash
+        env:
+          BACKEND_FINGERPRINT: ${{ steps.fingerprints.outputs.backend_fingerprint }}
+          MCP_FINGERPRINT: ${{ steps.fingerprints.outputs.mcp_fingerprint }}
+          WEB_FINGERPRINT: ${{ steps.fingerprints.outputs.web_fingerprint }}
+        run: |
+          set -euo pipefail
+          targets=()
+          for component in backend mcp web; do
+            case "$component" in
+              backend) fingerprint="$BACKEND_FINGERPRINT" ;;
+              mcp) fingerprint="$MCP_FINGERPRINT" ;;
+              web) fingerprint="$WEB_FINGERPRINT" ;;
+            esac
+            image="ghcr.io/pdp-webbase/pdp-one-${component}:content-${fingerprint}"
+            action="build"
+            if docker buildx imagetools inspect "$image" >/dev/null 2>&1; then
+              action="reuse"
+            else
+              targets+=("$component")
+            fi
+            echo "${component}_image=$image" >> "$GITHUB_OUTPUT"
+            echo "${component}_action=$action" >> "$GITHUB_OUTPUT"
+          done
+
+          joined=""
+          if [ "${#targets[@]}" -gt 0 ]; then
+            joined="$(IFS=,; echo "${targets[*]}")"
+          fi
+          echo "targets=$joined" >> "$GITHUB_OUTPUT"
+
+      - name: Classify component-contract verification
+        id: contract
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          required=false
+          while IFS= read -r path; do
+            case "$path" in
+              .github/workflows/build-images.yml|.github/workflows/component-fingerprint-parity.yml|.dockerignore|infra/docker/pdp-images-bake.hcl|release/component-contexts.json|release/component-image-mode.json|scripts/ci/component-fingerprints.mjs|scripts/ci/Test-ComponentFingerprintParity.ps1|scripts/windows/PDPOne.ReleaseManifest.ps1)
+                required=true
+                break
+                ;;
+            esac
+          done < <(git diff --name-only "$BASE_SHA" "$HEAD_SHA")
+          echo "required=$required" >> "$GITHUB_OUTPUT"
+
+      # Preserve the accepted PR #113 resilience rule: choose one healthy
+      # base-image registry before the single Bake invocation. In component
+      # mode the probe is skipped entirely when every immutable image is reused.
       - name: Select reachable base image registry
         id: base-registry
+        if: steps.plan.outputs.targets != ''
         shell: bash
         run: |
           set -euo pipefail
@@ -63,25 +119,70 @@ jobs:
           echo "No healthy base image registry could resolve both required base images." >&2
           exit 1
 
-      # Bake keeps backend/MCP/web exact-SHA builds concurrent inside one
-      # GitHub-hosted runner instead of consuming three matrix runners.
-      - name: Build and push exact immutable images concurrently
+      - name: Build and push only missing immutable component images
+        if: steps.plan.outputs.targets != ''
         uses: docker/bake-action@v7
         env:
           DOCKER_BUILD_RECORD_UPLOAD: "false"
         with:
           source: .
           files: ./infra/docker/pdp-images-bake.hcl
-          targets: default
+          targets: ${{ steps.plan.outputs.targets }}
           push: true
           provenance: false
           vars: |
-            IMAGE_SHA=${{ env.IMAGE_SHA }}
+            RELEASE_SHA=${{ env.RELEASE_SHA }}
+            BACKEND_FINGERPRINT=${{ steps.fingerprints.outputs.backend_fingerprint }}
+            MCP_FINGERPRINT=${{ steps.fingerprints.outputs.mcp_fingerprint }}
+            WEB_FINGERPRINT=${{ steps.fingerprints.outputs.web_fingerprint }}
             PDP_DOCKER_REGISTRY=${{ steps.base-registry.outputs.registry }}
 
-      - name: Record immutable image references
+      - name: Verify immutable component metadata and repository digests
+        if: steps.contract.outputs.required == 'true'
+        shell: bash
+        env:
+          BACKEND_IMAGE: ${{ steps.plan.outputs.backend_image }}
+          MCP_IMAGE: ${{ steps.plan.outputs.mcp_image }}
+          WEB_IMAGE: ${{ steps.plan.outputs.web_image }}
+          BACKEND_FINGERPRINT: ${{ steps.fingerprints.outputs.backend_fingerprint }}
+          MCP_FINGERPRINT: ${{ steps.fingerprints.outputs.mcp_fingerprint }}
+          WEB_FINGERPRINT: ${{ steps.fingerprints.outputs.web_fingerprint }}
+        run: |
+          set -euo pipefail
+          for component in backend mcp web; do
+            case "$component" in
+              backend) image="$BACKEND_IMAGE"; fingerprint="$BACKEND_FINGERPRINT" ;;
+              mcp) image="$MCP_IMAGE"; fingerprint="$MCP_FINGERPRINT" ;;
+              web) image="$WEB_IMAGE"; fingerprint="$WEB_FINGERPRINT" ;;
+            esac
+            docker pull "$image" >/dev/null
+            labels_json="$(docker image inspect --format '{{json .Config.Labels}}' "$image")"
+            digests_json="$(docker image inspect --format '{{json .RepoDigests}}' "$image")"
+            COMPONENT="$component" FINGERPRINT="$fingerprint" LABELS_JSON="$labels_json" DIGESTS_JSON="$digests_json" python - <<'PY'
+          import json
+          import os
+
+          component = os.environ["COMPONENT"]
+          fingerprint = os.environ["FINGERPRINT"]
+          labels = json.loads(os.environ["LABELS_JSON"] or "{}") or {}
+          digests = json.loads(os.environ["DIGESTS_JSON"] or "[]") or []
+          if labels.get("io.pdpone.component") != component:
+              raise SystemExit(f"component label mismatch for {component}")
+          if labels.get("io.pdpone.component.fingerprint") != fingerprint:
+              raise SystemExit(f"fingerprint label mismatch for {component}")
+          expected_prefix = f"ghcr.io/pdp-webbase/pdp-one-{component}@sha256:"
+          if not any(str(value).lower().startswith(expected_prefix) for value in digests):
+              raise SystemExit(f"repository digest missing for {component}")
+          print(f"component_image_identity {component}=content-{fingerprint}")
+          PY
+          done
+
+      - name: Record immutable component image plan
         shell: bash
         run: |
-          echo 'ghcr.io/pdp-webbase/pdp-one-backend:${{ env.IMAGE_SHA }}'
-          echo 'ghcr.io/pdp-webbase/pdp-one-mcp:${{ env.IMAGE_SHA }}'
-          echo 'ghcr.io/pdp-webbase/pdp-one-web:${{ env.IMAGE_SHA }}'
+          {
+            echo '### PDP One immutable component images'
+            echo '- backend: `${{ steps.plan.outputs.backend_image }}` — `${{ steps.plan.outputs.backend_action }}`'
+            echo '- mcp: `${{ steps.plan.outputs.mcp_image }}` — `${{ steps.plan.outputs.mcp_action }}`'
+            echo '- web: `${{ steps.plan.outputs.web_image }}` — `${{ steps.plan.outputs.web_action }}`'
+          } >> "$GITHUB_STEP_SUMMARY"
