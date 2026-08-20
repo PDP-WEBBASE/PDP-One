@@ -63,7 +63,7 @@ test("deployed startup source self-applies the versioned host task policy once",
   const startup = await load("../scripts/windows/Start-PDPOne.ps1");
 
   assert.match(startup, /startup-task-policy\.version/);
-  assert.match(startup, /2026-08-19-low-latency-v2/);
+  assert.match(startup, /2026-08-20-autonomous-ops-v3/);
   assert.match(startup, /Register-PDPOneStartupTask\.ps1/);
   assert.match(startup, /installedPolicyVersion -ne \$startupPolicyVersion/);
   assert.match(startup, /startup_task_policy = "updated"/);
