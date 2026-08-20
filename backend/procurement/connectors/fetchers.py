@@ -362,7 +362,8 @@ def fetcher_for(connector, *, allowed_host: str):
         "retry_count": connector.retry_count,
     }
     if connector.key in {"hezareh_tenders", "hezareh_inquiries"}:
-        configuration = connector.source.configuration or {}
+        source = getattr(connector, "source", None)
+        configuration = getattr(source, "configuration", None) or {}
         try:
             list_delay_ms = int(configuration.get("hezareh_list_delay_ms", 1200))
         except (TypeError, ValueError):
