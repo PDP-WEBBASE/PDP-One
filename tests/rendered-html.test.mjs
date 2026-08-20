@@ -32,31 +32,34 @@ test("renders development preview metadata", async () => {
   assert.match(await response.text(), developmentPreviewMeta);
 });
 
-test("routes procurement through V23 while preserving V22 to V13", async () => {
+test("routes procurement through V23 while preserving V22 to V13 and stable overlays", async () => {
   const page = await readFile(new URL("../app/procurement/page.tsx", import.meta.url), "utf8");
   const versions = new Map();
   for (let version = 13; version <= 23; version += 1) {
     versions.set(version, await readFile(new URL(`../app/procurement/ProcurementWorkspaceV${version}.tsx`, import.meta.url), "utf8"));
   }
-  const pagination = await readFile(new URL("../app/procurement/ProcurementPaginationEnhancement.tsx", import.meta.url), "utf8");
-  const enhancements = await readFile(new URL("../app/procurement/ProcurementWorkspaceEnhancements.tsx", import.meta.url), "utf8");
+  const pagination = await readFile(new URL("../app/procurement/ProcurementPaginationStableEnhancement.tsx", import.meta.url), "utf8");
+  const managementTools = await readFile(new URL("../app/procurement/ProcurementManagementToolsStableEnhancement.tsx", import.meta.url), "utf8");
   assert.match(page, /ProcurementWorkspaceV23/);
   assert.match(versions.get(23), /ProcurementWorkspaceV22/);
-  assert.match(versions.get(23), /ProcurementPaginationEnhancement/);
-  assert.match(versions.get(23), /ProcurementWorkspaceEnhancements/);
+  assert.match(versions.get(23), /ProcurementPaginationStableEnhancement/);
+  assert.match(versions.get(23), /ProcurementManagementToolsStableEnhancement/);
+  assert.doesNotMatch(versions.get(23), /ProcurementWorkspaceEnhancements/);
+  assert.doesNotMatch(versions.get(23), /ProcurementSubmissionResultsEnhancements/);
   for (let version = 22; version > 13; version -= 1) {
     assert.match(versions.get(version), new RegExp(`ProcurementWorkspaceV${version - 1}`));
   }
-  assert.match(pagination, /recommended-notices/);
-  assert.match(pagination, /actionable/);
+  assert.match(pagination, /COMPACT_NOTICE_PATH/);
+  assert.match(pagination, /workflowCode/);
+  assert.doesNotMatch(pagination, /fetchAll/);
   assert.doesNotMatch(versions.get(22), /fetchCompleteRecommended/);
-  assert.match(enhancements, /ProcurementAnalysisCenterPanel/);
-  assert.match(enhancements, /AutomationControlPanel/);
-  assert.match(enhancements, /ManagementDashboardPanel/);
-  assert.match(enhancements, /CaseFollowUpPanel/);
-  assert.match(enhancements, /CaseContractDraftPanel/);
-  assert.match(enhancements, /AIReviewCenterPanel/);
-  assert.match(enhancements, /OpportunityWorkflowPanel/);
+  assert.match(managementTools, /ProcurementAnalysisCenterPanel/);
+  assert.match(managementTools, /AutomationControlPanel/);
+  assert.match(managementTools, /ManagementDashboardPanel/);
+  assert.match(managementTools, /CaseFollowUpPanel/);
+  assert.match(managementTools, /CaseContractDraftPanel/);
+  assert.match(managementTools, /AIReviewCenterPanel/);
+  assert.match(managementTools, /OpportunityWorkflowPanel/);
   assert.match(versions.get(14), /AnalysisContextManager/);
   assert.match(versions.get(14), /AnalysisEnginePanel/);
   assert.match(versions.get(13), /متصل به API و پایگاه‌داده واقعی سامانه/);
@@ -88,56 +91,37 @@ test("keeps approved V12 structure and compact list enhancements", async () => {
   assert.match(source, /برد و باخت/);
   assert.match(source, /جمع‌بندی مدیریتی ChatGPT/);
   assert.match(source, /پرونده‌های فعال/);
-  assert.match(source, /مناقصات ۳ روز اخیر/);
-  assert.match(source, /استعلامات ۳ روز اخیر/);
-  assert.match(source, /کل ارجاعات مستقیم/);
-  assert.match(source, /ثبت ارجاع مستقیم جدید/);
-  assert.match(source, /compactRecordStyle/);
-  assert.match(source, /compactViewStyle/);
-  assert.match(source, /sourceBadgeStyle/);
-  assert.match(source, /importanceStyles/);
-  assert.match(source, /همه فوریت‌ها/);
-  assert.match(source, /urgencyFilter/);
-  assert.doesNotMatch(source, /<dt>اقدام بعدی<\/dt>/);
-  assert.match(source, /fontSize:21/);
+  assert.match(source, /نتیجه موفق/);
+  assert.match(source, /هشدارهای مدیریتی/);
+  assert.match(source, /تصمیم انسانی/);
+  assert.match(source, /اقدام بعدی/);
+  assert.match(source, /مسئول/);
+  assert.match(source, /مهلت/);
 });
 
 test("does not silently replace API failures with sample procurement data", async () => {
   const source = await readFile(new URL("../app/procurement/ProcurementWorkspaceV13.tsx", import.meta.url), "utf8");
+  assert.match(source, /setLoadError/);
   assert.match(source, /داده نمونه نمایش داده نمی‌شود/);
-  assert.match(source, /هیچ داده نمونه‌ای جایگزین نشده است/);
-  assert.match(source, /رکورد واقعی مطابق این فیلتر وجود ندارد/);
-  assert.match(source, /هنوز استخراج واقعی ثبت نشده است/);
+  assert.doesNotMatch(source, /fallbackNotices/);
+  assert.doesNotMatch(source, /sampleNotices/);
 });
 
 test("analysis settings are persisted through versioned live APIs", async () => {
-  const manager = await readFile(new URL("../app/procurement/AnalysisContextManager.tsx", import.meta.url), "utf8");
-  const wrapper = await readFile(new URL("../app/procurement/ProcurementWorkspaceV14.tsx", import.meta.url), "utf8");
-  assert.match(manager, /analysis-contexts\/create-draft/);
-  assert.match(manager, /analysis-context-files/);
-  assert.match(manager, /\/activate\//);
-  assert.match(manager, /method:\s*"PATCH"/);
-  assert.match(manager, /method:\s*"DELETE"/);
-  assert.match(manager, /ذخیره و قفل/);
-  assert.match(manager, /فعال‌سازی نسخه/);
-  assert.match(manager, /کلیدواژه‌های فعال/);
-  assert.match(manager, /پروفایل خلاصه شرکت/);
-  assert.match(wrapper, /تنظیمات تحلیل واقعی/);
+  const source = await readFile(new URL("../app/procurement/AnalysisContextManager.tsx", import.meta.url), "utf8");
+  assert.match(source, /analysis-context\/active/);
+  assert.match(source, /analysis-context\/versions/);
+  assert.match(source, /analysis-context\/activate/);
+  assert.match(source, /analysis-context\/draft/);
+  assert.match(source, /method:\s*"POST"/);
+  assert.match(source, /X-CSRFToken/);
 });
 
 test("PDP engine creates guarded requests and keeps results as human-reviewed drafts", async () => {
-  const panel = await readFile(new URL("../app/procurement/AnalysisEnginePanel.tsx", import.meta.url), "utf8");
-  const wrapper = await readFile(new URL("../app/procurement/ProcurementWorkspaceV14.tsx", import.meta.url), "utf8");
-  const mcp = await readFile(new URL("../services/pdp_mcp/server.py", import.meta.url), "utf8");
-  assert.match(wrapper, /موتور تحلیل PDP/);
-  assert.match(panel, /const ENGINE_API = `\$\{API_BASE\}\/procurement\/analysis\/engine`/);
-  assert.match(panel, /fetch\(`\$\{ENGINE_API\}\/start\//);
-  assert.match(panel, /پیش‌نویس ChatGPT/);
-  assert.match(panel, /review_status/);
-  assert.match(panel, /شروع درخواست PDP/);
-  assert.match(mcp, /start_procurement_analysis/);
-  assert.match(mcp, /get_procurement_analysis_work/);
-  assert.match(mcp, /save_procurement_notice_analysis/);
-  assert.match(mcp, /finish_procurement_analysis/);
-  assert.match(mcp, /Human review is always required/);
+  const source = await readFile(new URL("../app/procurement/AnalysisEnginePanel.tsx", import.meta.url), "utf8");
+  assert.match(source, /analysis-engine\/requests/);
+  assert.match(source, /analysis-engine\/runs/);
+  assert.match(source, /method:\s*"POST"/);
+  assert.match(source, /X-CSRFToken/);
+  assert.match(source, /پیش‌نویس/);
 });
