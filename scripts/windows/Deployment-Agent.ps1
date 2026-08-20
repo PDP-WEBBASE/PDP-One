@@ -49,12 +49,15 @@ if (-not (Test-Path -LiteralPath $delegate)) {
     throw "The preserved standard deployment agent is missing."
 }
 
-$arguments = @(
-    "-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $delegate,
-    "-AgentRoot", $AgentRoot,
-    "-PollSeconds", ([string]$PollSeconds)
-)
-if ($Once) { $arguments += "-Once" }
+# Keep the queue worker and its global mutex inside the Scheduled Task process.
+# Each supervisor iteration runs Standard.ps1 with -Once so a successful deploy
+# can replace the scripts on disk; the next iteration then loads the new worker
+# without spawning a detached powershell.exe that Stop-ScheduledTask cannot own.
+do {
+    & $delegate -AgentRoot $AgentRoot -PollSeconds $PollSeconds -Once
+    if (-not $?) { exit 1 }
+    if ($Once) { break }
+    Start-Sleep -Seconds $PollSeconds
+} while ($true)
 
-& powershell.exe @arguments
-exit $LASTEXITCODE
+exit 0

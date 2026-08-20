@@ -16,6 +16,17 @@ test("managed deployment prefers scoped releases while retaining a legacy migrat
   assert.match(managed, /Update-PDPOneLegacyDeploymentStateForScopedEngine/);
 });
 
+test("deployment agent keeps polling and mutex ownership inside the Scheduled Task process", async () => {
+  const wrapper = await load("../scripts/windows/Deployment-Agent.ps1");
+  assert.match(wrapper, /Deployment-Agent\.Standard\.ps1/);
+  assert.match(wrapper, /& \$delegate -AgentRoot \$AgentRoot -PollSeconds \$PollSeconds -Once/);
+  assert.match(wrapper, /do \{/);
+  assert.match(wrapper, /Start-Sleep -Seconds \$PollSeconds/);
+  assert.doesNotMatch(wrapper, /powershell\.exe\s+@arguments/i);
+  assert.doesNotMatch(wrapper, /Start-Process[\s\S]*Deployment-Agent\.Standard/i);
+  assert.match(wrapper, /without spawning a detached powershell\.exe/);
+});
+
 test("scoped deployment reuses unchanged immutable images and restarts only affected services", async () => {
   const deploy = await load("../scripts/windows/Invoke-PDPOneScopedRegistryDeployment.ps1");
   assert.match(deploy, /Get-PDPOneChangedFilePaths/);
@@ -43,6 +54,9 @@ test("release manifest helper supports legacy exact-SHA and content-addressed co
   assert.match(helper, /io\.pdpone\.component\.fingerprint/);
   assert.match(helper, /pdp-one\.release-manifest\.v1/);
   assert.match(helper, /repository_digest/);
+  assert.doesNotMatch(helper, /^\s*\$host\s*=/im);
+  assert.match(helper, /\$hostChanged = \$false/);
+  assert.match(helper, /host = \$hostChanged/);
   assert.deepEqual(Object.keys(policy.components).sort(), ["backend", "mcp", "web"]);
   assert.equal(policy.components.backend.root, "backend");
   assert.equal(policy.components.mcp.root, "services/pdp_mcp");

@@ -1,5 +1,8 @@
 PDP One Windows host-orchestration source is part of the exact application commit.
 
-Revision policy: v4-scoped-state-compatibility-hotfix-20260819
+Revision policy: v5-scoped-host-variable-collision-hotfix-20260819
+Previous migration revision: v4-scoped-state-compatibility-hotfix-20260819
 
-This public-safe marker intentionally forces one legacy exact-SHA image publication for the scoped-deployment state-compatibility hotfix. The currently installed scoped engine cannot consume the legacy-shaped last-deployment state created by the Phase A migration release under Windows PowerShell StrictMode. This one migration candidate can be deployed through the documented legacy-engine fallback; the successful deployment copies the corrected managed deployment scripts back into the local agent so subsequent governed deployments can return to the scoped release-manifest path. It contains no secrets or private runtime data.
+This public-safe marker intentionally forces one legacy exact-SHA image publication for the scoped-deployment PowerShell host-variable collision hotfix. The accepted diagnostic bridge proved that the scoped engine reaches exact-source acquisition but Windows PowerShell rejects the helper's local `$host` assignment because `$Host` is a read-only automatic variable and variable names are case-insensitive. This migration candidate can be deployed through the documented legacy-engine fallback; the successful deployment copies the corrected release-manifest helper back into the local agent so subsequent governed deployments can return to the scoped release-manifest path. It contains no secrets or private runtime data.
+
+The previous v4 marker established the same one-time legacy exact-SHA image publication pattern for the earlier state-compatibility hotfix; that lineage remains documented here for migration-contract continuity.
