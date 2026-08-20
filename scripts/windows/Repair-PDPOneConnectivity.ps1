@@ -7,13 +7,18 @@ param(
     [int]$PublicCheckTimeoutSeconds = 35,
     [int]$TransientConfirmDelaySeconds = 10,
     [int]$DnsPublicationTimeoutSeconds = 60,
-    [int]$DnsPollIntervalSeconds = 10
+    [int]$DnsPollIntervalSeconds = 10,
+    [switch]$AllowPersistentMcpEscalation,
+    [int]$McpOnlyFailureThreshold = 2,
+    [int]$FunnelRepairCooldownSeconds = 900,
+    [string]$AgentRoot = "C:\ProgramData\PDP-One\deployment-agent"
 )
 
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
 Set-StrictMode -Version Latest
 . (Join-Path $PSScriptRoot "PDPOne.Common.ps1")
+. (Join-Path $PSScriptRoot "PDPOne.OperationLock.ps1")
 
 if (-not $ProjectRoot) { $ProjectRoot = Get-PDPOneProjectRoot }
 $ProjectRoot = (Resolve-Path -LiteralPath $ProjectRoot).Path
@@ -21,6 +26,95 @@ Set-Location $ProjectRoot
 $envPath = Assert-PDPOneConfiguration -ProjectRoot $ProjectRoot
 $mcpPathToken = Get-PDPOneEnvValue -Path $envPath -Name "PDP_MCP_PATH_TOKEN"
 if ([string]::IsNullOrWhiteSpace($mcpPathToken)) { throw "PDP_MCP_PATH_TOKEN is missing." }
+$configuredAgentRoot = [string](Get-PDPOneEnvValue -Path $envPath -Name "PDP_DEPLOYMENT_AGENT_ROOT")
+if (-not [string]::IsNullOrWhiteSpace($configuredAgentRoot)) {
+    $AgentRoot = ($configuredAgentRoot -replace '/', '\')
+}
+$connectivityReportDir = Join-Path $AgentRoot "reports"
+$connectivityReportPath = Join-Path $connectivityReportDir "public-mcp-connectivity.json"
+
+function New-PDPOnePublicMcpConnectivityState {
+    return [ordered]@{
+        schema = "pdp-one.public-mcp-connectivity.v1"
+        checked_at = (Get-Date).ToUniversalTime().ToString('o')
+        status = "unknown"
+        local_mcp = "unknown"
+        public_web = "unknown"
+        public_api = "unknown"
+        public_mcp = "unknown"
+        dns_state = "unknown"
+        consecutive_mcp_only_failures = 0
+        last_funnel_repair_at = $null
+        last_funnel_repair_result = "never"
+        cooldown_seconds_remaining = 0
+        repair_suppressed_deployment = $false
+        confirmation_count = 0
+    }
+}
+
+function Read-PDPOnePublicMcpConnectivityState {
+    $state = New-PDPOnePublicMcpConnectivityState
+    if (-not (Test-Path -LiteralPath $connectivityReportPath)) { return $state }
+    try {
+        $raw = Get-Content -LiteralPath $connectivityReportPath -Raw | ConvertFrom-Json
+        if ($null -eq $raw -or [string]$raw.schema -ne "pdp-one.public-mcp-connectivity.v1") { return $state }
+        foreach ($name in @(
+            "checked_at", "status", "local_mcp", "public_web", "public_api", "public_mcp", "dns_state",
+            "consecutive_mcp_only_failures", "last_funnel_repair_at", "last_funnel_repair_result",
+            "cooldown_seconds_remaining", "repair_suppressed_deployment", "confirmation_count"
+        )) {
+            if ($null -ne $raw.PSObject.Properties[$name]) { $state[$name] = $raw.$name }
+        }
+    } catch { }
+    return $state
+}
+
+function Get-PDPOneFunnelRepairCooldownRemaining {
+    param($State)
+    [DateTimeOffset]$lastRepair = [DateTimeOffset]::MinValue
+    if ([string]::IsNullOrWhiteSpace([string]$State.last_funnel_repair_at)) { return 0 }
+    if (-not [DateTimeOffset]::TryParse([string]$State.last_funnel_repair_at, [ref]$lastRepair)) { return 0 }
+    $elapsed = [int]([DateTimeOffset]::UtcNow - $lastRepair.ToUniversalTime()).TotalSeconds
+    return [Math]::Max(0, [Math]::Max(0, $FunnelRepairCooldownSeconds) - $elapsed)
+}
+
+function Write-PDPOnePublicMcpConnectivityState {
+    param($State)
+    try {
+        New-Item -ItemType Directory -Force -Path $connectivityReportDir | Out-Null
+        $State.checked_at = (Get-Date).ToUniversalTime().ToString('o')
+        $State.cooldown_seconds_remaining = Get-PDPOneFunnelRepairCooldownRemaining -State $State
+        $json = $State | ConvertTo-Json -Depth 5
+        $temporary = "$connectivityReportPath.tmp"
+        [IO.File]::WriteAllText($temporary, $json, [Text.UTF8Encoding]::new($false))
+        Move-Item -LiteralPath $temporary -Destination $connectivityReportPath -Force
+    } catch { }
+}
+
+function Set-PDPOneConnectivityObservation {
+    param(
+        [string]$Status,
+        [string]$LocalMcp,
+        [string]$PublicWeb,
+        [string]$PublicApi,
+        [string]$PublicMcp,
+        [string]$DnsState,
+        [int]$ConfirmationCount,
+        [switch]$ResetMcpOnlyFailures
+    )
+    $state = Read-PDPOnePublicMcpConnectivityState
+    $state.status = $Status
+    $state.local_mcp = $LocalMcp
+    $state.public_web = $PublicWeb
+    $state.public_api = $PublicApi
+    $state.public_mcp = $PublicMcp
+    $state.dns_state = $DnsState
+    $state.confirmation_count = $ConfirmationCount
+    $state.repair_suppressed_deployment = $false
+    if ($ResetMcpOnlyFailures) { $state.consecutive_mcp_only_failures = 0 }
+    Write-PDPOnePublicMcpConnectivityState -State $state
+    return $state
+}
 
 function Invoke-PDPOneConnectivityDockerCompose {
     [CmdletBinding()]
@@ -82,7 +176,8 @@ function Wait-PDPOnePublicDnsPublication {
 }
 
 function Reset-PDPOneFunnelRegistration {
-    Write-Host "The Funnel hostname is not published in public DNS. Resetting only the Funnel configuration and registering it again ..." -ForegroundColor Yellow
+    param([string]$Reason = "public connectivity repair")
+    Write-Host "Refreshing only the Funnel registration after $Reason ..." -ForegroundColor Yellow
     $reset = Invoke-PDPOneConnectivityDockerCompose -Arguments @("--profile", "tunnel", "exec", "-T", "tailscale", "tailscale", "--socket=/tmp/tailscaled.sock", "funnel", "reset") -FailureMessage "The stale Funnel configuration could not be reset." -IgnoreFailure -Quiet
     if ($reset.ExitCode -ne 0) { return $false }
     $register = Invoke-PDPOneConnectivityDockerCompose -Arguments @("--profile", "tunnel", "exec", "-T", "tailscale", "tailscale", "--socket=/tmp/tailscaled.sock", "funnel", "--bg", "--yes", "80") -FailureMessage "The Funnel could not be registered again." -IgnoreFailure -Quiet
@@ -140,6 +235,10 @@ $result = [ordered]@{
     public_confirmation_count = 0
     public_dns_state = "pending"
     funnel_registration_reset = $false
+    persistent_mcp_escalation = [bool]$AllowPersistentMcpEscalation
+    persistent_mcp_failure_count = 0
+    funnel_repair_cooldown_remaining = 0
+    repair_suppressed_deployment = $false
     repair_attempts = 0
     completed_at = $null
 }
@@ -150,6 +249,7 @@ for ($attempt = 1; $attempt -le [Math]::Max(1, $RepairAttempts); $attempt++) {
 
     $startCommand = Invoke-PDPOneConnectivityDockerCompose -Arguments @("--profile", "tunnel", "up", "--detach", "--no-build", "--pull", "never", "tailscale") -FailureMessage "The Tailscale container could not be started." -IgnoreFailure -Quiet
     if ($startCommand.ExitCode -ne 0) {
+        [void](Set-PDPOneConnectivityObservation -Status "tailscale_unavailable" -LocalMcp "unknown" -PublicWeb "unknown" -PublicApi "unknown" -PublicMcp "unknown" -DnsState "unknown" -ConfirmationCount 0 -ResetMcpOnlyFailures)
         Write-Host "The Tailscale container could not be started." -ForegroundColor Yellow
         Start-Sleep -Seconds 3
         continue
@@ -157,6 +257,7 @@ for ($attempt = 1; $attempt -le [Math]::Max(1, $RepairAttempts); $attempt++) {
 
     $localSessionUrl = "http://127.0.0.1:8080/api/v1/auth/session/"
     if (-not (Wait-PDPOneUrl -Url $localSessionUrl -TimeoutSeconds 25)) {
+        [void](Set-PDPOneConnectivityObservation -Status "local_api_failed" -LocalMcp "unknown" -PublicWeb "unknown" -PublicApi "unknown" -PublicMcp "unknown" -DnsState "unknown" -ConfirmationCount 0 -ResetMcpOnlyFailures)
         Write-Host "The local nginx health shell is reachable, but the backend session API is not." -ForegroundColor Yellow
         if ($attempt -lt $RepairAttempts) { [void](Restart-PDPOnePublicRoute) }
         continue
@@ -165,6 +266,7 @@ for ($attempt = 1; $attempt -le [Math]::Max(1, $RepairAttempts); $attempt++) {
 
     $localMcpHealthUrl = "http://127.0.0.1:8080/mcp/$mcpPathToken/healthz"
     if (-not (Wait-PDPOneUrl -Url $localMcpHealthUrl -TimeoutSeconds 20)) {
+        [void](Set-PDPOneConnectivityObservation -Status "local_mcp_failed" -LocalMcp "failed" -PublicWeb "unknown" -PublicApi "unknown" -PublicMcp "unknown" -DnsState "unknown" -ConfirmationCount 0 -ResetMcpOnlyFailures)
         Write-Host "The local web/API path is healthy, but the token-bound MCP health route is not." -ForegroundColor Yellow
         if ($attempt -lt $RepairAttempts) { [void](Restart-PDPOnePublicRoute) }
         continue
@@ -178,6 +280,7 @@ for ($attempt = 1; $attempt -le [Math]::Max(1, $RepairAttempts); $attempt++) {
         Start-Sleep -Seconds 2
     }
     if ($null -eq $status -or [string]$status.BackendState -ne "Running") {
+        [void](Set-PDPOneConnectivityObservation -Status "tailscale_not_running" -LocalMcp "healthy" -PublicWeb "unknown" -PublicApi "unknown" -PublicMcp "unknown" -DnsState "unknown" -ConfirmationCount 0 -ResetMcpOnlyFailures)
         Write-Host "Tailscale is not signed in or has not reached Running state." -ForegroundColor Yellow
         Start-Sleep -Seconds 3
         continue
@@ -192,6 +295,7 @@ for ($attempt = 1; $attempt -le [Math]::Max(1, $RepairAttempts); $attempt++) {
     $funnelConfirmed = $combined -match '(?i)Funnel on|Available on the internet|proxy http://127\.0\.0\.1:80'
 
     if (-not $urlMatch.Success -or (-not $funnelConfirmed -and $funnelExit -ne 0)) {
+        [void](Set-PDPOneConnectivityObservation -Status "funnel_not_confirmed" -LocalMcp "healthy" -PublicWeb "unknown" -PublicApi "unknown" -PublicMcp "unknown" -DnsState "unknown" -ConfirmationCount 0 -ResetMcpOnlyFailures)
         Write-Host "Tailscale did not confirm an active Funnel." -ForegroundColor Yellow
         if ($attempt -lt $RepairAttempts) {
             Invoke-PDPOneConnectivityDockerCompose -Arguments @("--profile", "tunnel", "restart", "tailscale") -FailureMessage "Tailscale restart failed." -IgnoreFailure -Quiet | Out-Null
@@ -203,16 +307,11 @@ for ($attempt = 1; $attempt -le [Math]::Max(1, $RepairAttempts); $attempt++) {
     $candidateUrl = $urlMatch.Value.TrimEnd('/')
     $candidateHost = ([Uri]$candidateUrl).Host
 
-    # "Funnel on" is configuration state, not proof that the public hostname
-    # has been published. A stale persisted Funnel configuration can survive a
-    # reboot while public DNS returns NXDOMAIN. Wait for bounded publication,
-    # then reset/re-register only Funnel once per startup run. This preserves
-    # the Tailscale node identity, MCP token, nginx and all application data.
     if (-not (Wait-PDPOnePublicDnsPublication -HostName $candidateHost -TimeoutSeconds $DnsPublicationTimeoutSeconds -PollIntervalSeconds $DnsPollIntervalSeconds)) {
         $result.public_dns_state = "unpublished"
         if (-not $result.funnel_registration_reset) {
             $result.funnel_registration_reset = $true
-            if (Reset-PDPOneFunnelRegistration) {
+            if (Reset-PDPOneFunnelRegistration -Reason "unpublished public DNS") {
                 if (Wait-PDPOnePublicDnsPublication -HostName $candidateHost -TimeoutSeconds $DnsPublicationTimeoutSeconds -PollIntervalSeconds $DnsPollIntervalSeconds) {
                     $result.public_dns_state = "published_after_funnel_reset"
                 } else {
@@ -221,6 +320,7 @@ for ($attempt = 1; $attempt -le [Math]::Max(1, $RepairAttempts); $attempt++) {
             }
         }
         if ($result.public_dns_state -eq "unpublished") {
+            [void](Set-PDPOneConnectivityObservation -Status "dns_unpublished" -LocalMcp "healthy" -PublicWeb "failed" -PublicApi "failed" -PublicMcp "failed" -DnsState "unpublished" -ConfirmationCount 0 -ResetMcpOnlyFailures)
             Start-Sleep -Seconds 3
             continue
         }
@@ -231,8 +331,6 @@ for ($attempt = 1; $attempt -le [Math]::Max(1, $RepairAttempts); $attempt++) {
     $checks = Test-PublicPdpEndpoints -BaseUrl $candidateUrl
     $result.public_confirmation_count = 1
 
-    # Require three observations before any disruptive public-route repair.
-    # A short external/DNS/Funnel wobble must not be amplified into a restart.
     if (-not $checks.Success) {
         $result.transient_failure_rechecked = $true
         foreach ($confirm in 1..2) {
@@ -244,17 +342,98 @@ for ($attempt = 1; $attempt -le [Math]::Max(1, $RepairAttempts); $attempt++) {
     }
 
     if ($checks.Success) {
+        [void](Set-PDPOneConnectivityObservation -Status "healthy" -LocalMcp "healthy" -PublicWeb "healthy" -PublicApi "healthy" -PublicMcp "healthy" -DnsState $result.public_dns_state -ConfirmationCount $result.public_confirmation_count -ResetMcpOnlyFailures)
         return Complete-PDPOneConnectivityResult -BaseUrl $candidateUrl -Checks $checks -McpState "healthy"
     }
 
-    # If public web + API are healthy while only the public MCP probe is
-    # degraded, the Funnel and local nginx->MCP path are still intact. Do NOT
-    # recreate nginx/Tailscale; preserve established ChatGPT connections and
-    # let a later cycle observe whether the external MCP path recovered.
     if ($checks.Health.Success -and $checks.ApiHealth.Success -and -not $checks.McpHealth.Success) {
-        Write-Host "Public web/API remain healthy while only the MCP probe is degraded; preserving the existing Funnel route." -ForegroundColor Yellow
-        return Complete-PDPOneConnectivityResult -BaseUrl $candidateUrl -Checks $checks -McpState "degraded"
+        $escalationMutex = New-Object Threading.Mutex($false, "Global\PDP-One-Public-Mcp-Funnel-Repair")
+        $escalationLock = $false
+        try {
+            try { $escalationLock = $escalationMutex.WaitOne(0) } catch [Threading.AbandonedMutexException] { $escalationLock = $true }
+            if (-not $escalationLock) {
+                Write-Host "Another bounded public MCP repair cycle is already evaluating the Funnel; preserving the route." -ForegroundColor Yellow
+                return Complete-PDPOneConnectivityResult -BaseUrl $candidateUrl -Checks $checks -McpState "degraded"
+            }
+
+            $state = Read-PDPOnePublicMcpConnectivityState
+            $state.status = "public_mcp_degraded"
+            $state.local_mcp = "healthy"
+            $state.public_web = "healthy"
+            $state.public_api = "healthy"
+            $state.public_mcp = "degraded"
+            $state.dns_state = $result.public_dns_state
+            $state.confirmation_count = $result.public_confirmation_count
+            $state.repair_suppressed_deployment = $false
+            $state.cooldown_seconds_remaining = Get-PDPOneFunnelRepairCooldownRemaining -State $state
+
+            if (-not $AllowPersistentMcpEscalation) {
+                $state.status = "public_mcp_degraded_observed"
+                $result.persistent_mcp_failure_count = [int]$state.consecutive_mcp_only_failures
+                $result.funnel_repair_cooldown_remaining = [int]$state.cooldown_seconds_remaining
+                Write-PDPOnePublicMcpConnectivityState -State $state
+                Write-Host "Public web/API remain healthy while only MCP is degraded; this observer does not advance the persistent-failure counter." -ForegroundColor Yellow
+                return Complete-PDPOneConnectivityResult -BaseUrl $candidateUrl -Checks $checks -McpState "degraded"
+            }
+
+            $state.consecutive_mcp_only_failures = [Math]::Max(0, [int]$state.consecutive_mcp_only_failures) + 1
+            $result.persistent_mcp_failure_count = [int]$state.consecutive_mcp_only_failures
+            $result.funnel_repair_cooldown_remaining = [int]$state.cooldown_seconds_remaining
+
+            $deploymentOperation = Read-PDPOneDeploymentOperation -AgentRoot $AgentRoot -RemoveStale
+            if ($deploymentOperation.Active) {
+                $state.status = "public_mcp_degraded_deployment_suppressed"
+                $state.repair_suppressed_deployment = $true
+                $result.repair_suppressed_deployment = $true
+                Write-PDPOnePublicMcpConnectivityState -State $state
+                Write-Host "Public MCP remains degraded, but Funnel repair is suppressed while an exact deployment is active." -ForegroundColor Yellow
+                return Complete-PDPOneConnectivityResult -BaseUrl $candidateUrl -Checks $checks -McpState "degraded"
+            }
+
+            $threshold = [Math]::Max(2, $McpOnlyFailureThreshold)
+            if ([int]$state.consecutive_mcp_only_failures -lt $threshold -or [int]$state.cooldown_seconds_remaining -gt 0) {
+                Write-PDPOnePublicMcpConnectivityState -State $state
+                Write-Host "Public web/API remain healthy while only MCP is degraded; waiting for the bounded persistent-failure threshold/cooldown before Funnel refresh." -ForegroundColor Yellow
+                return Complete-PDPOneConnectivityResult -BaseUrl $candidateUrl -Checks $checks -McpState "degraded"
+            }
+
+            $state.last_funnel_repair_at = (Get-Date).ToUniversalTime().ToString('o')
+            $state.last_funnel_repair_result = "started"
+            $state.status = "funnel_refresh_in_progress"
+            Write-PDPOnePublicMcpConnectivityState -State $state
+            $result.funnel_registration_reset = $true
+
+            $resetSucceeded = Reset-PDPOneFunnelRegistration -Reason "persistent public MCP-only degradation"
+            if ($resetSucceeded) {
+                [void](Wait-PDPOnePublicDnsPublication -HostName $candidateHost -TimeoutSeconds $DnsPublicationTimeoutSeconds -PollIntervalSeconds $DnsPollIntervalSeconds)
+                Start-Sleep -Seconds 5
+                $afterRepair = Test-PublicPdpEndpoints -BaseUrl $candidateUrl
+                if ($afterRepair.Success) {
+                    $state.status = "healthy_after_funnel_refresh"
+                    $state.public_web = "healthy"
+                    $state.public_api = "healthy"
+                    $state.public_mcp = "healthy"
+                    $state.consecutive_mcp_only_failures = 0
+                    $state.last_funnel_repair_result = "succeeded"
+                    $state.confirmation_count = 1
+                    Write-PDPOnePublicMcpConnectivityState -State $state
+                    return Complete-PDPOneConnectivityResult -BaseUrl $candidateUrl -Checks $afterRepair -McpState "healthy"
+                }
+            }
+
+            $state.status = "public_mcp_degraded_after_funnel_refresh"
+            $state.last_funnel_repair_result = "failed"
+            $state.public_mcp = "degraded"
+            Write-PDPOnePublicMcpConnectivityState -State $state
+            Write-Host "The bounded Funnel refresh completed but public MCP is still degraded; preserving identity, tokens and local services for the next cooldown cycle." -ForegroundColor Yellow
+            return Complete-PDPOneConnectivityResult -BaseUrl $candidateUrl -Checks $checks -McpState "degraded"
+        } finally {
+            if ($escalationLock) { $escalationMutex.ReleaseMutex() }
+            $escalationMutex.Dispose()
+        }
     }
+
+    [void](Set-PDPOneConnectivityObservation -Status "broader_public_route_failure" -LocalMcp "healthy" -PublicWeb $(if ($checks.Health.Success) { "healthy" } else { "failed" }) -PublicApi $(if ($checks.ApiHealth.Success) { "healthy" } else { "failed" }) -PublicMcp $(if ($checks.McpHealth.Success) { "healthy" } else { "failed" }) -DnsState $result.public_dns_state -ConfirmationCount $result.public_confirmation_count -ResetMcpOnlyFailures)
 
     if (-not $checks.Health.Success) {
         Write-Host "The public nginx health endpoint remained unavailable after three observations." -ForegroundColor Yellow
@@ -262,8 +441,6 @@ for ($attempt = 1; $attempt -le [Math]::Max(1, $RepairAttempts); $attempt++) {
         Write-Host "Public nginx is reachable but the public session API remained unavailable after three observations." -ForegroundColor Yellow
     }
 
-    # Only a repeatedly confirmed full web/API public-route failure is allowed
-    # to recreate nginx/Tailscale.
     if ($attempt -lt $RepairAttempts) { [void](Restart-PDPOnePublicRoute) }
 }
 
