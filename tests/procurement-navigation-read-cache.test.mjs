@@ -4,17 +4,19 @@ import test from "node:test";
 
 const v23 = fs.readFileSync("app/procurement/ProcurementWorkspaceV23.tsx", "utf8");
 const cache = fs.readFileSync("app/procurement/ProcurementNavigationReadCache.tsx", "utf8");
+const pagination = fs.readFileSync("app/procurement/ProcurementPaginationStableEnhancement.tsx", "utf8");
 const manager = fs.readFileSync("app/procurement/FastAnalysisContextManager.tsx", "utf8");
 
-test("general Procurement navigation cache is installed after specialized caches", () => {
+test("general Procurement navigation cache is installed after the single specialized list controller", () => {
   assert.match(v23, /ProcurementNavigationReadCache/);
-  const tabCache = v23.indexOf("<ProcurementTabCacheEnhancement");
+  const paginationController = v23.indexOf("<ProcurementPaginationStableEnhancement");
   const managementCache = v23.indexOf("<ProcurementManagementPerformanceEnhancement");
   const navigationCache = v23.indexOf("<ProcurementNavigationReadCache");
-  assert.ok(tabCache >= 0 && managementCache > tabCache && navigationCache > managementCache);
+  assert.ok(paginationController >= 0 && managementCache > paginationController && navigationCache > managementCache);
+  assert.doesNotMatch(v23, /ProcurementTabCacheEnhancement/);
 });
 
-test("visited Procurement JSON stays immediately available and stale reads revalidate in background", () => {
+test("visited non-list Procurement JSON stays immediately available and stale reads revalidate in background", () => {
   assert.match(cache, /__pdpNavigationReadCache/);
   assert.match(cache, /__pdpNavigationReadRevalidating/);
   assert.match(cache, /CACHE_REVALIDATE_MS = 5 \* 60 \* 1000/);
@@ -33,11 +35,14 @@ test("current no-store analysis callers can still reuse the navigation-session c
   assert.doesNotMatch(cache, /mode !== "reload" && mode !== "no-store"/);
 });
 
-test("specialized list caches stay authoritative for paginated high-volume pages", () => {
+test("high-volume list caching is owned only by stable pagination and excluded from general cache", () => {
   assert.match(cache, /recommended-notices/);
   assert.match(cache, /direct-opportunities/);
-  assert.match(cache, /extraction-runs/);
   assert.match(cache, /SPECIALIZED_LIST_PATHS\.has\(url\.pathname\)/);
+  assert.match(pagination, /__pdpStableListCache/);
+  assert.match(pagination, /CACHE_TTL_MS = 5 \* 60 \* 1000/);
+  assert.doesNotMatch(pagination, /MutationObserver/);
+  assert.doesNotMatch(pagination, /setInterval/);
 });
 
 test("writes and explicit refresh invalidate navigation data instead of serving stale values", () => {
@@ -46,8 +51,7 @@ test("writes and explicit refresh invalidate navigation data instead of serving 
   assert.match(cache, /REFRESH_LABEL/);
   assert.match(cache, /__pdpNavigationForceRefreshUntil/);
   assert.match(cache, /clearAllNavigationCaches\(\)/);
-  assert.match(cache, /__pdpTabPageCache\?\.clear\(\)/);
-  assert.match(cache, /delete guarded\.__pdpManagementDashboardCache/);
+  assert.match(pagination, /method !== "GET"[\s\S]*listCache\(\)\.clear\(\)/);
 });
 
 test("analysis activation events invalidate cached context snapshots while navigation-only events do not", () => {
