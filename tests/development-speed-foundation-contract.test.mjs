@@ -66,7 +66,7 @@ test("release manifest helper supports legacy exact-SHA and content-addressed co
   assert.ok(policy.components.web.exclude_prefixes.includes("scripts/windows/"));
 });
 
-test("scope-aware health has fast component profiles but retains full-health fallback", async () => {
+test("scope-aware health has fast component profiles and a stronger full-health fallback", async () => {
   const health = await load("../scripts/windows/Test-PDPOneScopedHealth.ps1");
   assert.match(health, /ValidateSet\("full", "backend", "mcp", "web", "host", "none"\)/);
   assert.match(health, /Test-PDPOne\.ps1/);
@@ -74,6 +74,10 @@ test("scope-aware health has fast component profiles but retains full-health fal
   assert.match(health, /mcp\/" \+ \$pathToken \+ "\/healthz/);
   assert.match(health, /pdp-build\.json/);
   assert.match(health, /Test-PDPOnePublicHealth/);
+  assert.match(health, /Scoped health did not pass; running stronger full-health fallback/);
+  assert.match(health, /-SkipChatGPTToolCheck/);
+  assert.match(health, /Scoped health failed and full-health fallback also failed/);
+  assert.match(health, /Scoped health fallback accepted because full PDP One health passed/);
 });
 
 test("CI preserves required checks while moving expensive suites behind change scope", async () => {
