@@ -344,7 +344,7 @@ def _enrich_hezareh_details_after_list(
                 category=ExtractionError.Category.UNEXPECTED,
                 message="جزئیات هزاره دریافت شد اما به‌روزرسانی غنی‌سازی ناموفق بود؛ داده فهرست حفظ شد.",
                 retryable=True,
-                url=parsed.detail_url,
+                url=parsed.detail_url or "",
                 page_number=page_number,
                 details={"exception": exc.__class__.__name__, "source_record_id": parsed.source_record_id},
             )
@@ -353,7 +353,12 @@ def _enrich_hezareh_details_after_list(
             time.sleep(min(delay_ms, 2000) / 1000)
 
 
-def _execute_connector(run: ExtractionRun, connector: ProcurementConnector) -> dict:
+def _execute_connector(
+    run: ExtractionRun,
+    connector: ProcurementConnector,
+    *,
+    hezareh_detail_jobs: list[dict] | None = None,
+) -> dict:
     source = connector.source
     allowed_host = urlparse(source.base_url).hostname or ""
     parser = parser_for(connector.key, source.base_url, connector.notice_type)
@@ -530,10 +535,29 @@ def _execute_connector(run: ExtractionRun, connector: ProcurementConnector) -> d
                     parse_status=ExtractionPage.ParseStatus.SUCCEEDED,
                 )
                 break
+
+            diagnostics = parsed_page.diagnostics or {}
+            security_challenge = bool(diagnostics.get("security_challenge"))
+            error_code = "security_challenge" if security_challenge else "unexpected_empty_page"
+            error_category = (
+                ExtractionError.Category.SECURITY_CHALLENGE
+                if security_challenge
+                else ExtractionError.Category.VALIDATION
+            )
+            error_message = (
+                "فهرست هزاره با کد امنیتی/صفحه میانی محدود شد؛ استخراج بدون دورزدن کنترل امنیتی ناقص متوقف شد."
+                if security_challenge
+                else "صفحه بدون رکورد بود اما پایان واقعی فهرست تأیید نشد."
+            )
+            safe_message = (
+                "فهرست هزاره با کنترل امنیتی محدود شد؛ استخراج به‌صورت fail-closed ناقص متوقف شد."
+                if security_challenge
+                else "صفحه خالی غیرمنتظره دریافت شد و کامل‌بودن استخراج قابل تأیید نیست."
+            )
             summary["warnings"] += 1
             summary["status"] = "partial"
             summary["completeness"] = "incomplete"
-            summary["stop_reason"] = "unexpected_empty_page"
+            summary["stop_reason"] = error_code
             summary["suspicious_pages"].append(page_number)
             _create_page_record(
                 run=run,
@@ -542,18 +566,18 @@ def _execute_connector(run: ExtractionRun, connector: ProcurementConnector) -> d
                 fetched=fetched,
                 parsed_page=parsed_page,
                 parse_status=ExtractionPage.ParseStatus.WARNING,
-                error_code="unexpected_empty_page",
-                error_message="صفحه بدون رکورد بود اما پایان واقعی فهرست تأیید نشد.",
+                error_code=error_code,
+                error_message=error_message,
             )
             _record_error(
                 run,
                 connector,
-                category=ExtractionError.Category.VALIDATION,
-                message="صفحه خالی غیرمنتظره دریافت شد و کامل‌بودن استخراج قابل تأیید نیست.",
+                category=error_category,
+                message=safe_message,
                 retryable=True,
                 url=fetched.url,
                 page_number=page_number,
-                details={"attempts": attempts, "parser_diagnostics": parsed_page.diagnostics},
+                details={"attempts": attempts, "parser_diagnostics": diagnostics},
             )
             break
 
@@ -743,14 +767,26 @@ def _execute_connector(run: ExtractionRun, connector: ProcurementConnector) -> d
         and summary["completeness"] == "complete"
         and summary["status"] not in {"failed", "partial"}
     ):
-        _enrich_hezareh_details_after_list(
-            run=run,
-            connector=connector,
-            parser=parser,
-            allowed_host=allowed_host,
-            candidates=hezareh_detail_candidates,
-            summary=summary,
-        )
+        if hezareh_detail_jobs is not None:
+            summary["detail_candidates"] = len(hezareh_detail_candidates)
+            hezareh_detail_jobs.append(
+                {
+                    "connector": connector,
+                    "parser": parser,
+                    "allowed_host": allowed_host,
+                    "candidates": list(hezareh_detail_candidates),
+                    "summary": summary,
+                }
+            )
+        else:
+            _enrich_hezareh_details_after_list(
+                run=run,
+                connector=connector,
+                parser=parser,
+                allowed_host=allowed_host,
+                candidates=hezareh_detail_candidates,
+                summary=summary,
+            )
     elif hezareh_deferred_details and hezareh_detail_candidates:
         summary["detail_candidates"] = len(hezareh_detail_candidates)
         summary["detail_deferred"] += len(hezareh_detail_candidates)
@@ -771,10 +807,33 @@ def run_extraction(run_id: str) -> dict:
     connectors = list(run.connectors.select_related("source").all())
     runnable = [connector for connector in connectors if connector.enabled and connector.source.enabled]
     skipped = [connector.key for connector in connectors if connector not in runnable]
+    hezareh_detail_jobs: list[dict] = []
 
     for connector in runnable:
-        summary = _execute_connector(run, connector)
+        summary = _execute_connector(
+            run,
+            connector,
+            hezareh_detail_jobs=hezareh_detail_jobs,
+        )
         summaries[connector.key] = summary
+
+    # Hezareh detail access can trigger source-side security limits. Keep list
+    # discovery globally first so no detail request can prevent a later Hezareh
+    # tender/inquiry connector from reaching its list boundary.
+    for job in hezareh_detail_jobs:
+        _enrich_hezareh_details_after_list(
+            run=run,
+            connector=job["connector"],
+            parser=job["parser"],
+            allowed_host=job["allowed_host"],
+            candidates=job["candidates"],
+            summary=job["summary"],
+        )
+        if job["summary"]["status"] == "succeeded" and job["summary"]["warnings"]:
+            job["summary"]["status"] = "succeeded_with_warnings"
+
+    for connector in runnable:
+        summary = summaries[connector.key]
         now = timezone.now()
         if summary["status"] in {"failed", "partial"}:
             connector.status = ProcurementConnector.Status.ERROR
