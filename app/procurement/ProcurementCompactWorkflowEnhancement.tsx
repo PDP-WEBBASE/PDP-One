@@ -306,16 +306,20 @@ function patchNoticeRows(rows: Map<string, RowPresentation>) {
       sourceHost.style.cssText = "display:inline-flex;align-items:center;gap:4px;flex-wrap:wrap";
       badgeTarget.prepend(sourceHost);
     }
-    sourceHost.replaceChildren();
-    row.sources.forEach((source) => {
-      const anchor = document.createElement("a");
-      anchor.href = source.url || "#";
-      anchor.target = "_blank";
-      anchor.rel = "noreferrer";
-      anchor.textContent = source.name;
-      anchor.style.cssText = sourceBadgeStyle();
-      sourceHost?.appendChild(anchor);
-    });
+    const sourceSignature = JSON.stringify(row.sources.map((source) => [source.name, source.url]));
+    if (sourceHost.dataset.pdpSignature !== sourceSignature) {
+      sourceHost.replaceChildren();
+      row.sources.forEach((source) => {
+        const anchor = document.createElement("a");
+        anchor.href = source.url || "#";
+        anchor.target = "_blank";
+        anchor.rel = "noreferrer";
+        anchor.textContent = source.name;
+        anchor.style.cssText = sourceBadgeStyle();
+        sourceHost?.appendChild(anchor);
+      });
+      sourceHost.dataset.pdpSignature = sourceSignature;
+    }
 
     let metaHost = badgeTarget.querySelector<HTMLElement>("[data-pdp-compact-meta-badges]");
     if (!metaHost) {
@@ -324,14 +328,18 @@ function patchNoticeRows(rows: Map<string, RowPresentation>) {
       metaHost.style.cssText = "display:inline-flex;align-items:center;gap:4px;flex-wrap:wrap";
       sourceHost.after(metaHost);
     }
-    metaHost.replaceChildren();
     const meta = [row.province, remainingLabel(row.submission_deadline), formatDeadline(row.submission_deadline)].filter(Boolean);
-    meta.forEach((label) => {
-      const span = document.createElement("span");
-      span.textContent = label;
-      span.style.cssText = metaBadgeStyle();
-      metaHost?.appendChild(span);
-    });
+    const metaSignature = JSON.stringify(meta);
+    if (metaHost.dataset.pdpSignature !== metaSignature) {
+      metaHost.replaceChildren();
+      meta.forEach((label) => {
+        const span = document.createElement("span");
+        span.textContent = label;
+        span.style.cssText = metaBadgeStyle();
+        metaHost?.appendChild(span);
+      });
+      metaHost.dataset.pdpSignature = metaSignature;
+    }
 
     content.querySelectorAll<HTMLElement>("span").forEach((span) => {
       if (span.closest("[data-pdp-compact-source-badges],[data-pdp-compact-meta-badges]")) return;
