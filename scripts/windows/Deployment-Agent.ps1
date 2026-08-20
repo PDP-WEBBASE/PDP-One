@@ -49,13 +49,15 @@ if (-not (Test-Path -LiteralPath $delegate)) {
     throw "The preserved standard deployment agent is missing."
 }
 
-# Run the preserved agent in the Scheduled Task process itself. Keeping the
-# mutex holder in-process ensures Stop-ScheduledTask cannot leave an orphaned
-# child powershell.exe that blocks the replacement agent with the global mutex.
-if ($Once) {
+# Keep the queue worker and its global mutex inside the Scheduled Task process.
+# Each supervisor iteration runs Standard.ps1 with -Once so a successful deploy
+# can replace the scripts on disk; the next iteration then loads the new worker
+# without spawning a detached powershell.exe that Stop-ScheduledTask cannot own.
+do {
     & $delegate -AgentRoot $AgentRoot -PollSeconds $PollSeconds -Once
-} else {
-    & $delegate -AgentRoot $AgentRoot -PollSeconds $PollSeconds
-}
-if (-not $?) { exit 1 }
+    if (-not $?) { exit 1 }
+    if ($Once) { break }
+    Start-Sleep -Seconds $PollSeconds
+} while ($true)
+
 exit 0
