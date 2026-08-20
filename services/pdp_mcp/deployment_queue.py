@@ -27,11 +27,12 @@ IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 DEFAULT_TTL_SECONDS = 300
 MAX_TTL_SECONDS = 1800
 ACTION_TTL_SECONDS = {
-    # Layered health and composite promotion can wait behind Windows startup,
-    # agent restart, and public-route retries. Other signed actions keep
-    # the shorter default lifetime.
+    # Layered health, exact Agent synchronization and composite promotion can
+    # wait behind Windows startup, Agent restart, and public-route retries.
     "check_deployment_health": 1800,
     "promote_exact_candidate": 1800,
+    "sync_agent_from_exact_commit": 1800,
+    "repair_pdp_one_connectivity": 1800,
 }
 ALLOWED_ACTIONS = {
     "approve_release",
@@ -39,6 +40,10 @@ ALLOWED_ACTIONS = {
     "verify_backup_restore",
     "deploy_approved_release",
     "promote_exact_candidate",
+    "sync_agent_from_exact_commit",
+    "ensure_pdp_one_started",
+    "repair_pdp_one_connectivity",
+    "collect_pdp_one_diagnostics",
     "check_deployment_health",
     "run_disk_maintenance",
     "rollback_deployment",
@@ -81,6 +86,9 @@ def _utcnow() -> datetime:
 
 
 def _disk_free_bytes() -> int:
+    # This is intentionally the signed-queue filesystem safety metric. It is
+    # not advertised as Windows C: capacity; Windows-side Disk Guard reports
+    # remain authoritative for host C: free-space decisions.
     probe = QUEUE_ROOT if QUEUE_ROOT.exists() else QUEUE_ROOT.parent
     try:
         return int(shutil.disk_usage(probe).free)
@@ -196,6 +204,82 @@ def _read_sanitized_deployment_report(deployment_id: str) -> dict[str, Any] | No
     }
 
 
+def _read_agent_watchdog_status() -> dict[str, Any]:
+    report_path = REPORT_ROOT / "deployment-agent-watchdog.json"
+    unavailable = {
+        "available": False,
+        "status": "unknown",
+        "checked_at": None,
+        "age_seconds": None,
+        "stale": True,
+        "task_state_after": "unknown",
+        "incoming_requests": None,
+    }
+    if not report_path.exists() or not report_path.is_file():
+        return unavailable
+    try:
+        with report_path.open("r", encoding="utf-8-sig") as handle:
+            raw = json.load(handle)
+        if not isinstance(raw, dict) or str(raw.get("schema", "")) != "pdp-one.deployment-agent-watchdog.v1":
+            return unavailable
+        checked_at_text = str(raw.get("checked_at", ""))
+        checked_at = datetime.fromisoformat(checked_at_text.replace("Z", "+00:00"))
+        if checked_at.tzinfo is None:
+            checked_at = checked_at.replace(tzinfo=timezone.utc)
+        age = max(0, int((_utcnow() - checked_at.astimezone(timezone.utc)).total_seconds()))
+        return {
+            "available": True,
+            "status": str(raw.get("status", "unknown"))[:64],
+            "checked_at": checked_at.astimezone(timezone.utc).isoformat(),
+            "age_seconds": age,
+            "stale": age > 180,
+            "task_state_after": str(raw.get("task_state_after", "unknown"))[:64],
+            "task_recreated": bool(raw.get("task_recreated", False)),
+            "task_enabled": bool(raw.get("task_enabled", False)),
+            "start_requested": bool(raw.get("start_requested", False)),
+            "incoming_requests": int(raw.get("incoming_requests", 0)),
+            "error": _sanitize_report_value(raw.get("error")),
+        }
+    except (OSError, ValueError, TypeError, json.JSONDecodeError, UnicodeDecodeError):
+        return unavailable
+
+
+def _pending_request_diagnostics(incoming: Path) -> dict[str, Any]:
+    result = {
+        "expired_signed_requests": 0,
+        "oldest_pending_age_seconds": None,
+    }
+    if not incoming.exists() or len(SIGNING_KEY) < 32:
+        return result
+    now = _utcnow()
+    oldest_age: int | None = None
+    expired = 0
+    for path in list(incoming.glob("*.json"))[:200]:
+        try:
+            envelope = json.loads(path.read_text(encoding="utf-8-sig"))
+            payload_bytes = base64.b64decode(str(envelope.get("payload_b64", "")), validate=True)
+            signature = str(envelope.get("signature", ""))
+            expected = hmac.new(SIGNING_KEY.encode("utf-8"), payload_bytes, hashlib.sha256).hexdigest()
+            if not hmac.compare_digest(expected, signature):
+                continue
+            payload = json.loads(payload_bytes.decode("utf-8"))
+            created = datetime.fromisoformat(str(payload.get("created_at", "")).replace("Z", "+00:00"))
+            expires = datetime.fromisoformat(str(payload.get("expires_at", "")).replace("Z", "+00:00"))
+            if created.tzinfo is None:
+                created = created.replace(tzinfo=timezone.utc)
+            if expires.tzinfo is None:
+                expires = expires.replace(tzinfo=timezone.utc)
+            age = max(0, int((now - created.astimezone(timezone.utc)).total_seconds()))
+            oldest_age = age if oldest_age is None else max(oldest_age, age)
+            if expires.astimezone(timezone.utc) <= now:
+                expired += 1
+        except (OSError, ValueError, TypeError, json.JSONDecodeError, UnicodeDecodeError):
+            continue
+    result["expired_signed_requests"] = expired
+    result["oldest_pending_age_seconds"] = oldest_age
+    return result
+
+
 def enqueue(
     action: str,
     params: dict[str, Any] | None = None,
@@ -278,13 +362,26 @@ def get_queue_status() -> dict[str, Any]:
     incoming = QUEUE_ROOT / "incoming"
     responses = QUEUE_ROOT / "responses"
     free_bytes = _disk_free_bytes()
+    pending = list(incoming.glob("*.json")) if incoming.exists() else []
+    pending_diagnostics = _pending_request_diagnostics(incoming)
+    watchdog = _read_agent_watchdog_status()
     return {
         "configured": configured,
         "queue_available": incoming.exists() and responses.exists(),
-        "pending_requests": len(list(incoming.glob("*.json"))) if incoming.exists() else 0,
+        "pending_requests": len(pending),
+        "expired_signed_requests": pending_diagnostics["expired_signed_requests"],
+        "oldest_pending_age_seconds": pending_diagnostics["oldest_pending_age_seconds"],
         "completed_responses": len(list(responses.glob("*.json"))) if responses.exists() else 0,
         "transport": "local signed file queue",
         "arbitrary_shell_allowed": False,
+        "agent_watchdog": watchdog,
+        "agent_processor_healthy": bool(
+            watchdog.get("available")
+            and not watchdog.get("stale")
+            and watchdog.get("status") == "healthy"
+            and watchdog.get("task_state_after") == "Running"
+        ),
+        "disk_metric_scope": "deployment_queue_filesystem_not_windows_c_drive",
         "disk_free_bytes": free_bytes,
         "low_disk_space": free_bytes >= 0 and free_bytes < LOW_SPACE_BYTES,
         "emergency_reserve_available": RESERVE_PATH.exists(),
