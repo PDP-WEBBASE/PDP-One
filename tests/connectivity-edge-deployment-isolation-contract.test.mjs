@@ -52,8 +52,8 @@ test('Connectivity Edge refresh is gated and bounded', () => {
 });
 
 test('failed deployment recovery preserves the Edge unless that release impacted it', () => {
-  const catchStart = deployment.lastIndexOf('} catch {');
-  assert.ok(catchStart >= 0, 'deployment catch block must exist');
+  const catchStart = deployment.indexOf('} catch {\n    $report.status = "failed"');
+  assert.ok(catchStart >= 0, 'top-level deployment catch block must exist');
   const catchBlock = deployment.slice(catchStart);
   assert.match(
     catchBlock,
