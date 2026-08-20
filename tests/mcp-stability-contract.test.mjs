@@ -38,7 +38,7 @@ test("Compose and nginx require MCP health and preserve long-lived streamable HT
   assert.match(nginx, /proxy_read_timeout 3600s;/);
 });
 
-test("Windows startup and self-heal validate MCP without amplifying public-only transients", async () => {
+test("Windows startup and self-heal validate MCP, preserve transients, and bound persistent Funnel recovery", async () => {
   const startup = await load("../scripts/windows/Start-PDPOne.ps1");
   const repair = await load("../scripts/windows/Repair-PDPOneConnectivity.ps1");
   const watchdog = await load("../scripts/windows/Ensure-PDPOneMcpHealthy.ps1");
@@ -56,14 +56,17 @@ test("Windows startup and self-heal validate MCP without amplifying public-only 
   assert.match(repair, /public_confirmation_count/);
   assert.match(repair, /foreach \(\$confirm in 1\.\.2\)/);
   assert.match(repair, /mcp\/\$mcpPathToken\/healthz/);
+  assert.match(repair, /\[switch\]\$AllowPersistentMcpEscalation/);
+  assert.match(repair, /McpOnlyFailureThreshold\s*=\s*2/);
+  assert.match(repair, /FunnelRepairCooldownSeconds\s*=\s*900/);
   assert.match(
     repair,
-    /if \(\$checks\.Health\.Success -and \$checks\.ApiHealth\.Success -and -not \$checks\.McpHealth\.Success\) \{[\s\S]*?preserving the existing Funnel route[\s\S]*?McpState "degraded"/,
+    /if \(\$checks\.Health\.Success -and \$checks\.ApiHealth\.Success -and -not \$checks\.McpHealth\.Success\) \{[\s\S]*?if \(-not \$AllowPersistentMcpEscalation\)[\s\S]*?McpState "degraded"/,
   );
-  assert.match(
-    repair,
-    /Only a repeatedly confirmed full web\/API public-route failure[\s\S]*?Restart-PDPOnePublicRoute/,
-  );
+  assert.match(repair, /Read-PDPOneDeploymentOperation[^\n]+-AgentRoot \$AgentRoot/);
+  assert.match(repair, /Global\\PDP-One-Public-Mcp-Funnel-Repair/);
+  assert.match(repair, /persistent public MCP-only degradation/);
+  assert.match(repair, /if \(\$attempt -lt \$RepairAttempts\) \{ \[void\]\(Restart-PDPOnePublicRoute\) \}/);
 
   assert.match(repair, /Wait-PDPOnePublicDnsPublication/);
   assert.match(repair, /Get-PDPOnePublicIPv4Addresses/);
@@ -72,7 +75,6 @@ test("Windows startup and self-heal validate MCP without amplifying public-only 
   assert.match(repair, /Reset-PDPOneFunnelRegistration/);
   assert.match(repair, /"funnel", "reset"/);
   assert.match(repair, /"funnel", "--bg", "--yes", "80"/);
-  assert.match(repair, /Tailscale node identity, MCP token, nginx and all application data/);
   assert.doesNotMatch(repair, /"tailscale", "(?:down|logout|up)"/);
 
   assert.match(startupTask, /RestartCount 1/);
@@ -81,11 +83,10 @@ test("Windows startup and self-heal validate MCP without amplifying public-only 
 
   assert.match(watchdog, /\.State\.Health/);
   assert.match(watchdog, /Test-LocalMcpRoute/);
-  assert.match(watchdog, /Test-PublicMcpRoute/);
-  assert.match(watchdog, /PDP_PUBLIC_BASE_URL/);
   assert.match(watchdog, /confirmedPublicFailure/);
   assert.match(watchdog, /degraded_observed/);
   assert.match(watchdog, /healthy_local_public_degraded_observed/);
+  assert.match(watchdog, /Repair-PDPOneConnectivity\.ps1[^\n]+-RepairAttempts 1 -AllowPersistentMcpEscalation -AgentRoot \$AgentRoot/);
   assert.match(watchdog, /healthy_after_route_repair/);
   assert.doesNotMatch(watchdog, /healthy_after_public_route_repair/);
   assert.match(watchdog, /--no-build/);
