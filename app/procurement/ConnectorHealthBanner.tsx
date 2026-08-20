@@ -38,6 +38,28 @@ function typeLabel(value: ConnectorHealth["notice_type"]) {
   return value === "tender" ? "مناقصات" : "استعلامات";
 }
 
+function displayHealth(item: ConnectorHealth) {
+  const run = item.latest_run;
+  if (!item.requires_attention && run?.stop_reason === "known_data_boundary_reached") {
+    return {
+      label: "سالم افزایشی",
+      message:
+        "استخراج افزایشی تا مرز داده‌های شناخته‌شده بدون خطا انجام شده است؛ این وضعیت به معنی پیمایش کامل همه صفحات منبع نیست.",
+    };
+  }
+  if (
+    !item.requires_attention &&
+    run &&
+    ["source_reported_end", "page_cap_reached_at_reported_end"].includes(run.stop_reason)
+  ) {
+    return {
+      label: "سالم کامل",
+      message: "پایان فهرست منبع در این اجرا تأیید شده است.",
+    };
+  }
+  return { label: item.health_label, message: item.message };
+}
+
 export default function ConnectorHealthBanner({ embedded = false }: { embedded?: boolean }) {
   const [health, setHealth] = useState<ConnectorHealth[]>([]);
   const [loading, setLoading] = useState(true);
@@ -123,6 +145,7 @@ export default function ConnectorHealthBanner({ embedded = false }: { embedded?:
             {health.map((item) => {
               const run = item.latest_run;
               const attentionItem = item.requires_attention;
+              const display = displayHealth(item);
               return (
                 <article
                   key={item.key}
@@ -135,9 +158,9 @@ export default function ConnectorHealthBanner({ embedded = false }: { embedded?:
                 >
                   <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
                     <strong>{item.source} ـ {typeLabel(item.notice_type)}</strong>
-                    <span style={{ fontWeight: 700 }}>{item.health_label}</span>
+                    <span style={{ fontWeight: 700 }}>{display.label}</span>
                   </div>
-                  <p style={{ margin: "7px 0", fontSize: 12 }}>{item.message}</p>
+                  <p style={{ margin: "7px 0", fontSize: 12 }}>{display.message}</p>
                   {run && (
                     <small style={{ display: "block", color: "#475569", lineHeight: 1.8 }}>
                       صفحات: {fa.format(run.pages_processed)}
