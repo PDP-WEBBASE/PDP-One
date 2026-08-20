@@ -2,35 +2,31 @@
 
 import dynamic from "next/dynamic";
 import ProcurementStartupSessionResilience from "./ProcurementStartupSessionResilience";
-import ProcurementPaginationEnhancement from "./ProcurementPaginationEnhancement";
-import ProcurementTabCacheEnhancement from "./ProcurementTabCacheEnhancement";
+import ProcurementPaginationStableEnhancement from "./ProcurementPaginationStableEnhancement";
 import ProcurementManagementPerformanceEnhancement from "./ProcurementManagementPerformanceEnhancement";
 import ProcurementNavigationReadCache from "./ProcurementNavigationReadCache";
 import ProcurementAnalysisContextInlineEnhancement from "./ProcurementAnalysisContextInlineEnhancement";
-import ProcurementPaginationIntegrityEnhancement from "./ProcurementPaginationIntegrityEnhancement";
 import ProcurementFullTitleEnhancement from "./ProcurementFullTitleEnhancement";
-import ProcurementSubmissionResultsEnhancements from "./ProcurementSubmissionResultsEnhancements";
-import ProcurementWorkspaceEnhancements from "./ProcurementWorkspaceEnhancements";
+import ProcurementWorkflowActionsStableEnhancement from "./ProcurementWorkflowActionsStableEnhancement";
+import ProcurementManagementToolsStableEnhancement from "./ProcurementManagementToolsStableEnhancement";
 import ProcurementWorkspaceV22 from "./ProcurementWorkspaceV22";
 
-const ProcurementCompactWorkspaceEnhancement = dynamic(
-  () => import("./ProcurementCompactWorkspaceEnhancement"),
+const ProcurementCompactWorkspaceStableEnhancement = dynamic(
+  () => import("./ProcurementCompactWorkspaceStableEnhancement"),
   { ssr: false },
 );
 
 export default function ProcurementWorkspaceV23() {
   return <>
     <ProcurementStartupSessionResilience />
-    <ProcurementPaginationEnhancement />
-    <ProcurementTabCacheEnhancement />
+    <ProcurementPaginationStableEnhancement />
     <ProcurementManagementPerformanceEnhancement />
     <ProcurementNavigationReadCache />
     <ProcurementAnalysisContextInlineEnhancement />
-    <ProcurementPaginationIntegrityEnhancement />
     <ProcurementWorkspaceV22 />
-    <ProcurementWorkspaceEnhancements />
-    <ProcurementSubmissionResultsEnhancements />
-    <ProcurementCompactWorkspaceEnhancement />
+    <ProcurementManagementToolsStableEnhancement />
+    <ProcurementWorkflowActionsStableEnhancement />
+    <ProcurementCompactWorkspaceStableEnhancement />
     <ProcurementFullTitleEnhancement />
   </>;
 }

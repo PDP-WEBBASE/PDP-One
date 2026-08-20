@@ -7,14 +7,15 @@ const workspaceSource = fs.readFileSync(
   "utf8",
 );
 
-test("compact procurement DOM enhancement is excluded from server rendering", () => {
+test("stable compact procurement DOM enhancement is excluded from server rendering", () => {
   assert.match(workspaceSource, /import dynamic from "next\/dynamic";/);
   assert.match(
     workspaceSource,
-    /const ProcurementCompactWorkspaceEnhancement = dynamic\([\s\S]*?import\("\.\/ProcurementCompactWorkspaceEnhancement"\)[\s\S]*?\{ ssr: false \}[\s\S]*?\);/,
+    /const ProcurementCompactWorkspaceStableEnhancement = dynamic\([\s\S]*?import\("\.\/ProcurementCompactWorkspaceStableEnhancement"\)[\s\S]*?\{ ssr: false \}[\s\S]*?\);/,
   );
   assert.doesNotMatch(
     workspaceSource,
-    /import ProcurementCompactWorkspaceEnhancement from "\.\/ProcurementCompactWorkspaceEnhancement";/,
+    /import ProcurementCompactWorkspaceStableEnhancement from "\.\/ProcurementCompactWorkspaceStableEnhancement";/,
   );
+  assert.doesNotMatch(workspaceSource, /import\("\.\/ProcurementCompactWorkspaceEnhancement"\)/);
 });
