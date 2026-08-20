@@ -47,35 +47,6 @@ function Test-AgentSignature([byte[]]$PayloadBytes, [string]$Signature, [string]
     return [string]::Equals($actual, $Signature, [StringComparison]::OrdinalIgnoreCase)
 }
 
-function Move-NextCoordinatedRequest {
-    $incomingRoot = Join-Path $AgentRoot "queue\incoming"
-    $processingRoot = Join-Path $AgentRoot "queue\processing"
-    if (@(Get-ChildItem -LiteralPath $incomingRoot -Filter "*.json" -File -ErrorAction SilentlyContinue).Count -gt 0) { return $null }
-    if (@(Get-ChildItem -LiteralPath $processingRoot -Filter "*.json" -File -ErrorAction SilentlyContinue).Count -gt 0) { return $null }
-    $pendingRoot = Join-Path $AgentRoot "queue\coordinator\pending"
-    if (-not (Test-Path -LiteralPath $pendingRoot)) { return $null }
-    $candidate = Get-ChildItem -LiteralPath $pendingRoot -Filter "*.json" -File -ErrorAction SilentlyContinue | Sort-Object Name | Select-Object -First 1
-    if ($null -eq $candidate) { return $null }
-    $record = Get-Content -LiteralPath $candidate.FullName -Raw -Encoding UTF8 | ConvertFrom-Json
-    $requestId = [Guid]::Parse([string]$record.request_id).ToString()
-    if ($null -eq $record.envelope -or [string]::IsNullOrWhiteSpace([string]$record.envelope.payload_b64) -or [string]::IsNullOrWhiteSpace([string]$record.envelope.signature)) {
-        throw "Coordinated request envelope is invalid."
-    }
-    $target = Join-Path $incomingRoot "$requestId.json"
-    $temporary = "$target.tmp"
-    $record.envelope | ConvertTo-Json -Compress | Set-Content -LiteralPath $temporary -Encoding UTF8
-    Move-Item -LiteralPath $temporary -Destination $target -Force
-    $historyRoot = Join-Path $AgentRoot "queue\coordinator\history"
-    New-Item -ItemType Directory -Force -Path $historyRoot | Out-Null
-    $record.state = "deploying"
-    $record | Add-Member -NotePropertyName dispatched -NotePropertyValue $true -Force
-    $record | Add-Member -NotePropertyName updated_at -NotePropertyValue ((Get-Date).ToUniversalTime().ToString("o")) -Force
-    $record | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath (Join-Path $historyRoot "$requestId.json") -Encoding UTF8
-    Remove-Item -LiteralPath $candidate.FullName -Force
-    Write-AgentAudit $requestId "coordinator_dispatch" "succeeded" "The next signed exact deployment request was promoted by priority."
-    return $requestId
-}
-
 function Get-SafeBackupPath([string]$BackupId) {
     if ($BackupId -notmatch '^PDP-One-(initial|final|manual)-Backup-\d{8}-\d{6}$') { throw "Invalid backup identifier." }
     $root = "C:\ProgramData\PDP-One\backups"
@@ -429,7 +400,7 @@ function Invoke-AgentAction($Payload) {
 }
 
 try {
-    foreach ($directory in @("queue\incoming", "queue\processing", "queue\responses", "queue\rejected", "queue\coordinator\pending", "queue\coordinator\history", "state\processed", "audit")) {
+    foreach ($directory in @("queue\incoming", "queue\processing", "queue\responses", "queue\rejected", "state\processed", "audit")) {
         New-Item -ItemType Directory -Force -Path (Join-Path $AgentRoot $directory) | Out-Null
     }
     $lastStartupAttempt = [DateTime]::MinValue
@@ -462,7 +433,6 @@ try {
                 Write-AgentAudit "startup" "stable_startup" "failed" $_.Exception.Message
             }
         }
-        Move-NextCoordinatedRequest | Out-Null
         $requests = Get-ChildItem -LiteralPath (Join-Path $AgentRoot "queue\incoming") -Filter "*.json" | Sort-Object CreationTimeUtc
         foreach ($request in $requests) {
             $processing = Join-Path $AgentRoot "queue\processing\$($request.Name)"
