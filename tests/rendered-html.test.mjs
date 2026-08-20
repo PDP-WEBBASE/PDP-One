@@ -94,7 +94,7 @@ test("keeps approved V12 structure and compact list enhancements", async () => {
   assert.match(source, /نتیجه موفق/);
   assert.match(source, /هشدارهای مدیریتی/);
   assert.match(source, /تصمیم انسانی/);
-  assert.match(source, /اقدام بعدی/);
+  assert.match(source, /اقدام پیگیری عقب‌افتاده/);
   assert.match(source, /مسئول/);
   assert.match(source, /مهلت/);
 });
