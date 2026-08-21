@@ -1,3 +1,4 @@
+import asyncio
 import hashlib
 import os
 from typing import Any
@@ -296,7 +297,6 @@ async def save_analysis_draft(title: str, summary: str, source_record_ids: list[
             if not value:
                 raise ValueError(f"{name} is required.")
             return value
-
         if title == "__PDPONE_ANALYSIS_START_FULL__":
             result = await api(
                 "POST",
@@ -524,19 +524,64 @@ async def verify_backup_restore(backup_id: str) -> dict:
     return enqueue("verify_backup_restore", {"backup_id": backup_id})
 
 
+async def _wait_for_agent_response(request_id: str, timeout_seconds: int = 900) -> dict:
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + max(30, min(int(timeout_seconds), 1500))
+    while True:
+        response = get_response(request_id)
+        status = str(response.get("status", "pending"))
+        if status != "pending":
+            return response
+        if loop.time() >= deadline:
+            raise RuntimeError("Deployment Agent exact-commit reconciliation did not reach a terminal response before the bounded wait expired.")
+        await asyncio.sleep(1)
+
+
 @mcp.tool(
-    description="Deploy one exact commit. Development-fast mode uses standing authorization, no routine database backup, no restore verification, no local code snapshot and no automatic rollback; standard mode retains the full guarded workflow.",
+    description="Deploy one exact commit. Before deployment, the stable tool reconciles only the manifest-declared protected Windows Deployment Agent files to the same exact commit through the signed allowlisted Agent sync action. Development-fast mode then uses standing authorization; standard mode retains the full guarded deployment workflow.",
     annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True, openWorldHint=False, idempotentHint=False),
 )
 async def deploy_approved_release(commit_sha: str, deployment_id: str, preview_id: str) -> dict:
-    return enqueue(
+    commit = validate_commit(commit_sha)
+    deployment = validate_identifier(deployment_id, "deployment_id")
+    preview = validate_identifier(preview_id, "preview_id")
+    queue_status = get_queue_status()
+    if not queue_status.get("configured") or not queue_status.get("queue_available"):
+        raise RuntimeError("The signed local Deployment Agent queue is not available.")
+    if int(queue_status.get("pending_requests", 0)) != 0:
+        raise RuntimeError("A signed Deployment Agent request is already pending. Refresh coordination before deployment.")
+
+    sync_request = enqueue(
+        "sync_agent_from_exact_commit",
+        {"commit_sha": commit},
+        ttl_seconds=1800,
+    )
+    sync_response = await _wait_for_agent_response(sync_request["request_id"])
+    if str(sync_response.get("status", "")) != "succeeded":
+        raise RuntimeError("Deployment Agent exact-commit reconciliation failed; the deployment request was not queued.")
+
+    queue_status = get_queue_status()
+    if int(queue_status.get("pending_requests", 0)) != 0:
+        raise RuntimeError("Another signed Agent request appeared after reconciliation; deployment was not queued.")
+
+    deployment_request = enqueue(
         "deploy_approved_release",
         {
-            "commit_sha": validate_commit(commit_sha),
-            "deployment_id": validate_identifier(deployment_id, "deployment_id"),
-            "preview_id": validate_identifier(preview_id, "preview_id"),
+            "commit_sha": commit,
+            "deployment_id": deployment,
+            "preview_id": preview,
         },
     )
+    return {
+        **deployment_request,
+        "agent_reconciliation": {
+            "request_id": sync_request["request_id"],
+            "status": "succeeded",
+            "exact_commit": commit,
+            "fixed_action": "sync_agent_from_exact_commit",
+        },
+        "arbitrary_shell_allowed": False,
+    }
 
 
 @mcp.tool(
