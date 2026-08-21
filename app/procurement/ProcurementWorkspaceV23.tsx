@@ -9,6 +9,7 @@ import ProcurementAnalysisContextInlineEnhancement from "./ProcurementAnalysisCo
 import ProcurementFullTitleEnhancement from "./ProcurementFullTitleEnhancement";
 import ProcurementWorkflowActionsStableEnhancement from "./ProcurementWorkflowActionsStableEnhancement";
 import ProcurementManagementToolsStableEnhancement from "./ProcurementManagementToolsStableEnhancement";
+import ProcurementListUxRefinement from "./ProcurementListUxRefinement";
 import ProcurementWorkspaceV22 from "./ProcurementWorkspaceV22";
 
 const ProcurementCompactWorkspaceStableEnhancement = dynamic(
@@ -28,5 +29,6 @@ export default function ProcurementWorkspaceV23() {
     <ProcurementWorkflowActionsStableEnhancement />
     <ProcurementCompactWorkspaceStableEnhancement />
     <ProcurementFullTitleEnhancement />
+    <ProcurementListUxRefinement />
   </>;
 }
