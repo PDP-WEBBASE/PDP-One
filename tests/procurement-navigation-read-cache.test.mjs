@@ -6,12 +6,13 @@ const v23 = fs.readFileSync("app/procurement/ProcurementWorkspaceV23.tsx", "utf8
 const cache = fs.readFileSync("app/procurement/ProcurementNavigationReadCache.tsx", "utf8");
 const manager = fs.readFileSync("app/procurement/FastAnalysisContextManager.tsx", "utf8");
 
-test("general Procurement navigation cache is installed after specialized caches", () => {
+test("general Procurement navigation cache is installed after the stable paginated list layer", () => {
   assert.match(v23, /ProcurementNavigationReadCache/);
-  const tabCache = v23.indexOf("<ProcurementTabCacheEnhancement");
+  const pagination = v23.indexOf("<ProcurementPaginationStableEnhancement");
   const managementCache = v23.indexOf("<ProcurementManagementPerformanceEnhancement");
   const navigationCache = v23.indexOf("<ProcurementNavigationReadCache");
-  assert.ok(tabCache >= 0 && managementCache > tabCache && navigationCache > managementCache);
+  assert.ok(pagination >= 0 && managementCache > pagination && navigationCache > managementCache);
+  assert.doesNotMatch(v23, /ProcurementTabCacheEnhancement/);
 });
 
 test("visited Procurement JSON stays immediately available and stale reads revalidate in background", () => {
