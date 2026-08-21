@@ -415,9 +415,27 @@ def register_workstream(
                 existing = _read_json(path)
             except (OSError, ValueError, json.JSONDecodeError, UnicodeDecodeError):
                 existing = {}
+        v2_requested = any(
+            value is not None
+            for value in (
+                origin_chat_ref,
+                blocked_by,
+                requires,
+                integrates_with,
+                supersedes,
+                components,
+                runtime_resources,
+                database_resources,
+                live_test_scopes,
+                base_sha,
+                current_main_sha,
+                required_evidence,
+            )
+        )
+        use_v2 = _is_v2(existing) or v2_requested
         now = _now()
         item: dict[str, Any] = {
-            "schema": "pdp-one.workstream.v2",
+            "schema": "pdp-one.workstream.v2" if use_v2 else "pdp-one.workstream.v1",
             "workstream_id": workstream,
             "branch": safe_branch,
             "commit_sha": existing.get("commit_sha"),
