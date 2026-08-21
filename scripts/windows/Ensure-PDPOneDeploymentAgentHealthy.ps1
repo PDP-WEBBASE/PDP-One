@@ -31,14 +31,89 @@ $report = [ordered]@{
     task_enabled = $false
     start_requested = $false
     incoming_requests = 0
+    stable_operational_interface_revision = "pdp-one.stable-bootstrap-control-plane.v1"
+    agent_protocol_version = $null
+    agent_sync_capable = $false
+    agent_self_reconcile_capable = $false
+    agent_bootstrap_manifest_hash = $null
+    runtime_bootstrap_manifest_hash = $null
+    agent_candidate_compatibility = "unknown"
+    agent_migration_stage = $null
     status = "starting"
     error = $null
+}
+
+function Update-PDPOneAgentCapabilityMetadata {
+    param([Parameter(Mandatory = $true)]$Report)
+    try {
+        $standardAgent = Join-Path $binRoot "Deployment-Agent.Standard.ps1"
+        $deploymentWrapper = Join-Path $binRoot "Invoke-PDPOneDeployment.ps1"
+        $reconcileHelper = Join-Path $binRoot "Invoke-PDPOneExactAgentReconciliation.ps1"
+        if (Test-Path -LiteralPath $standardAgent) {
+            $standardText = [IO.File]::ReadAllText($standardAgent, [Text.Encoding]::UTF8)
+            $Report.agent_sync_capable = $standardText.Contains('"sync_agent_from_exact_commit" {')
+        }
+        if ((Test-Path -LiteralPath $deploymentWrapper) -and (Test-Path -LiteralPath $reconcileHelper)) {
+            $wrapperText = [IO.File]::ReadAllText($deploymentWrapper, [Text.Encoding]::UTF8)
+            $Report.agent_self_reconcile_capable = $wrapperText.Contains('Invoke-PDPOneExactAgentReconciliation.ps1')
+        }
+
+        $projectRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot "..\..")).Path
+        $manifestPath = Join-Path $projectRoot "release\deployment-agent-compatibility.json"
+        if (-not (Test-Path -LiteralPath $manifestPath)) {
+            $Report.agent_candidate_compatibility = "manifest_unavailable"
+            return
+        }
+        $manifestText = [IO.File]::ReadAllText($manifestPath, [Text.Encoding]::UTF8)
+        $Report.runtime_bootstrap_manifest_hash = (Get-FileHash -LiteralPath $manifestPath -Algorithm SHA256).Hash.ToLowerInvariant()
+        $manifest = $manifestText | ConvertFrom-Json
+        if ([string]$manifest.schema -ne "pdp-one.deployment-agent-compatibility.v1" -or [int]$manifest.protocol_version -ne 1) {
+            $Report.agent_candidate_compatibility = "unsupported_manifest"
+            return
+        }
+        $migrationProperty = $manifest.PSObject.Properties["migration_stage"]
+        $migrationStage = if ($null -ne $migrationProperty) { ([string]$migrationProperty.Value).Trim() } else { "" }
+        if ($migrationStage) { $Report.agent_migration_stage = $migrationStage }
+
+        $matches = $true
+        foreach ($entry in @($manifest.bootstrap_files)) {
+            $repositoryPath = [string]$entry.path
+            $agentFile = [string]$entry.agent_file
+            if ($repositoryPath -notmatch '^scripts/windows/[A-Za-z0-9._-]+\.ps1$' -or $agentFile -notmatch '^[A-Za-z0-9._-]+\.ps1$' -or $agentFile -ne (Split-Path $repositoryPath -Leaf)) {
+                $matches = $false
+                break
+            }
+            $sourcePath = Join-Path $projectRoot ($repositoryPath -replace '/', '\')
+            $installedPath = Join-Path $binRoot $agentFile
+            if (-not (Test-Path -LiteralPath $sourcePath) -or -not (Test-Path -LiteralPath $installedPath)) {
+                $matches = $false
+                break
+            }
+            $sourceHash = (Get-FileHash -LiteralPath $sourcePath -Algorithm SHA256).Hash.ToLowerInvariant()
+            $installedHash = (Get-FileHash -LiteralPath $installedPath -Algorithm SHA256).Hash.ToLowerInvariant()
+            if (-not [string]::Equals($sourceHash, $installedHash, [StringComparison]::OrdinalIgnoreCase)) {
+                $matches = $false
+                break
+            }
+        }
+        if ($matches) {
+            $Report.agent_protocol_version = [int]$manifest.protocol_version
+            $Report.agent_bootstrap_manifest_hash = [string]$Report.runtime_bootstrap_manifest_hash
+            $Report.agent_candidate_compatibility = if ($migrationStage) { "migration_match" } else { "match" }
+        } else {
+            $Report.agent_candidate_compatibility = "drift"
+        }
+    } catch {
+        $Report.agent_candidate_compatibility = "metadata_unavailable"
+    }
 }
 
 try {
     if (-not (Test-Path -LiteralPath $agentScript)) {
         throw "The protected PDP One Deployment Agent wrapper is missing."
     }
+
+    Update-PDPOneAgentCapabilityMetadata -Report $report
 
     if (Test-Path -LiteralPath $incomingRoot) {
         $report.incoming_requests = @(Get-ChildItem -LiteralPath $incomingRoot -Filter "*.json" -File -ErrorAction SilentlyContinue).Count

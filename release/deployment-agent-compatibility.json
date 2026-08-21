@@ -19,6 +19,10 @@
       "agent_file": "Invoke-PDPOneScopedRegistryDeployment.ps1"
     },
     {
+      "path": "scripts/windows/Invoke-PDPOneExactAgentReconciliation.ps1",
+      "agent_file": "Invoke-PDPOneExactAgentReconciliation.ps1"
+    },
+    {
       "path": "scripts/windows/PDPOne.Common.ps1",
       "agent_file": "PDPOne.Common.ps1"
     },

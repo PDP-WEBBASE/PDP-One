@@ -13,13 +13,18 @@ test("development-fast compatibility preflight fails closed before production mu
   assert.ok(contract.bootstrap_files.length >= 6);
   assert.ok(contract.bootstrap_files.some((entry) => entry.agent_file === "PDPOne.ReleaseManifest.ps1"));
   assert.ok(contract.bootstrap_files.some((entry) => entry.agent_file === "Invoke-PDPOneManagedFastDeployment.ps1"));
-  assert.ok(contract.bootstrap_files.some((entry) => entry.agent_file === "Test-PDPOneExactCandidateCompatibility.ps1"));
 
-  const standardProtected = contract.bootstrap_files.some((entry) => entry.agent_file === "Deployment-Agent.Standard.ps1");
+  const protectedFiles = contract.bootstrap_files.map((entry) => entry.agent_file).sort();
+  const standardProtected = protectedFiles.includes("Deployment-Agent.Standard.ps1");
+  const classifierProtected = protectedFiles.includes("Test-PDPOneExactCandidateCompatibility.ps1");
+  const deploymentWrapperProtected = protectedFiles.includes("Invoke-PDPOneDeployment.ps1");
+  const scopedDeploymentProtected = protectedFiles.includes("Invoke-PDPOneScopedRegistryDeployment.ps1");
+  const reconciliationHelperProtected = protectedFiles.includes("Invoke-PDPOneExactAgentReconciliation.ps1");
+
   if (contract.migration_stage === "autonomous-privileged-ops-stage-a") {
-    assert.equal(standardProtected, false, "Stage A may omit only Standard so the current protected Agent can bootstrap its fixed self-sync action");
+    assert.equal(standardProtected, false, "Legacy Stage A may omit only Standard so the protected Agent can bootstrap its fixed self-sync action");
+    assert.equal(classifierProtected, true);
     assert.match(String(contract.migration_note || ""), /Stage B immediately restores Standard/i);
-    const protectedFiles = contract.bootstrap_files.map((entry) => entry.agent_file).sort();
     assert.deepEqual(protectedFiles, [
       "Invoke-PDPOneDeployment.ps1",
       "Invoke-PDPOneManagedFastDeployment.ps1",
@@ -29,8 +34,29 @@ test("development-fast compatibility preflight fails closed before production mu
       "PDPOne.ReleaseManifest.ps1",
       "Test-PDPOneExactCandidateCompatibility.ps1",
     ].sort());
+  } else if (contract.migration_stage === "scoped-deployment-bootstrap-reconcile-stage-a") {
+    assert.equal(standardProtected, true);
+    assert.equal(classifierProtected, true);
+    assert.equal(scopedDeploymentProtected, false, "The bounded scoped-deployment repair may omit only the already-drifted scoped script");
+    assert.match(String(contract.migration_note || ""), /Stage B immediately restores/i);
+  } else if (contract.migration_stage === "stable-bootstrap-control-plane-stage-a") {
+    assert.equal(standardProtected, true, "Stable bootstrap Stage A keeps unchanged Standard protected");
+    assert.equal(scopedDeploymentProtected, true, "Stable bootstrap Stage A keeps the already-aligned scoped deployment script protected");
+    assert.equal(deploymentWrapperProtected, false, "Only the changed deployment wrapper may be omitted during this bounded Stage A");
+    assert.equal(classifierProtected, false, "Only the changed compatibility classifier may be omitted during this bounded Stage A");
+    assert.equal(reconciliationHelperProtected, false, "The new reconciliation helper cannot be protected until Stage A installs it");
+    assert.match(String(contract.migration_note || ""), /Stage B immediately/i);
+    assert.deepEqual(protectedFiles, [
+      "Deployment-Agent.Standard.ps1",
+      "Invoke-PDPOneManagedFastDeployment.ps1",
+      "Invoke-PDPOneScopedRegistryDeployment.ps1",
+      "PDPOne.Common.ps1",
+      "PDPOne.OperationLock.ps1",
+      "PDPOne.ReleaseManifest.ps1",
+    ].sort());
   } else {
-    assert.equal(standardProtected, true, "Deployment-Agent.Standard.ps1 must remain protected outside the one explicit Stage A migration");
+    assert.equal(standardProtected, true, "Deployment-Agent.Standard.ps1 must remain protected outside an explicit bounded migration");
+    assert.equal(classifierProtected, true, "The compatibility classifier must be protected in steady state");
   }
 
   const compatibilityStage = managed.indexOf('Stage "deployment-compatibility-preflight"');
