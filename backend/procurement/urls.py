@@ -25,9 +25,10 @@ from .views_analysis_runs import (
 )
 from .views_analysis_statistics import analysis_statistics
 from .views_automation import ProcurementAutomationSettingsViewSet
+from .views_bulk_workflow import bulk_remove_workflow_items, compact_notice_feed_with_dismissals
 from .views_case_actions import ProcurementCaseViewSet
 from .views_case_followup import case_follow_up, follow_up_summary, follow_up_users
-from .views_compact_ui import bulk_dismiss_recommendations, compact_dashboard, compact_notice_feed
+from .views_compact_ui import bulk_dismiss_recommendations, compact_dashboard
 from .views_contract_draft import contract_draft_preview, create_contract_draft_from_case
 from .views_direct import DirectOpportunityViewSet, OpportunityContactViewSet, OpportunityFollowUpViewSet, OpportunityResultViewSet
 from .views_documents import ProcurementSubmissionDocumentViewSet
@@ -64,10 +65,11 @@ router.register("automation-settings", ProcurementAutomationSettingsViewSet, bas
 urlpatterns = [
     path("", include(router.urls)),
     path("dashboard/", procurement_dashboard, name="procurement-dashboard"),
-    path("ui/notices/", compact_notice_feed, name="procurement-compact-notice-feed"),
+    path("ui/notices/", compact_notice_feed_with_dismissals, name="procurement-compact-notice-feed"),
     path("ui/dashboard/", compact_dashboard, name="procurement-compact-dashboard"),
     path("ui/workflow-page-metadata/", workflow_page_metadata, name="procurement-workflow-page-metadata"),
     path("ui/recommendations/dismiss-bulk/", bulk_dismiss_recommendations, name="procurement-bulk-dismiss-recommendations"),
+    path("ui/workflow/remove-bulk/", bulk_remove_workflow_items, name="procurement-bulk-remove-workflow-items"),
     path("pagination-dashboard-metrics/", pagination_dashboard_metrics, name="procurement-pagination-dashboard-metrics"),
     path("management-dashboard/", unified_management_dashboard, name="procurement-management-dashboard"),
     path("internet-usage-dashboard/", internet_usage_dashboard, name="procurement-internet-usage-dashboard"),
