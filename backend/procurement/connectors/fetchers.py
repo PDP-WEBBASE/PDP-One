@@ -142,6 +142,8 @@ class HezarehSessionFetcher(SessionFetcherBase):
 
     This does not solve or bypass a CAPTCHA/security challenge. It only preserves
     cookies and normal page-to-page navigation state issued by the public site.
+    The canonical first list page is requested directly; no synthetic home-page
+    warm-up request is generated before source discovery starts.
     """
 
     HOME_URL = "https://www.hezarehinfo.net/"
@@ -159,37 +161,17 @@ class HezarehSessionFetcher(SessionFetcherBase):
             timeout_seconds=timeout_seconds,
             retry_count=retry_count,
         )
-        self.session_initialized = False
         self.last_list_url = ""
         self.list_delay_ms = max(0, min(int(list_delay_ms), 3000))
 
-    def _ensure_session(self) -> None:
-        if self.session_initialized:
-            return
-        request = Request(
-            self.HOME_URL,
-            headers={
-                "User-Agent": USER_AGENT,
-                "Accept": "text/html,application/xhtml+xml",
-            },
-        )
-        self._fetch(
-            request,
-            expected_content_types={"text/html", "application/xhtml+xml"},
-            safe_url=self.HOME_URL,
-        )
-        self.session_initialized = True
-
     def _fetch_html(self, url: str, *, referer: str | None = None) -> FetchedPage:
-        self._ensure_session()
-        request = Request(
-            url,
-            headers={
-                "User-Agent": USER_AGENT,
-                "Accept": "text/html,application/xhtml+xml",
-                "Referer": referer or self.HOME_URL,
-            },
-        )
+        headers = {
+            "User-Agent": USER_AGENT,
+            "Accept": "text/html,application/xhtml+xml",
+        }
+        if referer:
+            headers["Referer"] = referer
+        request = Request(url, headers=headers)
         return self._fetch(
             request,
             expected_content_types={"text/html", "application/xhtml+xml"},
@@ -198,13 +180,12 @@ class HezarehSessionFetcher(SessionFetcherBase):
     def fetch_list(self, page_number: int, page_url: str) -> FetchedPage:
         if self.last_list_url and self.list_delay_ms:
             time.sleep(self.list_delay_ms / 1000)
-        referer = self.last_list_url or self.HOME_URL
-        fetched = self._fetch_html(page_url, referer=referer)
+        fetched = self._fetch_html(page_url, referer=self.last_list_url or None)
         self.last_list_url = fetched.url
         return fetched
 
     def fetch_detail(self, detail_url: str) -> FetchedPage:
-        return self._fetch_html(detail_url, referer=self.last_list_url or self.HOME_URL)
+        return self._fetch_html(detail_url, referer=self.last_list_url or None)
 
 
 class SetadEtendFetcher(SessionFetcherBase):
