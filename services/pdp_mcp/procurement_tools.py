@@ -39,6 +39,16 @@ def register_procurement_tools(mcp: FastMCP, api: ApiCallable) -> None:
 
     @mcp.tool(
         description=(
+            "Read one completed or active procurement extraction run with its persisted page and error detail. "
+            "Use this for governed acceptance evidence without starting or changing an extraction."
+        ),
+        annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, openWorldHint=False, idempotentHint=True),
+    )
+    async def get_procurement_extraction_run_detail(run_id: str) -> dict:
+        return await api("GET", f"procurement/extraction-runs/{run_id}/")
+
+    @mcp.tool(
+        description=(
             "List PDP One tender and inquiry records that still need analysis for the active context and current content hash. "
             "Use batches of at most 50 records."
         ),

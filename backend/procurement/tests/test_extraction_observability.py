@@ -15,6 +15,8 @@ class ExtractionObservabilityTests(TestCase):
     def setUp(self):
         ExtractionRun.objects.all().delete()
         self.connector = ProcurementConnector.objects.get(key="setad_inquiries")
+        self.hezareh_inquiries = ProcurementConnector.objects.get(key="hezareh_inquiries")
+        self.hezareh_tenders = ProcurementConnector.objects.get(key="hezareh_tenders")
         self.user = get_user_model().objects.create_user(
             username="extraction-observer",
             password="test-only-password",
@@ -96,3 +98,59 @@ class ExtractionObservabilityTests(TestCase):
         self.assertEqual(response.data["active_run_count"], 1)
         self.assertEqual(response.data["active_runs"][0]["id"], str(queued.id))
         self.assertEqual(response.data["active_runs"][0]["status"], ExtractionRun.Status.QUEUED)
+        self.assertEqual(response.data["hezareh_acceptance_evidence"]["page_count"], 0)
+        self.assertEqual(response.data["hezareh_acceptance_evidence"]["error_count"], 0)
+
+    def test_latest_completed_run_exposes_bounded_persisted_hezareh_page_evidence(self):
+        completed = ExtractionRun.objects.create(
+            trigger=ExtractionRun.Trigger.SCHEDULED,
+            mode=ExtractionRun.Mode.INCREMENTAL,
+            status=ExtractionRun.Status.PARTIAL,
+            finished_at=self.now - timedelta(minutes=5),
+        )
+        completed.connectors.add(self.connector, self.hezareh_inquiries, self.hezareh_tenders)
+        inquiry_page = ExtractionPage.objects.create(
+            run=completed,
+            connector=self.hezareh_inquiries,
+            page_number=1,
+            url="https://www.hezarehinfo.net/inquiries",
+            http_status=200,
+            parse_status=ExtractionPage.ParseStatus.SUCCEEDED,
+            captured_at=self.now - timedelta(minutes=7),
+        )
+        tender_page = ExtractionPage.objects.create(
+            run=completed,
+            connector=self.hezareh_tenders,
+            page_number=1,
+            url="https://www.hezarehinfo.net/tenders",
+            http_status=200,
+            parse_status=ExtractionPage.ParseStatus.SUCCEEDED,
+            captured_at=self.now - timedelta(minutes=6),
+        )
+        ExtractionPage.objects.create(
+            run=completed,
+            connector=self.connector,
+            page_number=1,
+            url="https://eproc.setadiran.ir/eproc/needs.do",
+            http_status=200,
+            parse_status=ExtractionPage.ParseStatus.SUCCEEDED,
+            captured_at=self.now - timedelta(minutes=6),
+        )
+
+        response = self._get_latest()
+
+        self.assertEqual(response.status_code, 200)
+        evidence = response.data["hezareh_acceptance_evidence"]
+        self.assertEqual(evidence["run_id"], str(completed.id))
+        self.assertEqual(evidence["page_count"], 2)
+        self.assertEqual(evidence["error_count"], 0)
+        self.assertFalse(evidence["truncated"])
+        self.assertEqual(
+            {page["connector_key"] for page in evidence["pages"]},
+            {"hezareh_inquiries", "hezareh_tenders"},
+        )
+        self.assertEqual(
+            {page["url"] for page in evidence["pages"]},
+            {inquiry_page.url, tender_page.url},
+        )
+
