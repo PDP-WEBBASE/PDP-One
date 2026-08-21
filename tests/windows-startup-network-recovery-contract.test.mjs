@@ -45,12 +45,47 @@ test("startup task retries immediately on Windows network connection and keeps a
   assert.match(task, /StartWhenAvailable/);
 });
 
+test("all PDP One background Scheduled Task registration paths use the windowless launcher", async () => {
+  const registration = await load("../scripts/windows/Register-PDPOneStartupTask.ps1");
+  const installer = await load("../scripts/windows/Install-PDPOneDeploymentAgent.ps1");
+  const watchdog = await load("../scripts/windows/Ensure-PDPOneDeploymentAgentHealthy.ps1");
+  const health = await load("../scripts/windows/Test-PDPOneScopedHealth.ps1");
+  const helper = await load("../scripts/windows/PDPOne.HiddenTask.ps1");
+  const runner = await load("../scripts/windows/Run-PDPOneHidden.vbs");
+
+  assert.match(helper, /System32\\wscript\.exe/);
+  assert.match(helper, /New-PDPOneHiddenPowerShellAction/);
+  assert.match(helper, /Assert-PDPOneScheduledTaskWindowless/);
+  assert.match(helper, /Test-PDPOneScheduledTaskWindowless/);
+  assert.match(runner, /CreateObject\("WScript\.Shell"\)/);
+  assert.match(runner, /shell\.Run\(command, 0, True\)/);
+
+  assert.match(registration, /New-PDPOneHiddenPowerShellAction/);
+  assert.match(registration, /System32\\wscript\.exe/);
+  assert.match(registration, /-LogonType Interactive -RunLevel Highest/);
+  assert.doesNotMatch(registration, /New-ScheduledTaskAction\s+-Execute\s+"powershell\.exe"/i);
+  assert.match(installer, /New-PDPOneHiddenPowerShellAction/);
+  assert.doesNotMatch(installer, /New-ScheduledTaskAction\s+-Execute\s+"powershell\.exe"/i);
+  assert.match(watchdog, /New-PDPOneHiddenPowerShellAction/);
+  assert.match(watchdog, /task_action_repaired/);
+  assert.doesNotMatch(watchdog, /New-ScheduledTaskAction\s+-Execute\s+"powershell\.exe"/i);
+  assert.match(health, /Ensure-PDPOneWindowlessTaskAcceptance/);
+  assert.match(health, /Assert-PDPOneScheduledTaskWindowless/);
+  assert.match(health, /New-PDPOneHiddenPowerShellAction/);
+  assert.doesNotMatch(health, /New-ScheduledTaskAction\s+-Execute\s+"powershell\.exe"/i);
+
+  assert.match(registration, /RepetitionInterval \(New-TimeSpan -Minutes 1\)/);
+  assert.match(registration, /RepetitionInterval \(New-TimeSpan -Minutes 5\)/);
+  assert.match(registration, /RepetitionInterval \(New-TimeSpan -Minutes 10\)/);
+  assert.match(registration, /-Daily -At 3:15am/);
+});
+
 test("local page polling begins immediately and advisory maintenance is outside the readiness path", async () => {
   const startup = await load("../scripts/windows/Start-PDPOne.ps1");
   const task = await load("../scripts/windows/Register-PDPOneStartupTask.ps1");
 
   assert.doesNotMatch(task, /Start-Sleep -Seconds 75/);
-  assert.match(task, /-File `"\$openScript`" -TimeoutSeconds 300/);
+  assert.match(task, /New-PDPOneHiddenPowerShellAction -ScriptPath \$openScript -ScriptArguments @\("-TimeoutSeconds", "300"\)/);
   assert.match(task, /Begins polling PDP One local health immediately after logon/);
 
   const healthIndex = startup.indexOf("Test-PDPOne.ps1");
@@ -59,14 +94,17 @@ test("local page polling begins immediately and advisory maintenance is outside 
   assert.ok(diskGuardIndex > healthIndex, "advisory startup disk guard must run after readiness checks");
 });
 
-test("deployed startup source self-applies the versioned host task policy once", async () => {
+test("deployed startup source recognizes the new windowless host task policy", async () => {
   const startup = await load("../scripts/windows/Start-PDPOne.ps1");
+  const registration = await load("../scripts/windows/Register-PDPOneStartupTask.ps1");
 
   assert.match(startup, /startup-task-policy\.version/);
-  assert.match(startup, /2026-08-20-autonomous-ops-v3/);
+  assert.match(startup, /2026-08-21-hidden-background-tasks-v5/);
   assert.match(startup, /Register-PDPOneStartupTask\.ps1/);
   assert.match(startup, /installedPolicyVersion -ne \$startupPolicyVersion/);
   assert.match(startup, /startup_task_policy = "updated"/);
   assert.match(startup, /startup_task_policy = "current"/);
   assert.match(startup, /startup_task_policy_warning/);
+  assert.match(registration, /2026-08-21-hidden-background-tasks-v5/);
+  assert.match(registration, /ApplyIfNeeded/);
 });
