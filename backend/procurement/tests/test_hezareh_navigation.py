@@ -8,16 +8,32 @@ from procurement.http import FetchedPage
 
 class HezarehNavigationTests(SimpleTestCase):
     def _fetcher(self, *, delay_ms=1200):
-        fetcher = HezarehSessionFetcher(
+        return HezarehSessionFetcher(
             allowed_host="www.hezarehinfo.net",
             timeout_seconds=10,
             retry_count=0,
             list_delay_ms=delay_ms,
         )
-        # The navigation assertions below isolate list-to-list behavior. Session
-        # bootstrap itself is covered by the existing Hezareh session tests.
-        fetcher.session_initialized = True
-        return fetcher
+
+    def test_first_list_request_is_direct_without_home_warmup_or_referer(self):
+        fetcher = self._fetcher(delay_ms=0)
+        observed = []
+
+        def fake_fetch(request, **kwargs):
+            observed.append((request.full_url, request.headers.get("Referer")))
+            body = b"<html></html>"
+            return FetchedPage(
+                url=request.full_url,
+                status_code=200,
+                content=body,
+                text=body.decode("utf-8"),
+            )
+
+        page1 = "https://www.hezarehinfo.net/inquiries"
+        with patch.object(fetcher, "_fetch", side_effect=fake_fetch):
+            fetcher.fetch_list(1, page1)
+
+        self.assertEqual(observed, [(page1, None)])
 
     def test_list_navigation_uses_previous_successful_page_as_referer(self):
         fetcher = self._fetcher()
@@ -47,7 +63,7 @@ class HezarehNavigationTests(SimpleTestCase):
         self.assertEqual(
             observed,
             [
-                (page1, fetcher.HOME_URL),
+                (page1, None),
                 (page2, page1),
                 (page3, page2),
             ],
