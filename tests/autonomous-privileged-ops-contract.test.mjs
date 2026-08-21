@@ -93,18 +93,17 @@ test('watchdog self-test is bounded, lane-aware and fails safe', () => {
   assert.doesNotMatch(watchdogSelfTest, /docker\s+(?:volume|system)\s+prune|tailscale\s+logout|Remove-Item[^\n]+\.env/i);
 });
 
-test('steady-state compatibility protects the autonomous deployment agent', () => {
+test('stage A compatibility relaxation is explicit, one-file-only and temporary', () => {
   assert.equal(contract.schema, 'pdp-one.deployment-agent-compatibility.v1');
   assert.equal(contract.protocol_version, 1);
-  assert.equal(Object.hasOwn(contract, 'migration_stage'), false);
-  assert.equal(Object.hasOwn(contract, 'migration_note'), false);
+  assert.equal(contract.migration_stage, 'scoped-deployment-bootstrap-reconcile-stage-a');
+  assert.match(contract.migration_note, /Stage B immediately restores/);
   const files = contract.bootstrap_files.map((entry) => entry.agent_file);
-  assert.equal(files.includes('Deployment-Agent.Standard.ps1'), true);
+  assert.equal(files.includes('Invoke-PDPOneScopedRegistryDeployment.ps1'), false);
   assert.deepEqual(files.sort(), [
     'Deployment-Agent.Standard.ps1',
     'Invoke-PDPOneDeployment.ps1',
     'Invoke-PDPOneManagedFastDeployment.ps1',
-    'Invoke-PDPOneScopedRegistryDeployment.ps1',
     'PDPOne.Common.ps1',
     'PDPOne.OperationLock.ps1',
     'PDPOne.ReleaseManifest.ps1',

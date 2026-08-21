@@ -1,6 +1,8 @@
 {
   "schema": "pdp-one.deployment-agent-compatibility.v1",
   "protocol_version": 1,
+  "migration_stage": "scoped-deployment-bootstrap-reconcile-stage-a",
+  "migration_note": "One bounded migration release omits only Invoke-PDPOneScopedRegistryDeployment.ps1 because PR #147 changed that protected file after the last accepted Agent bootstrap. A successful exact deployment copies the exact current scripts into the protected Agent bin and restarts the Agent. Stage B immediately restores this file to steady-state protection.",
   "bootstrap_files": [
     {
       "path": "scripts/windows/Deployment-Agent.Standard.ps1",
@@ -13,10 +15,6 @@
     {
       "path": "scripts/windows/Invoke-PDPOneManagedFastDeployment.ps1",
       "agent_file": "Invoke-PDPOneManagedFastDeployment.ps1"
-    },
-    {
-      "path": "scripts/windows/Invoke-PDPOneScopedRegistryDeployment.ps1",
-      "agent_file": "Invoke-PDPOneScopedRegistryDeployment.ps1"
     },
     {
       "path": "scripts/windows/PDPOne.Common.ps1",
