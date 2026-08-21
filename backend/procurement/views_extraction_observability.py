@@ -3,6 +3,7 @@ from rest_framework.decorators import api_view
 from rest_framework.response import Response
 
 from .models_extraction import ExtractionRun
+from .serializers_extraction import ExtractionErrorSerializer, ExtractionPageSerializer
 
 
 ACTIVE_EXTRACTION_STATUSES = [
@@ -14,6 +15,8 @@ COMPLETED_EXTRACTION_STATUSES = [
     ExtractionRun.Status.SUCCEEDED_WITH_WARNINGS,
     ExtractionRun.Status.PARTIAL,
 ]
+HEZAREH_CONNECTOR_KEYS = ("hezareh_inquiries", "hezareh_tenders")
+HEZAREH_EVIDENCE_LIMIT = 50
 
 
 def _seconds_since(now, value):
@@ -73,6 +76,32 @@ def _active_run_snapshot(run: ExtractionRun, now) -> dict:
     }
 
 
+def _hezareh_acceptance_evidence(run: ExtractionRun) -> dict:
+    pages_queryset = (
+        run.pages.select_related("connector")
+        .filter(connector__key__in=HEZAREH_CONNECTOR_KEYS)
+        .order_by("connector__key", "page_number", "created_at")
+    )
+    errors_queryset = (
+        run.errors.select_related("connector")
+        .filter(connector__key__in=HEZAREH_CONNECTOR_KEYS)
+        .order_by("connector__key", "page_number", "created_at")
+    )
+    page_count = pages_queryset.count()
+    error_count = errors_queryset.count()
+    pages = list(pages_queryset[:HEZAREH_EVIDENCE_LIMIT])
+    errors = list(errors_queryset[:HEZAREH_EVIDENCE_LIMIT])
+    return {
+        "run_id": str(run.id),
+        "connector_keys": list(HEZAREH_CONNECTOR_KEYS),
+        "page_count": page_count,
+        "error_count": error_count,
+        "pages": ExtractionPageSerializer(pages, many=True).data,
+        "errors": ExtractionErrorSerializer(errors, many=True).data,
+        "truncated": page_count > len(pages) or error_count > len(errors),
+    }
+
+
 @api_view(["GET"])
 def latest_extraction_run(request):
     now = timezone.now()
@@ -111,5 +140,6 @@ def latest_extraction_run(request):
             "connector_keys": list(run.connectors.values_list("key", flat=True)),
             "active_run_count": len(active_payload),
             "active_runs": active_payload,
+            "hezareh_acceptance_evidence": _hezareh_acceptance_evidence(run),
         }
     )
