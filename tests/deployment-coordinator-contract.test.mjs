@@ -6,7 +6,7 @@ const load = (path) => readFile(new URL(path, import.meta.url), "utf8");
 
 test("multi-chat coordination is durable, advisory and exact-commit only", async () => {
   const coordinator = await load("../services/pdp_mcp/deployment_coordinator.py");
-  assert.match(coordinator, /pdp-one\.workstream\.v1/);
+  assert.match(coordinator, /LEGACY_FINAL_STATES/);
   assert.match(coordinator, /pdp-one\.workstream\.v2/);
   assert.match(coordinator, /soft_lock/);
   assert.match(coordinator, /lock_expires_at/);
