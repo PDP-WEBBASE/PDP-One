@@ -919,6 +919,12 @@ def _dispatch_next_unlocked() -> dict[str, Any] | None:
     return record
 
 
+def _dispatch_next() -> dict[str, Any] | None:
+    """Backward-compatible locked dispatcher entry point used by legacy callers/tests."""
+    with _coordinator_mutation_lock():
+        return _dispatch_next_unlocked()
+
+
 def _reconcile_history_unlocked() -> None:
     if not HISTORY.exists():
         return
