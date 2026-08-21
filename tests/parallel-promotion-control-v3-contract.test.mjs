@@ -69,9 +69,11 @@ test('orphaned historical transport bindings become decision-required rather tha
   assert.match(hardening, /"decision_required"/);
 });
 
-test('GitHub reconciliation is rate-bounded while local promotion dispatch stays responsive', () => {
+test('GitHub reconciliation stays below the normal anonymous hourly budget while local dispatch stays responsive', () => {
   assert.match(hardening, /PDP_PROMOTION_GITHUB_RECONCILE_SECONDS/);
-  assert.match(hardening, /GITHUB_RECONCILE_SECONDS/);
+  assert.match(hardening, /int\(os\.getenv\("PDP_PROMOTION_GITHUB_RECONCILE_SECONDS", "180"\)\)/);
+  assert.match(hardening, /GITHUB_RECONCILE_SECONDS = max\(\s*60,/s);
+  assert.match(hardening, /40 reads\/hour/);
   assert.match(hardening, /now - last_github_reconcile >= GITHUB_RECONCILE_SECONDS/);
   assert.match(hardening, /promotion\._dispatch_waiting_candidate\(\)/);
   assert.match(hardening, /time\.sleep\(promotion\.DISPATCH_POLL_SECONDS\)/);
