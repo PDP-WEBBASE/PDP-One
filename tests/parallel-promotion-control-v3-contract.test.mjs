@@ -13,6 +13,7 @@ const promotion = read('services', 'pdp_mcp', 'promotion_control_v3.py');
 const server = read('services', 'pdp_mcp', 'server.py');
 const exact = read('services', 'pdp_mcp', 'exact_candidate_promotion_tools.py');
 const v2 = read('services', 'pdp_mcp', 'deployment_coordinator.py');
+const dockerfile = read('services', 'pdp_mcp', 'Dockerfile');
 
 test('stable legacy deploy schema is preserved but routed below the schema through V3', () => {
   assert.match(server, /async def deploy_approved_release\(commit_sha: str, deployment_id: str, preview_id: str\)/);
@@ -55,6 +56,10 @@ test('stable exact promote tool allows the durable scheduler to queue rather tha
   assert.match(exact, /queue_status = _require_available_queue\(\)/);
   assert.match(exact, /durable_promotion_queue/);
   assert.doesNotMatch(exact, /queue_status = _require_available_empty_queue\(\)[\s\S]{0,500}enqueue\(\s*"promote_exact_candidate"/);
+});
+
+test('the MCP runtime image packages the V3 policy module used by the queue', () => {
+  assert.match(dockerfile, /COPY[^\n]*deployment_queue\.py[^\n]*promotion_control_v3\.py[^\n]*exact_candidate_promotion_tools\.py/);
 });
 
 test('promotion control remains public-safe and never exposes arbitrary shell execution', () => {
