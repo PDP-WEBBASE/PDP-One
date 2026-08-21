@@ -23,10 +23,15 @@ _PRIVILEGED_ACTIONS = {
 deployment_queue.ALLOWED_ACTIONS.update(_PRIVILEGED_ACTIONS)
 
 
-def _require_available_empty_queue() -> dict:
+def _require_available_queue() -> dict:
     queue_status = get_queue_status()
     if not queue_status.get("configured") or not queue_status.get("queue_available"):
         raise RuntimeError("The signed local Deployment Agent queue is not available.")
+    return queue_status
+
+
+def _require_available_empty_queue() -> dict:
+    queue_status = _require_available_queue()
     if int(queue_status.get("pending_requests", 0)) != 0:
         raise RuntimeError("A signed Deployment Agent request is already pending. Refresh coordination before submitting another operation.")
     return queue_status
@@ -36,10 +41,11 @@ def register_exact_candidate_promotion_tools(mcp, development_fast_mode) -> None
     @mcp.tool(
         description=(
             "Submit one governed exact-candidate promotion request after exact-head checks and a fresh PRE-DEPLOY "
-            "Delta/Concurrency Sync have passed. The signed Windows Deployment Agent performs exact deployment "
-            "and an independent post-deployment health check in one durable request, so MCP service recreation "
-            "cannot interrupt orchestration. Read the returned request with get_deployment_report until terminal. "
-            "The action never merges GitHub and never bypasses PRE-MERGE."
+            "Delta/Concurrency Sync have passed. Final promotion is serialized by the durable PDP One promotion "
+            "control below this stable tool schema, so another ready candidate waits without bypassing the active lane. "
+            "The signed Windows Deployment Agent performs exact deployment and an independent post-deployment health "
+            "check in one durable request, so MCP service recreation cannot interrupt orchestration. Read the returned "
+            "request with get_deployment_report until terminal. The action never merges GitHub and never bypasses PRE-MERGE."
         ),
         annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True, openWorldHint=False, idempotentHint=False),
     )
@@ -50,7 +56,7 @@ def register_exact_candidate_promotion_tools(mcp, development_fast_mode) -> None
         commit = validate_commit(commit_sha)
         deployment = validate_identifier(deployment_id, "deployment_id")
         preview = validate_identifier(preview_id, "preview_id")
-        queue_status = _require_available_empty_queue()
+        queue_status = _require_available_queue()
         if queue_status.get("low_disk_space"):
             raise RuntimeError("Deployment Agent storage is low; run the governed disk-maintenance path before promotion.")
 
@@ -67,11 +73,12 @@ def register_exact_candidate_promotion_tools(mcp, development_fast_mode) -> None
             "exact_commit": commit,
             "deployment_id": deployment,
             "durable_windows_orchestration": True,
+            "durable_promotion_queue": True,
             "includes_independent_health": True,
             "compatibility_preflight_enforced_by_runtime": True,
             "automatic_merge": False,
             "premerge_required_after_runtime_acceptance": True,
-            "next_step": "Read this request to terminal state. Merge only after runtime_accepted=true and a fresh PRE-MERGE Delta/Concurrency Sync.",
+            "next_step": "Read this request until terminal. If another promotion owns the lane it remains durable and waiting; merge only after runtime acceptance and a fresh PRE-MERGE Delta/Concurrency Sync.",
         }
 
     @mcp.tool(
