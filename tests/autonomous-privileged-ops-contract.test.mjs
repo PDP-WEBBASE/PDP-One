@@ -64,10 +64,14 @@ test('normal operations remain bounded and sensitive identities are preserved', 
   assert.doesNotMatch(maintenance, /Test-Path\s+-LiteralPath\s+\(\[string\]\$deploymentState\.backup_path\)/);
 });
 
-test('exact-release health self-registers and acceptance-checks the fixed Agent watchdog', () => {
-  assert.match(scopedHealth, /Ensure-PDPOneDeploymentAgentWatchdogAcceptance/);
+test('exact-release health self-registers, windowless-checks and acceptance-checks the fixed Agent watchdog', () => {
+  assert.match(scopedHealth, /Ensure-PDPOneWindowlessTaskAcceptance/);
   assert.match(scopedHealth, /Register-PDPOneStartupTask\.ps1/);
+  assert.match(scopedHealth, /PDP One Local Deployment Agent/);
   assert.match(scopedHealth, /PDP One Deployment Agent Watchdog/);
+  assert.match(scopedHealth, /Assert-PDPOneScheduledTaskWindowless/);
+  assert.match(scopedHealth, /Test-PDPOneScheduledTaskWindowless/);
+  assert.match(scopedHealth, /New-PDPOneHiddenPowerShellAction/);
   assert.match(scopedHealth, /Start-ScheduledTask -TaskName \$watchdogTaskName/);
   assert.match(scopedHealth, /deployment-agent-watchdog\.json/);
   assert.match(scopedHealth, /pdp-one\.deployment-agent-watchdog\.v1/);
@@ -75,6 +79,7 @@ test('exact-release health self-registers and acceptance-checks the fixed Agent 
   assert.match(scopedHealth, /PDP One Deployment Agent Watchdog Self Test/);
   assert.match(scopedHealth, /Register-ScheduledTask -TaskName \$selfTestTaskName/);
   assert.match(scopedHealth, /deployment-agent-watchdog-selftest-v1\.accepted/);
+  assert.doesNotMatch(scopedHealth, /New-ScheduledTaskAction\s+-Execute\s+"powershell\.exe"/i);
   assert.doesNotMatch(scopedHealth, /Invoke-Expression|\biex\b|cmd\.exe\s+\/c/i);
 });
 

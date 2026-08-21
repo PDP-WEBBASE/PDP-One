@@ -9,6 +9,7 @@ param(
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
 Set-StrictMode -Version Latest
+. (Join-Path $PSScriptRoot "PDPOne.HiddenTask.ps1")
 
 if ($AgentTaskName -ne "PDP One Local Deployment Agent") {
     throw "Only the fixed PDP One Local Deployment Agent task may be supervised."
@@ -18,6 +19,7 @@ $binRoot = Join-Path $AgentRoot "bin"
 $agentScript = Join-Path $binRoot "Deployment-Agent.ps1"
 $reportRoot = Join-Path $AgentRoot "reports"
 $incomingRoot = Join-Path $AgentRoot "queue\incoming"
+$hiddenRunner = Get-PDPOneHiddenRunnerPath -BaseDirectory $PSScriptRoot
 New-Item -ItemType Directory -Force -Path $reportRoot | Out-Null
 $reportPath = Join-Path $reportRoot "deployment-agent-watchdog.json"
 
@@ -28,6 +30,7 @@ $report = [ordered]@{
     task_state_before = "unknown"
     task_state_after = "unknown"
     task_recreated = $false
+    task_action_repaired = $false
     task_enabled = $false
     start_requested = $false
     incoming_requests = 0
@@ -108,26 +111,30 @@ function Update-PDPOneAgentCapabilityMetadata {
     }
 }
 
+function Register-PDPOneFixedAgentTask {
+    $action = New-PDPOneHiddenPowerShellAction -ScriptPath $agentScript -ScriptArguments @("-AgentRoot", $AgentRoot) -HiddenRunnerPath $hiddenRunner
+    $trigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
+    $principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel Highest
+    $settings = New-ScheduledTaskSettingsSet -RestartCount 20 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit (New-TimeSpan -Days 3650) -MultipleInstances IgnoreNew -StartWhenAvailable
+    Register-ScheduledTask -TaskName $AgentTaskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Description "Processes only signed, allowlisted PDP One deployment and operational requests." -Force | Out-Null
+}
+
 try {
-    if (-not (Test-Path -LiteralPath $agentScript)) {
-        throw "The protected PDP One Deployment Agent wrapper is missing."
-    }
+    if (-not (Test-Path -LiteralPath $agentScript)) { throw "The protected PDP One Deployment Agent wrapper is missing." }
 
     Update-PDPOneAgentCapabilityMetadata -Report $report
-
     if (Test-Path -LiteralPath $incomingRoot) {
         $report.incoming_requests = @(Get-ChildItem -LiteralPath $incomingRoot -Filter "*.json" -File -ErrorAction SilentlyContinue).Count
     }
 
     $task = Get-ScheduledTask -TaskName $AgentTaskName -ErrorAction SilentlyContinue
     if ($null -eq $task) {
-        $arguments = "-NoLogo -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$agentScript`" -AgentRoot `"$AgentRoot`""
-        $action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument $arguments
-        $trigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
-        $principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel Highest
-        $settings = New-ScheduledTaskSettingsSet -RestartCount 20 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit (New-TimeSpan -Days 3650) -MultipleInstances IgnoreNew -StartWhenAvailable
-        Register-ScheduledTask -TaskName $AgentTaskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Description "Processes only signed, allowlisted PDP One deployment and operational requests." -Force | Out-Null
+        Register-PDPOneFixedAgentTask
         $report.task_recreated = $true
+        $task = Get-ScheduledTask -TaskName $AgentTaskName -ErrorAction Stop
+    } elseif (-not (Test-PDPOneScheduledTaskWindowless -Task $task -HiddenRunnerPath $hiddenRunner)) {
+        Register-PDPOneFixedAgentTask
+        $report.task_action_repaired = $true
         $task = Get-ScheduledTask -TaskName $AgentTaskName -ErrorAction Stop
     }
 
@@ -138,20 +145,15 @@ try {
         $task = Get-ScheduledTask -TaskName $AgentTaskName -ErrorAction Stop
     }
 
-    # Never stop or restart a Running Agent here. A long exact deployment may
-    # legitimately keep the worker busy. The watchdog only repairs missing,
-    # disabled, Ready or otherwise non-running scheduler state.
     if ([string]$task.State -ne "Running") {
         Start-ScheduledTask -TaskName $AgentTaskName -ErrorAction Stop
         $report.start_requested = $true
         Start-Sleep -Seconds 2
     }
 
-    $after = Get-ScheduledTask -TaskName $AgentTaskName -ErrorAction Stop
+    $after = Assert-PDPOneScheduledTaskWindowless -TaskName $AgentTaskName -HiddenRunnerPath $hiddenRunner
     $report.task_state_after = [string]$after.State
-    if ([string]$after.State -ne "Running") {
-        throw "The PDP One Deployment Agent Scheduled Task did not enter Running state."
-    }
+    if ([string]$after.State -ne "Running") { throw "The PDP One Deployment Agent Scheduled Task did not enter Running state." }
 
     $report.status = "healthy"
 } catch {
