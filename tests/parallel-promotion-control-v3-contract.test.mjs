@@ -24,7 +24,8 @@ test('stable legacy deploy schema is preserved but routed below the schema throu
 });
 
 test('V3 and V2 share the same durable promotion lease boundary', () => {
-  assert.match(promotion, /SHARED_PROMOTION_LEASE = deployment_queue\.QUEUE_ROOT \/ "coordinator" \/ "promotion-lease\.json"/);
+  assert.match(promotion, /def configure_queue_root\(queue_root: Path \| str\)/);
+  assert.match(promotion, /SHARED_PROMOTION_LEASE = root \/ "coordinator" \/ "promotion-lease\.json"/);
   assert.match(v2, /PROMOTION_LEASE = ROOT \/ "promotion-lease\.json"/);
   assert.match(promotion, /"schema": "pdp-one\.promotion-lease\.v3"/);
   assert.match(promotion, /ACTIVE_LEASE_HOURS/);
