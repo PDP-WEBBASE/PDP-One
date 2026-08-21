@@ -42,9 +42,12 @@ test('authoritative promotion attestation uses exact current-main effective diff
   assert.match(hardening, /"changed_files_source": "current-main-compare"/);
   assert.doesNotMatch(hardening, /pulls\/\{pr_number\}\/files/);
   assert.match(hardening, /behind_by != 0/);
-  assert.match(hardening, /PDP One Application Boundary Governance/);
-  assert.match(hardening, /PDP One CI/);
-  assert.match(hardening, /Build immutable PDP One images/);
+  assert.match(hardening, /promotion\.EVIDENCE_WORKFLOWS\["boundary"\]/);
+  assert.match(hardening, /promotion\.EVIDENCE_WORKFLOWS\["verify"\]/);
+  assert.match(hardening, /promotion\.EVIDENCE_WORKFLOWS\["images"\]/);
+  assert.match(promotion, /"boundary": "PDP One Application Boundary Governance"/);
+  assert.match(promotion, /"verify": "PDP One CI"/);
+  assert.match(promotion, /"images": "Build immutable PDP One images"/);
   assert.match(hardening, /"run_id": int\(run\.get\("id", 0\)\)/);
 });
 
