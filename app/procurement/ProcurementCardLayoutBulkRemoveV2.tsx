@@ -374,7 +374,6 @@ export default function ProcurementCardLayoutBulkRemoveV2() {
     window.addEventListener(ROW_TOGGLE_EVENT, onToggle);
     window.addEventListener(NOTICE_DATA_EVENT, onData);
     window.addEventListener(PROCUREMENT_STABLE_VIEW_STATE_EVENT, onState);
-    setView(getProcurementStableViewState());
     return () => {
       window.removeEventListener(ROW_TOGGLE_EVENT, onToggle);
       window.removeEventListener(NOTICE_DATA_EVENT, onData);
