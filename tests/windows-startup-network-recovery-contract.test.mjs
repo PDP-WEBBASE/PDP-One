@@ -31,6 +31,30 @@ test("stable startup tolerates slow Rancher boot and performs one bounded non-de
   assert.doesNotMatch(rancher, /tailscale\s+(?:logout|down|up)/i);
 });
 
+test("stable startup binds Compose to the last healthy immutable deployment images", async () => {
+  const startup = await load("../scripts/windows/Start-PDPOne.ps1");
+
+  assert.match(startup, /last-deployment\.json/);
+  assert.match(startup, /active_images/);
+  assert.match(startup, /PDP_BACKEND_IMAGE/);
+  assert.match(startup, /PDP_MCP_IMAGE/);
+  assert.match(startup, /PDP_WEB_IMAGE/);
+  assert.match(startup, /ghcr\.io\/pdp-webbase\/pdp-one-\$service/);
+  assert.match(startup, /content-\[0-9a-f\]\{64\}/);
+  assert.match(startup, /docker image inspect \$image/);
+  assert.match(startup, /Stable Startup will not pull or build a substitute/);
+  assert.match(startup, /--pull never/);
+
+  const acceptedStateIndex = startup.indexOf("last-deployment.json");
+  const composeConfigIndex = startup.indexOf("docker compose config --quiet");
+  assert.ok(acceptedStateIndex >= 0, "accepted deployment state must be read");
+  assert.ok(composeConfigIndex > acceptedStateIndex, "accepted image identities must be bound before Compose resolves services");
+
+  assert.doesNotMatch(startup, /docker\s+(?:pull|build)\b/i);
+  assert.doesNotMatch(startup, /docker\s+volume\s+(?:rm|prune)/i);
+  assert.doesNotMatch(startup, /tailscale\s+logout/i);
+});
+
 test("startup task retries immediately on Windows network connection and keeps a periodic fallback", async () => {
   const task = await load("../scripts/windows/Register-PDPOneStartupTask.ps1");
 
