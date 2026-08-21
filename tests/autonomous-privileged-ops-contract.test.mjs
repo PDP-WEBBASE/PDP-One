@@ -93,14 +93,11 @@ test('watchdog self-test is bounded, lane-aware and fails safe', () => {
   assert.doesNotMatch(watchdogSelfTest, /docker\s+(?:volume|system)\s+prune|tailscale\s+logout|Remove-Item[^\n]+\.env/i);
 });
 
-test('steady-state compatibility protects the autonomous deployment agent', () => {
+test('compatibility is steady-state protected or in the single bounded bootstrap self-reconcile stage', () => {
   assert.equal(contract.schema, 'pdp-one.deployment-agent-compatibility.v1');
   assert.equal(contract.protocol_version, 1);
-  assert.equal(Object.hasOwn(contract, 'migration_stage'), false);
-  assert.equal(Object.hasOwn(contract, 'migration_note'), false);
   const files = contract.bootstrap_files.map((entry) => entry.agent_file);
-  assert.equal(files.includes('Deployment-Agent.Standard.ps1'), true);
-  assert.deepEqual(files.sort(), [
+  const steadyState = [
     'Deployment-Agent.Standard.ps1',
     'Invoke-PDPOneDeployment.ps1',
     'Invoke-PDPOneManagedFastDeployment.ps1',
@@ -109,5 +106,16 @@ test('steady-state compatibility protects the autonomous deployment agent', () =
     'PDPOne.OperationLock.ps1',
     'PDPOne.ReleaseManifest.ps1',
     'Test-PDPOneExactCandidateCompatibility.ps1',
-  ].sort());
+  ];
+
+  if (contract.migration_stage === 'deployment-bootstrap-self-reconcile-stage-a') {
+    assert.match(String(contract.migration_note || ''), /Stage B immediately restores/i);
+    assert.deepEqual(files.sort(), steadyState.filter((name) => name !== 'Invoke-PDPOneScopedRegistryDeployment.ps1').sort());
+    assert.equal(files.includes('Deployment-Agent.Standard.ps1'), true);
+    return;
+  }
+
+  assert.equal(Object.hasOwn(contract, 'migration_stage'), false);
+  assert.equal(Object.hasOwn(contract, 'migration_note'), false);
+  assert.deepEqual(files.sort(), steadyState.sort());
 });
