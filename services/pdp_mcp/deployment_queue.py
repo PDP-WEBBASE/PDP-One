@@ -24,6 +24,8 @@ REPORT_ROOT = Path(os.getenv("PDP_DEPLOYMENT_REPORTS", "/deployment-agent/report
 SIGNING_KEY = os.getenv("PDP_DEPLOYMENT_AGENT_SIGNING_KEY", "")
 COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
 IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+STABLE_OPERATIONAL_INTERFACE_REVISION = "pdp-one.stable-bootstrap-control-plane.v1"
+RUNTIME_MCP_TOOLSET_REVISION = "pdp-one.mcp-toolset.v1"
 DEFAULT_TTL_SECONDS = 300
 MAX_TTL_SECONDS = 1800
 ACTION_TTL_SECONDS = {
@@ -244,6 +246,42 @@ def _read_agent_watchdog_status() -> dict[str, Any]:
         return unavailable
 
 
+def _read_agent_capability_status() -> dict[str, Any]:
+    report_path = REPORT_ROOT / "deployment-agent-watchdog.json"
+    unavailable = {
+        "stable_operational_interface_revision": STABLE_OPERATIONAL_INTERFACE_REVISION,
+        "agent_protocol_version": None,
+        "agent_sync_capable": False,
+        "agent_self_reconcile_capable": False,
+        "agent_bootstrap_manifest_hash": None,
+        "runtime_bootstrap_manifest_hash": None,
+        "agent_candidate_compatibility": "unknown",
+        "agent_migration_stage": None,
+    }
+    if not report_path.exists() or not report_path.is_file():
+        return unavailable
+    try:
+        with report_path.open("r", encoding="utf-8-sig") as handle:
+            raw = json.load(handle)
+        if not isinstance(raw, dict) or str(raw.get("schema", "")) != "pdp-one.deployment-agent-watchdog.v1":
+            return unavailable
+        protocol = raw.get("agent_protocol_version")
+        return {
+            "stable_operational_interface_revision": str(
+                raw.get("stable_operational_interface_revision", STABLE_OPERATIONAL_INTERFACE_REVISION)
+            )[:128],
+            "agent_protocol_version": int(protocol) if protocol is not None else None,
+            "agent_sync_capable": bool(raw.get("agent_sync_capable", False)),
+            "agent_self_reconcile_capable": bool(raw.get("agent_self_reconcile_capable", False)),
+            "agent_bootstrap_manifest_hash": _sanitize_report_value(raw.get("agent_bootstrap_manifest_hash")),
+            "runtime_bootstrap_manifest_hash": _sanitize_report_value(raw.get("runtime_bootstrap_manifest_hash")),
+            "agent_candidate_compatibility": str(raw.get("agent_candidate_compatibility", "unknown"))[:64],
+            "agent_migration_stage": _sanitize_report_value(raw.get("agent_migration_stage")),
+        }
+    except (OSError, ValueError, TypeError, json.JSONDecodeError, UnicodeDecodeError):
+        return unavailable
+
+
 def _read_public_mcp_connectivity_status() -> dict[str, Any]:
     report_path = REPORT_ROOT / "public-mcp-connectivity.json"
     unavailable = {
@@ -419,6 +457,7 @@ def get_queue_status() -> dict[str, Any]:
     pending = list(incoming.glob("*.json")) if incoming.exists() else []
     pending_diagnostics = _pending_request_diagnostics(incoming)
     watchdog = _read_agent_watchdog_status()
+    capabilities = _read_agent_capability_status()
     connectivity = _read_public_mcp_connectivity_status()
     return {
         "configured": configured,
@@ -429,6 +468,13 @@ def get_queue_status() -> dict[str, Any]:
         "completed_responses": len(list(responses.glob("*.json"))) if responses.exists() else 0,
         "transport": "local signed file queue",
         "arbitrary_shell_allowed": False,
+        "stable_operational_interface_revision": STABLE_OPERATIONAL_INTERFACE_REVISION,
+        "runtime_mcp_toolset_revision": RUNTIME_MCP_TOOLSET_REVISION,
+        "connected_tool_schema_observable": False,
+        "connected_tool_schema_revision": None,
+        "schema_refresh_required": None,
+        "schema_refresh_required_for_bootstrap": False,
+        "agent_capabilities": capabilities,
         "agent_watchdog": watchdog,
         "agent_processor_healthy": bool(
             watchdog.get("available")
