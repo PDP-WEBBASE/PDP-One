@@ -27,15 +27,6 @@ from typing import Any
 import deployment_queue
 
 REVISION = "pdp-one.parallel-promotion-control.v3"
-ROOT = deployment_queue.QUEUE_ROOT / "promotion-v3"
-READY = ROOT / "ready"
-REQUESTS = ROOT / "requests"
-HISTORY = ROOT / "history"
-ATTESTATIONS = ROOT / "attestations"
-ACTIVE = ROOT / "active-ticket.json"
-LOCK = ROOT / ".mutation-lock"
-SHARED_PROMOTION_LEASE = deployment_queue.QUEUE_ROOT / "coordinator" / "promotion-lease.json"
-
 REPOSITORY = os.getenv("PDP_APPLICATION_REPOSITORY", "PDP-WEBBASE/PDP-One").strip()
 GITHUB_API = os.getenv("PDP_APPLICATION_GITHUB_API", "https://api.github.com").rstrip("/")
 GITHUB_READ_TOKEN = os.getenv("PDP_APPLICATION_GITHUB_READ_TOKEN", "").strip()
@@ -55,6 +46,7 @@ BLOCKING_TICKET_STATES = {
     "pre_merge",
     "decision_required",
 }
+FORWARD_DEPLOY_SUCCESS_STATES = {"acceptance", "pre_merge", "merged"}
 EVIDENCE_WORKFLOWS = {
     "boundary": "PDP One Application Boundary Governance",
     "verify": "PDP One CI",
@@ -66,10 +58,31 @@ _started = False
 _start_guard = threading.Lock()
 _process_guard = threading.RLock()
 _last_background_error: str | None = None
+_configured_queue_root: Path | None = None
 
 
 class PromotionAttestationError(RuntimeError):
     """A candidate cannot enter final promotion with authoritative evidence."""
+
+
+def configure_queue_root(queue_root: Path | str) -> None:
+    """Derive V3 durable paths from the queue root currently used by the caller."""
+    global ROOT, READY, REQUESTS, HISTORY, ATTESTATIONS, ACTIVE, LOCK, SHARED_PROMOTION_LEASE, _configured_queue_root
+    root = Path(queue_root)
+    if _configured_queue_root == root:
+        return
+    ROOT = root / "promotion-v3"
+    READY = ROOT / "ready"
+    REQUESTS = ROOT / "requests"
+    HISTORY = ROOT / "history"
+    ATTESTATIONS = ROOT / "attestations"
+    ACTIVE = ROOT / "active-ticket.json"
+    LOCK = ROOT / ".mutation-lock"
+    SHARED_PROMOTION_LEASE = root / "coordinator" / "promotion-lease.json"
+    _configured_queue_root = root
+
+
+configure_queue_root(deployment_queue.QUEUE_ROOT)
 
 
 def _now() -> datetime:
@@ -114,6 +127,7 @@ def _read_json(path: Path) -> dict[str, Any]:
 
 @contextmanager
 def _mutation_lock(timeout_seconds: int = 5):
+    """Cross-thread/process lock; callers must not recursively acquire the file lock."""
     with _process_guard:
         ROOT.mkdir(parents=True, exist_ok=True)
         deadline = time.monotonic() + max(1, timeout_seconds)
@@ -232,6 +246,7 @@ def _cached_attestation(commit_sha: str) -> dict[str, Any] | None:
 
 
 def attest_commit(commit_sha: str, *, allow_cache: bool = True) -> dict[str, Any]:
+    """Read exact PR/main/check identities directly from GitHub; fail closed."""
     commit = deployment_queue.validate_commit(commit_sha)
     if allow_cache:
         cached = _cached_attestation(commit)
@@ -244,9 +259,7 @@ def attest_commit(commit_sha: str, *, allow_cache: bool = True) -> dict[str, Any
     pulls = _github_json(f"commits/{commit}/pulls")
     candidates = []
     for pr in pulls if isinstance(pulls, list) else []:
-        if not isinstance(pr, dict):
-            continue
-        if str(pr.get("state", "")) != "open":
+        if not isinstance(pr, dict) or str(pr.get("state", "")) != "open":
             continue
         head_sha = str(((pr.get("head") or {}).get("sha", ""))).lower()
         base_ref = str(((pr.get("base") or {}).get("ref", "")))
@@ -288,11 +301,7 @@ def attest_commit(commit_sha: str, *, allow_cache: bool = True) -> dict[str, Any
             raise PromotionAttestationError(f"Required exact-head workflow is missing: {name}.")
         if str(run.get("status", "")) != "completed" or str(run.get("conclusion", "")) != "success":
             raise PromotionAttestationError(f"Required exact-head workflow is not successful: {name}.")
-        evidence[name] = {
-            "run_id": int(run.get("id", 0)),
-            "status": "success",
-            "head_sha": commit,
-        }
+        evidence[name] = {"run_id": int(run.get("id", 0)), "status": "success", "head_sha": commit}
 
     priority, priority_rank = _infer_priority(changed_files)
     value = {
@@ -363,6 +372,14 @@ def _release_shared_lease_unlocked(ticket: dict[str, Any]) -> None:
         SHARED_PROMOTION_LEASE.unlink(missing_ok=True)
 
 
+def _agent_busy() -> bool:
+    for name in ("incoming", "processing"):
+        root = deployment_queue.QUEUE_ROOT / name
+        if root.exists() and any(root.glob("*.json")):
+            return True
+    return False
+
+
 def _request_path(request_id: str) -> Path:
     return REQUESTS / f"{request_id}.json"
 
@@ -426,13 +443,7 @@ def _find_existing_request_unlocked(action: str, params: dict[str, Any]) -> dict
 def _activate_unlocked(record: dict[str, Any]) -> dict[str, Any]:
     now = _iso()
     ticket = dict(record)
-    ticket.update(
-        schema="pdp-one.promotion-ticket.v3",
-        ticket_id=str(uuid.uuid4()),
-        state="dispatching",
-        activated_at=now,
-        updated_at=now,
-    )
+    ticket.update(schema="pdp-one.promotion-ticket.v3", ticket_id=str(uuid.uuid4()), state="dispatching", activated_at=now, updated_at=now)
     _atomic_json(ACTIVE, ticket)
     record.update(state="dispatching", ticket_id=ticket["ticket_id"], updated_at=now)
     _atomic_json(_request_path(record["client_request_id"]), record)
@@ -440,11 +451,46 @@ def _activate_unlocked(record: dict[str, Any]) -> dict[str, Any]:
     return ticket
 
 
+def _public_request_status_unlocked(request_id: str) -> dict[str, Any]:
+    path = _request_path(request_id)
+    if not path.exists():
+        return {"request_id": request_id, "status": "pending"}
+    record = _read_json(path)
+    state = str(record.get("state", "pending"))
+    status = "pending"
+    if state in {"merged", "succeeded", "pre_merge"}:
+        status = "succeeded"
+    elif state == "failed":
+        status = "failed"
+    result = {
+        "request_id": request_id,
+        "status": status,
+        "promotion_managed": True,
+        "promotion_state": state,
+        "exact_commit": record.get("commit_sha"),
+        "deployment_id": record.get("deployment_id"),
+        "pull_request": record.get("pull_request"),
+        "current_main_sha": record.get("main_sha"),
+        "agent_request_id": record.get("agent_request_id"),
+    }
+    if record.get("waiting_reason"):
+        result["waiting_reason"] = record.get("waiting_reason")
+    if record.get("decision_reason"):
+        result["decision_reason"] = record.get("decision_reason")
+    return result
+
+
 def before_enqueue(action: str, params: dict[str, Any]) -> dict[str, Any] | None:
     """Gate stable legacy deployment tools before a signed Agent request exists."""
-    ensure_started()
+    configure_queue_root(deployment_queue.QUEUE_ROOT)
     if action not in DEPLOY_ACTIONS and action != HEALTH_ACTION:
         return None
+
+    # Generic health remains a legacy diagnostic. It cannot advance acceptance
+    # unless an exact active deployment id is supplied.
+    if action == HEALTH_ACTION and not ACTIVE.exists():
+        return None
+    ensure_started()
 
     if action == HEALTH_ACTION:
         deployment_id = str(params.get("deployment_id", "")).strip()
@@ -481,28 +527,25 @@ def before_enqueue(action: str, params: dict[str, Any]) -> dict[str, Any] | None
     with _mutation_lock():
         existing = _find_existing_request_unlocked(action, params)
         if existing:
-            return {
-                "managed": True,
-                "defer": True,
-                "response": public_request_status(existing["client_request_id"]),
-            }
+            return {"managed": True, "defer": True, "response": _public_request_status_unlocked(existing["client_request_id"])}
 
         record = _new_request_record(action, params, attestation)
         _atomic_json(_request_path(record["client_request_id"]), record)
 
         active = _active_ticket_unlocked()
         shared = _shared_lease_unlocked()
-        if active or shared:
+        if active or shared or _agent_busy():
             record["state"] = "waiting_promotion"
-            record["waiting_reason"] = "active_v3_ticket" if active else "active_v2_promotion_lease"
+            if active:
+                record["waiting_reason"] = "active_v3_ticket"
+            elif shared:
+                record["waiting_reason"] = "active_v2_promotion_lease"
+            else:
+                record["waiting_reason"] = "deployment_agent_busy"
             record["updated_at"] = _iso()
             _atomic_json(_request_path(record["client_request_id"]), record)
             _atomic_json(_ready_path(record), record)
-            return {
-                "managed": True,
-                "defer": True,
-                "response": public_request_status(record["client_request_id"]),
-            }
+            return {"managed": True, "defer": True, "response": _public_request_status_unlocked(record["client_request_id"])}
 
         _activate_unlocked(record)
         return {"managed": True, "kind": "deployment", "client_request_id": record["client_request_id"]}
@@ -550,27 +593,18 @@ def _find_request_by_agent_unlocked(agent_request_id: str) -> dict[str, Any] | N
 
 
 def resolve_request_id(request_id: str) -> dict[str, Any] | None:
+    configure_queue_root(deployment_queue.QUEUE_ROOT)
+    if not ROOT.exists():
+        return None
     ensure_started()
     with _mutation_lock():
         direct = _request_path(request_id)
         if direct.exists():
             record = _read_json(direct)
-            return {
-                "client_request_id": request_id,
-                "agent_request_id": record.get("agent_request_id"),
-                "state": record.get("state"),
-                "managed": True,
-                "record": record,
-            }
+            return {"client_request_id": request_id, "agent_request_id": record.get("agent_request_id"), "state": record.get("state"), "managed": True, "record": record}
         record = _find_request_by_agent_unlocked(request_id)
         if record:
-            return {
-                "client_request_id": record["client_request_id"],
-                "agent_request_id": request_id,
-                "state": record.get("state"),
-                "managed": True,
-                "record": record,
-            }
+            return {"client_request_id": record["client_request_id"], "agent_request_id": request_id, "state": record.get("state"), "managed": True, "record": record}
     return None
 
 
@@ -580,35 +614,11 @@ def public_request_status(request_id: str) -> dict[str, Any]:
     except ValueError as exc:
         raise ValueError("request_id is invalid.") from exc
     with _mutation_lock():
-        path = _request_path(normalized)
-        if not path.exists():
-            return {"request_id": normalized, "status": "pending"}
-        record = _read_json(path)
-        state = str(record.get("state", "pending"))
-        status = "pending"
-        if state in {"merged", "succeeded", "pre_merge"}:
-            status = "succeeded"
-        elif state == "failed":
-            status = "failed"
-        result = {
-            "request_id": normalized,
-            "status": status,
-            "promotion_managed": True,
-            "promotion_state": state,
-            "exact_commit": record.get("commit_sha"),
-            "deployment_id": record.get("deployment_id"),
-            "pull_request": record.get("pull_request"),
-            "current_main_sha": record.get("main_sha"),
-            "agent_request_id": record.get("agent_request_id"),
-        }
-        if record.get("waiting_reason"):
-            result["waiting_reason"] = record.get("waiting_reason")
-        if record.get("decision_reason"):
-            result["decision_reason"] = record.get("decision_reason")
-        return result
+        return _public_request_status_unlocked(normalized)
 
 
 def observe_response(client_request_id: str, agent_request_id: str, response: dict[str, Any]) -> None:
+    """Advance ticket states monotonically from signed Agent responses."""
     with _mutation_lock():
         request_path = _request_path(client_request_id)
         if not request_path.exists():
@@ -616,6 +626,11 @@ def observe_response(client_request_id: str, agent_request_id: str, response: di
         record = _read_json(request_path)
         status = str(response.get("status", "pending"))
         if status not in {"succeeded", "failed"}:
+            return
+        record_state = str(record.get("state", ""))
+        if record.get("action") in DEPLOY_ACTIONS and status == "succeeded" and record_state in FORWARD_DEPLOY_SUCCESS_STATES:
+            # The same immutable Agent response may be read repeatedly. Never
+            # move an already accepted/pre-merge ticket backwards.
             return
         now = _iso()
         record["agent_request_id"] = agent_request_id
@@ -626,16 +641,19 @@ def observe_response(client_request_id: str, agent_request_id: str, response: di
         if record.get("action") in DEPLOY_ACTIONS:
             if status == "failed":
                 record["state"] = "failed"
+                _atomic_json(request_path, record)
                 if active and active.get("ticket_id") == record.get("ticket_id"):
                     active["state"] = "failed"
                     active["decision_reason"] = "deployment_failed"
                     active["updated_at"] = now
                     _archive_active_unlocked(active)
-                _atomic_json(request_path, record)
                 return
             runtime_accepted = bool(response.get("runtime_accepted"))
             record["state"] = "pre_merge" if runtime_accepted else "acceptance"
+            _atomic_json(request_path, record)
             if active and active.get("ticket_id") == record.get("ticket_id"):
+                if str(active.get("state")) == "pre_merge":
+                    return
                 active["state"] = record["state"]
                 active["deployment_completed_at"] = now
                 active["updated_at"] = now
@@ -644,7 +662,6 @@ def observe_response(client_request_id: str, agent_request_id: str, response: di
                     active["acceptance_source"] = "composite_promote_exact_candidate"
                 _atomic_json(ACTIVE, active)
                 _write_shared_lease_unlocked(active)
-            _atomic_json(request_path, record)
             return
 
         if record.get("action") == HEALTH_ACTION:
@@ -696,7 +713,7 @@ def _ready_records_unlocked() -> list[tuple[Path, dict[str, Any]]]:
 
 def _dispatch_waiting_candidate() -> None:
     with _mutation_lock():
-        if _active_ticket_unlocked() or _shared_lease_unlocked():
+        if _active_ticket_unlocked() or _shared_lease_unlocked() or _agent_busy():
             return
         records = _ready_records_unlocked()
         if not records:
@@ -720,7 +737,7 @@ def _dispatch_waiting_candidate() -> None:
         return
 
     with _mutation_lock():
-        if _active_ticket_unlocked() or _shared_lease_unlocked():
+        if _active_ticket_unlocked() or _shared_lease_unlocked() or _agent_busy():
             return
         path = _request_path(client_id)
         if not path.exists():
@@ -737,11 +754,7 @@ def _dispatch_waiting_candidate() -> None:
     try:
         deployment_queue.enqueue(
             record["action"],
-            {
-                "commit_sha": record["commit_sha"],
-                "deployment_id": record["deployment_id"],
-                "preview_id": record["preview_id"],
-            },
+            {"commit_sha": record["commit_sha"], "deployment_id": record["deployment_id"], "preview_id": record["preview_id"]},
             _promotion_internal=True,
             _promotion_context=context,
         )
@@ -810,6 +823,7 @@ def _reconcile_active_github() -> None:
 
 
 def status_snapshot() -> dict[str, Any]:
+    configure_queue_root(deployment_queue.QUEUE_ROOT)
     ensure_started()
     with _mutation_lock():
         active = _active_ticket_unlocked()
@@ -862,6 +876,7 @@ def _loop() -> None:
 
 def ensure_started() -> None:
     global _started
+    configure_queue_root(deployment_queue.QUEUE_ROOT)
     with _start_guard:
         if _started:
             return
