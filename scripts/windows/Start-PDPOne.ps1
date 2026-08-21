@@ -55,7 +55,7 @@ try {
     # the exact Windows scripts but the deployment agent does not execute the
     # task-registration script. Apply a versioned task policy once, then leave
     # the schedules untouched on ordinary watchdog/network-triggered runs.
-    $startupPolicyVersion = "2026-08-20-autonomous-ops-v3"
+    $startupPolicyVersion = "2026-08-21-hidden-background-tasks-v5"
     $startupPolicyRoot = "C:\ProgramData\PDP-One\maintenance"
     $startupPolicyPath = Join-Path $startupPolicyRoot "startup-task-policy.version"
     try {
@@ -91,10 +91,6 @@ try {
         return
     }
 
-    # Keep advisory disk maintenance out of the readiness-critical path. Normal
-    # startup uses existing images with no build or pull, while the daily Disk
-    # Guard remains registered separately. The startup-mode guard runs after the
-    # web/API/MCP/public health path is already established.
     $rancherStartupOutput = @(& powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "Start-PDPOneRancherResilient.ps1") -InitialTimeoutSeconds $DockerTimeoutSeconds -RecoveryTimeoutSeconds $RancherRecoveryTimeoutSeconds)
     if ($LASTEXITCODE -ne 0) { throw "Rancher Desktop/Docker recovery could not establish a ready engine." }
     if ($rancherStartupOutput.Count -gt 0) { $report.rancher_startup_report = [string]$rancherStartupOutput[-1] }
