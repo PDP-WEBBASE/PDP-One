@@ -6,9 +6,11 @@ param([string]$AgentRoot = "C:\ProgramData\PDP-One\deployment-agent")
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 . (Join-Path $PSScriptRoot "PDPOne.Common.ps1")
+. (Join-Path $PSScriptRoot "PDPOne.HiddenTask.ps1")
 $ProjectRoot = Get-PDPOneProjectRoot
 $envPath = Assert-PDPOneConfiguration -ProjectRoot $ProjectRoot
 $BootstrapSourceRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
+$hiddenRunner = Get-PDPOneHiddenRunnerPath -BaseDirectory $PSScriptRoot
 
 Write-Host "One-time setup: PDP One Local Deployment Agent" -ForegroundColor Cyan
 Write-Host "A GitHub Personal Access Token (classic) with minimum read:packages is required once for Private GHCR image pulls." -ForegroundColor Yellow
@@ -17,9 +19,7 @@ Write-Host "The token is protected with Windows DPAPI for this Windows account a
 $secureToken = Read-Host "Paste the GitHub PAT classic with read:packages" -AsSecureString
 if ($secureToken.Length -lt 20) { throw "A GitHub token was not supplied." }
 
-if (-not (Test-PDPOneDockerEngine)) {
-    throw "Docker Engine must be ready before the GHCR credential can be validated."
-}
+if (-not (Test-PDPOneDockerEngine)) { throw "Docker Engine must be ready before the GHCR credential can be validated." }
 
 $credentialPointer = [IntPtr]::Zero
 $plainCredential = $null
@@ -27,15 +27,10 @@ try {
     $credentialPointer = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secureToken)
     $plainCredential = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($credentialPointer)
     if ([string]::IsNullOrWhiteSpace($plainCredential)) { throw "The GitHub token could not be opened for validation." }
-
     $plainCredential | & docker login ghcr.io --username "PDP-WEBBASE" --password-stdin | Out-Null
-    if ($LASTEXITCODE -ne 0) {
-        throw "GitHub Container Registry login failed. Use a PAT classic with read:packages and an account that can read the PDP One container packages."
-    }
+    if ($LASTEXITCODE -ne 0) { throw "GitHub Container Registry login failed. Use a PAT classic with read:packages and an account that can read the PDP One container packages." }
 } finally {
-    if ($credentialPointer -ne [IntPtr]::Zero) {
-        [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($credentialPointer)
-    }
+    if ($credentialPointer -ne [IntPtr]::Zero) { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($credentialPointer) }
     Remove-Variable plainCredential -ErrorAction SilentlyContinue
     & docker logout ghcr.io *> $null
 }
@@ -86,8 +81,6 @@ if ([string]::IsNullOrWhiteSpace($publicBase) -and (Test-PDPOneDockerEngine)) {
 }
 $agentScript = Join-Path $binRoot "Deployment-Agent.ps1"
 
-# Bootstrap only the deployment control plane. Web/backend code, database,
-# volumes, Tailscale identity and MCP path token are not changed here.
 try {
     Copy-Item -LiteralPath (Join-Path $BootstrapSourceRoot "docker-compose.yml") -Destination (Join-Path $ProjectRoot "docker-compose.yml") -Force
     & robocopy.exe (Join-Path $BootstrapSourceRoot "services\pdp_mcp") (Join-Path $ProjectRoot "services\pdp_mcp") /MIR /COPY:DAT /DCOPY:DAT /R:2 /W:1 /NFL /NDL /NP
@@ -105,15 +98,15 @@ try {
     throw "Agent control-plane bootstrap failed and the previous MCP files were restored: $($_.Exception.Message)"
 }
 
-$action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-NoLogo -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$agentScript`" -AgentRoot `"$AgentRoot`""
+$action = New-PDPOneHiddenPowerShellAction -ScriptPath $agentScript -ScriptArguments @("-AgentRoot", $AgentRoot) -HiddenRunnerPath $hiddenRunner
 $trigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
 $principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel Highest
 $settings = New-ScheduledTaskSettingsSet -RestartCount 20 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit (New-TimeSpan -Days 3650) -MultipleInstances IgnoreNew
 Register-ScheduledTask -TaskName "PDP One Local Deployment Agent" -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Description "Processes only signed, allowlisted PDP One deployment requests." -Force | Out-Null
+Assert-PDPOneScheduledTaskWindowless -TaskName "PDP One Local Deployment Agent" -HiddenRunnerPath $hiddenRunner | Out-Null
 Start-ScheduledTask -TaskName "PDP One Local Deployment Agent"
 
-& powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "Register-PDPOneStartupTask.ps1") -ProjectRoot $ProjectRoot
-if ($LASTEXITCODE -ne 0) { throw "Stable startup tasks could not be registered." }
+& (Join-Path $PSScriptRoot "Register-PDPOneStartupTask.ps1") -ProjectRoot $ProjectRoot
 Start-ScheduledTask -TaskName "PDP One Stable Startup"
 
 Write-Host "Local deployment agent and stable startup watchdog installed. This one-time Windows action is complete." -ForegroundColor Green
