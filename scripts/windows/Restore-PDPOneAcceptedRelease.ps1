@@ -3,6 +3,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)][ValidatePattern('^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$')][string]$FailedDeploymentId,
+    [Parameter(Mandatory = $true)][ValidatePattern('^[0-9a-f]{40}$')][string]$FailedCommit,
     [Parameter(Mandatory = $true)][string]$AgentRoot,
     [switch]$RefreshConnectivityEdge
 )
@@ -102,6 +103,7 @@ try {
     $previousCommit = [string]$state.approved_commit
     if ($previousCommit -notmatch '^[0-9a-f]{40}$') { throw "Accepted previous commit identity is invalid." }
     if ($previousCommit -eq ('0' * 40)) { throw "Accepted previous commit identity is invalid." }
+    if ($previousCommit -eq $FailedCommit) { throw "Failed commit cannot also be the previous accepted recovery commit." }
 
     $images = [ordered]@{ backend = ""; mcp = ""; web = "" }
     if ($null -eq $state.active_images) { throw "Accepted deployment state does not contain immutable images." }
@@ -133,6 +135,11 @@ try {
         Invoke-RestMethod -Uri "https://api.github.com/repos/PDP-WEBBASE/PDP-One/commits/$previousCommit" -Headers $headers -TimeoutSec 45
     }
     if ([string]$commit.sha -ne $previousCommit) { throw "GitHub did not return the exact previous accepted commit." }
+
+    $comparison = Invoke-PDPOneRecoveryRetry -Stage "Failed-candidate comparison" -Action {
+        Invoke-RestMethod -Uri "https://api.github.com/repos/PDP-WEBBASE/PDP-One/compare/$previousCommit...$FailedCommit" -Headers $headers -TimeoutSec 45
+    }
+    $candidateChangedPaths = @($comparison.files | ForEach-Object { [string]$_.filename } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique)
 
     $plainToken | & docker login ghcr.io --username "PDP-WEBBASE" --password-stdin | Out-Null
     if ($LASTEXITCODE -ne 0) { throw "GitHub Container Registry login failed during accepted-release recovery." }
@@ -177,6 +184,14 @@ try {
 
     & robocopy.exe $sourceRoot.FullName $projectRoot /E /COPY:DAT /DCOPY:DAT /R:1 /W:1 /NFL /NDL /NP /XF .env /XD .git work node_modules .next
     if ($LASTEXITCODE -gt 7) { throw "Previous accepted application files could not be restored." }
+    foreach ($path in $candidateChangedPaths) {
+        $relative = $path.Replace('/', '\')
+        $acceptedPath = Join-Path $sourceRoot.FullName $relative
+        $installedPath = Join-Path $projectRoot $relative
+        if (-not (Test-Path -LiteralPath $acceptedPath) -and (Test-Path -LiteralPath $installedPath -PathType Leaf)) {
+            Remove-Item -LiteralPath $installedPath -Force
+        }
+    }
 
     Set-PDPOneEnvValue -Path $envPath -Name "PDP_BACKEND_IMAGE" -Value $images.backend
     Set-PDPOneEnvValue -Path $envPath -Name "PDP_MCP_IMAGE" -Value $images.mcp
@@ -204,6 +219,7 @@ try {
         schema = "pdp-one.accepted-release-recovery.v1"
         status = "succeeded"
         failed_deployment_id = $FailedDeploymentId
+        failed_commit = $FailedCommit
         recovered_commit = $previousCommit
         connectivity_edge_refreshed = [bool]$RefreshConnectivityEdge
         health = "healthy"
