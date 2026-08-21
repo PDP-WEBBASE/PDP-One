@@ -1,14 +1,12 @@
 {
   "schema": "pdp-one.deployment-agent-compatibility.v1",
   "protocol_version": 1,
+  "migration_stage": "stable-bootstrap-control-plane-stage-a",
+  "migration_note": "One bounded bootstrap release keeps the six unchanged installed Agent files protected while the stable deploy_approved_release path installs the changed deployment wrapper, changed compatibility classifier, and new exact reconciliation helper. Stage B immediately removes migration metadata and protects all nine steady-state bootstrap files.",
   "bootstrap_files": [
     {
       "path": "scripts/windows/Deployment-Agent.Standard.ps1",
       "agent_file": "Deployment-Agent.Standard.ps1"
-    },
-    {
-      "path": "scripts/windows/Invoke-PDPOneDeployment.ps1",
-      "agent_file": "Invoke-PDPOneDeployment.ps1"
     },
     {
       "path": "scripts/windows/Invoke-PDPOneManagedFastDeployment.ps1",
@@ -29,10 +27,6 @@
     {
       "path": "scripts/windows/PDPOne.ReleaseManifest.ps1",
       "agent_file": "PDPOne.ReleaseManifest.ps1"
-    },
-    {
-      "path": "scripts/windows/Test-PDPOneExactCandidateCompatibility.ps1",
-      "agent_file": "Test-PDPOneExactCandidateCompatibility.ps1"
     }
   ]
 }
