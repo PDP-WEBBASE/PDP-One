@@ -13,9 +13,12 @@ from typing import Any
 import deployment_queue
 import promotion_control_v3 as promotion
 
+# Reconciliation performs two public GitHub reads while a ticket is active.
+# A 180-second default is about 40 reads/hour, leaving headroom below the
+# normal anonymous REST budget for attestations and unrelated health work.
 GITHUB_RECONCILE_SECONDS = max(
-    30,
-    min(600, int(os.getenv("PDP_PROMOTION_GITHUB_RECONCILE_SECONDS", "60"))),
+    60,
+    min(600, int(os.getenv("PDP_PROMOTION_GITHUB_RECONCILE_SECONDS", "180"))),
 )
 ORPHAN_BINDING_SECONDS = max(
     300,
