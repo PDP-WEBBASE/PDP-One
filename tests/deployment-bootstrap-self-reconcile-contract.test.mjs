@@ -39,24 +39,25 @@ test('self-reconcile orchestration is bounded, queue-serialized, and does not ad
   assert.doesNotMatch(server, /Invoke-Expression|\biex\b|subprocess\.|os\.system\(/i);
 });
 
-test('Stage A omits only the known stale scoped deployment bootstrap file', () => {
+test('steady state restores all protected deployment-agent bootstrap files', () => {
   assert.equal(compatibility.schema, 'pdp-one.deployment-agent-compatibility.v1');
   assert.equal(compatibility.protocol_version, 1);
-  assert.equal(compatibility.migration_stage, 'deployment-bootstrap-self-reconcile-stage-a');
-  const protectedFiles = compatibility.bootstrap_files.map((entry) => entry.agent_file);
-  assert.equal(protectedFiles.length, 7);
-  assert.ok(protectedFiles.includes('Deployment-Agent.Standard.ps1'));
-  assert.ok(protectedFiles.includes('Invoke-PDPOneDeployment.ps1'));
-  assert.ok(protectedFiles.includes('Invoke-PDPOneManagedFastDeployment.ps1'));
-  assert.ok(protectedFiles.includes('PDPOne.Common.ps1'));
-  assert.ok(protectedFiles.includes('PDPOne.OperationLock.ps1'));
-  assert.ok(protectedFiles.includes('PDPOne.ReleaseManifest.ps1'));
-  assert.ok(protectedFiles.includes('Test-PDPOneExactCandidateCompatibility.ps1'));
-  assert.ok(!protectedFiles.includes('Invoke-PDPOneScopedRegistryDeployment.ps1'));
+  assert.equal(Object.hasOwn(compatibility, 'migration_stage'), false);
+  assert.equal(Object.hasOwn(compatibility, 'migration_note'), false);
+  const protectedFiles = compatibility.bootstrap_files.map((entry) => entry.agent_file).sort();
+  assert.deepEqual(protectedFiles, [
+    'Deployment-Agent.Standard.ps1',
+    'Invoke-PDPOneDeployment.ps1',
+    'Invoke-PDPOneManagedFastDeployment.ps1',
+    'Invoke-PDPOneScopedRegistryDeployment.ps1',
+    'PDPOne.Common.ps1',
+    'PDPOne.OperationLock.ps1',
+    'PDPOne.ReleaseManifest.ps1',
+    'Test-PDPOneExactCandidateCompatibility.ps1',
+  ].sort());
 });
 
-test('Stage A is explicitly temporary and does not weaken the fixed signed Agent sync contract', () => {
-  assert.match(compatibility.migration_note, /Stage B immediately restores/i);
+test('steady state retains fixed signed Agent sync and no arbitrary shell contract', () => {
   assert.match(server, /enqueue\(\s*"sync_agent_from_exact_commit"/s);
   assert.doesNotMatch(server, /command_text|shell_command|arbitrary_path/i);
 });
