@@ -25,7 +25,7 @@ SIGNING_KEY = os.getenv("PDP_DEPLOYMENT_AGENT_SIGNING_KEY", "")
 COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
 IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 STABLE_OPERATIONAL_INTERFACE_REVISION = "pdp-one.stable-bootstrap-control-plane.v1"
-RUNTIME_MCP_TOOLSET_REVISION = "pdp-one.mcp-toolset.v1"
+RUNTIME_MCP_TOOLSET_REVISION = "pdp-one.mcp-toolset.v2"
 DEFAULT_TTL_SECONDS = 300
 MAX_TTL_SECONDS = 1800
 ACTION_TTL_SECONDS = {
@@ -149,6 +149,14 @@ def validate_identifier(value: str, field: str) -> str:
     if not IDENTIFIER_RE.fullmatch(normalized):
         raise ValueError(f"{field} must be a safe 1-64 character identifier.")
     return normalized
+
+
+def _promotion_v3():
+    try:
+        import promotion_control_v3
+    except ImportError:
+        return None
+    return promotion_control_v3
 
 
 def _validated_rejected_deployment_id(request_id: str) -> str | None:
@@ -376,6 +384,9 @@ def enqueue(
     action: str,
     params: dict[str, Any] | None = None,
     ttl_seconds: int | None = None,
+    *,
+    _promotion_internal: bool = False,
+    _promotion_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     if action not in ALLOWED_ACTIONS:
         raise ValueError("Unsupported deployment-agent action.")
@@ -389,6 +400,14 @@ def enqueue(
     lifetime = ACTION_TTL_SECONDS.get(action, DEFAULT_TTL_SECONDS) if ttl_seconds is None else int(ttl_seconds)
     if not 30 <= lifetime <= MAX_TTL_SECONDS:
         raise ValueError(f"Queue request lifetime must be between 30 and {MAX_TTL_SECONDS} seconds.")
+
+    promotion = _promotion_v3()
+    promotion_context = _promotion_context
+    if not _promotion_internal and promotion and action in {"deploy_approved_release", "promote_exact_candidate", "check_deployment_health"}:
+        promotion_context = promotion.before_enqueue(action, params or {})
+        if promotion_context and promotion_context.get("defer"):
+            return dict(promotion_context["response"])
+
     now = _utcnow()
     request_id = str(uuid.uuid4())
     payload = {
@@ -417,6 +436,20 @@ def enqueue(
         except FileNotFoundError:
             pass
         raise
+
+    if promotion and promotion_context and promotion_context.get("managed"):
+        promotion.after_enqueue(action, params or {}, request_id, promotion_context)
+        public_request_id = str(promotion_context.get("client_request_id") or request_id)
+        return {
+            "request_id": public_request_id,
+            "agent_request_id": request_id,
+            "action": action,
+            "status": "queued",
+            "promotion_managed": True,
+            "expires_at": payload["expires_at"],
+            "emergency_reserve_released": reserve_released,
+        }
+
     return {
         "request_id": request_id,
         "action": action,
@@ -432,8 +465,17 @@ def get_response(request_id: str) -> dict[str, Any]:
         normalized = str(uuid.UUID(request_id))
     except ValueError as exc:
         raise ValueError("request_id is invalid.") from exc
-    path = QUEUE_ROOT / "responses" / f"{normalized}.json"
+
+    promotion = _promotion_v3()
+    mapping = promotion.resolve_request_id(normalized) if promotion else None
+    if mapping and not mapping.get("agent_request_id"):
+        return promotion.public_request_status(str(mapping["client_request_id"]))
+    lookup_id = str(mapping.get("agent_request_id")) if mapping else normalized
+
+    path = QUEUE_ROOT / "responses" / f"{lookup_id}.json"
     if not path.exists():
+        if mapping:
+            return promotion.public_request_status(str(mapping["client_request_id"]))
         return {"request_id": normalized, "status": "pending"}
     with path.open("r", encoding="utf-8-sig") as handle:
         result = json.load(handle)
@@ -441,11 +483,23 @@ def get_response(request_id: str) -> dict[str, Any]:
     if not isinstance(result, dict):
         raise RuntimeError("The deployment-agent response is invalid.")
     if result.get("status") == "failed" and result.get("action") in {"deploy_approved_release", "promote_exact_candidate"}:
-        deployment_id = _validated_rejected_deployment_id(normalized)
+        deployment_id = _validated_rejected_deployment_id(lookup_id)
         if deployment_id:
             runtime_report = _read_sanitized_deployment_report(deployment_id)
             if runtime_report:
                 result = {**result, "deployment_report": runtime_report}
+
+    if mapping and promotion:
+        client_id = str(mapping["client_request_id"])
+        promotion.observe_response(client_id, lookup_id, result)
+        public_state = promotion.public_request_status(client_id)
+        result = {
+            **result,
+            "request_id": client_id,
+            "agent_request_id": lookup_id,
+            "promotion_managed": True,
+            "promotion_state": public_state.get("promotion_state"),
+        }
     return result
 
 
@@ -459,6 +513,22 @@ def get_queue_status() -> dict[str, Any]:
     watchdog = _read_agent_watchdog_status()
     capabilities = _read_agent_capability_status()
     connectivity = _read_public_mcp_connectivity_status()
+    promotion = _promotion_v3()
+    try:
+        promotion_status = promotion.status_snapshot() if promotion else {
+            "revision": None,
+            "legacy_deploy_bypass_allowed": True,
+            "active_ticket": None,
+            "ready_count": 0,
+        }
+    except Exception as exc:
+        promotion_status = {
+            "revision": "pdp-one.parallel-promotion-control.v3",
+            "legacy_deploy_bypass_allowed": False,
+            "active_ticket": None,
+            "ready_count": None,
+            "background_error": type(exc).__name__,
+        }
     return {
         "configured": configured,
         "queue_available": incoming.exists() and responses.exists(),
@@ -474,6 +544,7 @@ def get_queue_status() -> dict[str, Any]:
         "connected_tool_schema_revision": None,
         "schema_refresh_required": None,
         "schema_refresh_required_for_bootstrap": False,
+        "promotion_control": promotion_status,
         "agent_capabilities": capabilities,
         "agent_watchdog": watchdog,
         "agent_processor_healthy": bool(
