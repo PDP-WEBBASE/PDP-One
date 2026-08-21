@@ -182,6 +182,12 @@ $report = [ordered]@{
     restore_verification_run = $false
     local_code_snapshot_created = $false
     automatic_rollback_enabled = $false
+    automatic_recovery_enabled = $true
+    automatic_recovery_attempted = $false
+    automatic_recovery_succeeded = $false
+    recovered_commit = $null
+    recovery_health = $null
+    recovery_error = $null
     production_changed = $false
     health_profile = $healthProfile
     changed_services = @()
@@ -195,7 +201,7 @@ $report = [ordered]@{
     connectivity_edge_refresh_performed = $false
     connectivity_edge_preserved = $true
     error = $null
-    recovery_instruction = "Redeploy the previous release commit through the governed deployment queue if the active release is unhealthy."
+    recovery_instruction = "If exact previous-release recovery cannot prove healthy, stop promotion and require an explicit governed recovery decision."
 }
 $report | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $reportPath -Encoding UTF8
 
@@ -423,7 +429,7 @@ try {
         image_source = "github_container_registry"
         local_image_build_performed = $false
         change_management_mode = "development_fast"
-        rollback_method = "redeploy_previous_release_commit_from_github_registry"
+        rollback_method = "automatic_exact_previous_release_recovery"
         backup_path = $null
         code_archive = $null
     } | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $lastStatePath -Encoding UTF8
@@ -440,21 +446,52 @@ try {
     $report | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $reportPath -Encoding UTF8
     Write-Output $reportPath
 } catch {
+    $deploymentError = ConvertTo-PDPOneRedactedText $_.Exception.Message
     $report.status = "failed"
     $report.completed_at = [DateTime]::UtcNow.ToString("o")
-    $report.error = ConvertTo-PDPOneRedactedText $_.Exception.Message
-    $report | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $reportPath -Encoding UTF8
+    $report.error = $deploymentError
     if ($report.production_changed) {
+        $report.automatic_recovery_attempted = $true
+        $report.stage = "recovering-previous-accepted-release"
+        $report | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $reportPath -Encoding UTF8
         try {
-            Set-Location $projectRoot
-            Invoke-PDPOneNative -Command "docker" -Arguments @("compose", "up", "--detach", "--no-build", "--pull", "never", "db", "redis", "backend", "worker", "beat", "mcp", "web") -FailureMessage "Application services could not be restarted after the failed deployment." -IgnoreFailure -Quiet | Out-Null
-            if ($edgeImpact) {
-                Invoke-PDPOneNative -Command "docker" -Arguments @("compose", "up", "--detach", "--no-build", "--pull", "never", "--no-deps", "nginx") -FailureMessage "Nginx Connectivity Edge could not be recovered after the failed deployment." -IgnoreFailure -Quiet | Out-Null
-                Invoke-PDPOneNative -Command "docker" -Arguments @("compose", "--profile", "tunnel", "up", "--detach", "--no-build", "--pull", "never", "--no-deps", "tailscale") -FailureMessage "Tailscale Connectivity Edge could not be recovered after the failed deployment." -IgnoreFailure -Quiet | Out-Null
+            $recoveryScript = Join-Path $projectRoot "scripts\windows\Restore-PDPOneAcceptedRelease.ps1"
+            if (-not (Test-Path -LiteralPath $recoveryScript)) { throw "Accepted-release recovery helper is missing from the failed candidate." }
+            $recoveryArguments = @(
+                "-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $recoveryScript,
+                "-FailedDeploymentId", $DeploymentId, "-FailedCommit", $CommitSha, "-AgentRoot", $AgentRoot
+            )
+            if ($edgeImpact) { $recoveryArguments += "-RefreshConnectivityEdge" }
+            $recoveryOutput = @(& powershell.exe @recoveryArguments)
+            if ($LASTEXITCODE -ne 0) { throw "Accepted-release recovery helper returned a non-zero code." }
+            $recoveryLine = @($recoveryOutput | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) }) | Select-Object -Last 1
+            if ([string]::IsNullOrWhiteSpace([string]$recoveryLine)) { throw "Accepted-release recovery helper returned no result." }
+            $recovery = ([string]$recoveryLine) | ConvertFrom-Json
+            if ([string]$recovery.status -ne "succeeded" -or [string]$recovery.health -ne "healthy") {
+                throw "Accepted-release recovery did not return healthy success."
             }
-        } catch { }
+            $report.automatic_recovery_succeeded = $true
+            $report.recovered_commit = [string]$recovery.recovered_commit
+            $report.recovery_health = [string]$recovery.health
+            $report.stage = "failed-recovered"
+        } catch {
+            $report.automatic_recovery_succeeded = $false
+            $report.recovery_health = "failed"
+            $report.recovery_error = ConvertTo-PDPOneRedactedText $_.Exception.Message
+            $report.stage = "failed-recovery-unhealthy"
+        }
+    } else {
+        $report.stage = "failed-before-production-change"
     }
-    throw "Scoped registry deployment failed without automatic rollback. Redeploy previous release '$previousCommit'. $($report.error)"
+    $report.completed_at = [DateTime]::UtcNow.ToString("o")
+    $report | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $reportPath -Encoding UTF8
+    if ($report.automatic_recovery_succeeded) {
+        throw "Scoped registry deployment failed, but exact previous accepted release '$($report.recovered_commit)' was restored and verified healthy. $deploymentError"
+    }
+    if ($report.automatic_recovery_attempted) {
+        throw "Scoped registry deployment failed and automatic exact previous-release recovery could not prove healthy. $deploymentError Recovery: $($report.recovery_error)"
+    }
+    throw "Scoped registry deployment failed before Runtime mutation. $deploymentError"
 } finally {
     if ($sourceEnvPath -and (Test-Path -LiteralPath $sourceEnvPath)) { Remove-Item -LiteralPath $sourceEnvPath -Force -ErrorAction SilentlyContinue }
     foreach ($name in @("PDP_BACKEND_IMAGE", "PDP_MCP_IMAGE", "PDP_WEB_IMAGE")) { Set-PDPOneProcessEnvironment -Name $name -Value $previousEnvironment[$name] }
