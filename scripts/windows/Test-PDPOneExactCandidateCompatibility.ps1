@@ -27,6 +27,7 @@ $SteadyStateAgentFiles = @(
 $StageAAgentFiles = @(
     "Deployment-Agent.Standard.ps1",
     "Invoke-PDPOneManagedFastDeployment.ps1",
+    "Invoke-PDPOneScopedRegistryDeployment.ps1",
     "PDPOne.Common.ps1",
     "PDPOne.OperationLock.ps1",
     "PDPOne.ReleaseManifest.ps1"
