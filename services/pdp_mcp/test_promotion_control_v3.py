@@ -9,6 +9,7 @@ from unittest import mock
 
 import deployment_queue
 import promotion_control_v3 as promotion
+import promotion_control_v3_hardening as hardening  # noqa: F401 - applies accepted V3 hardening for these tests
 
 
 SHA_A = "a" * 40
@@ -102,6 +103,7 @@ class PromotionControlV3Tests(unittest.TestCase):
             "main_sha": SHA_B,
             "pull_request": pr,
             "changed_files": ["services/pdp_mcp/server.py"],
+            "changed_files_source": "current-main-compare",
             "required_workflows": [
                 "PDP One Application Boundary Governance",
                 "PDP One CI",
@@ -149,6 +151,45 @@ class PromotionControlV3Tests(unittest.TestCase):
         self.assertEqual(duplicate["request_id"], second["request_id"])
         self.assertEqual(promotion.status_snapshot()["ready_count"], 1)
 
+    def test_agent_binding_is_durable_before_incoming_request_is_published(self) -> None:
+        real_replace = deployment_queue.os.replace
+        observed = {"bound": False}
+
+        def checked_replace(source, target):
+            target_path = Path(target)
+            if target_path.parent == deployment_queue.QUEUE_ROOT / "incoming":
+                request_records = list(promotion.REQUESTS.glob("*.json"))
+                self.assertEqual(len(request_records), 1)
+                record = json.loads(request_records[0].read_text(encoding="utf-8"))
+                self.assertTrue(record.get("agent_request_id"))
+                self.assertEqual(record.get("state"), "deploying")
+                observed["bound"] = True
+            return real_replace(source, target)
+
+        with mock.patch.object(deployment_queue.os, "replace", side_effect=checked_replace):
+            queued = deployment_queue.enqueue("deploy_approved_release", self._params(SHA_A, "binding"))
+        self.assertTrue(observed["bound"])
+        self.assertEqual(promotion.resolve_request_id(queued["request_id"])["agent_request_id"], queued["agent_request_id"])
+
+    def test_queue_publish_failure_marks_v3_request_failed_and_releases_lease(self) -> None:
+        real_replace = deployment_queue.os.replace
+
+        def failing_publish(source, target):
+            target_path = Path(target)
+            if target_path.parent == deployment_queue.QUEUE_ROOT / "incoming":
+                raise OSError("simulated publish failure")
+            return real_replace(source, target)
+
+        with mock.patch.object(deployment_queue.os, "replace", side_effect=failing_publish):
+            with self.assertRaisesRegex(OSError, "simulated publish failure"):
+                deployment_queue.enqueue("deploy_approved_release", self._params(SHA_A, "publishfail"))
+        records = [json.loads(path.read_text(encoding="utf-8")) for path in promotion.REQUESTS.glob("*.json")]
+        self.assertEqual(len(records), 1)
+        self.assertEqual(records[0]["state"], "failed")
+        self.assertTrue(str(records[0]["decision_reason"]).startswith("agent_request_publish_failed:"))
+        self.assertIsNone(promotion.status_snapshot()["active_ticket"])
+        self.assertFalse(promotion.SHARED_PROMOTION_LEASE.exists())
+
     def test_exact_deploy_and_health_evidence_move_forward_to_premerge(self) -> None:
         deployed = deployment_queue.enqueue("deploy_approved_release", self._params(SHA_A, "a"))
         self._write_response(deployed["agent_request_id"], "deploy_approved_release")
@@ -156,16 +197,13 @@ class PromotionControlV3Tests(unittest.TestCase):
         self.assertEqual(deployment_report["promotion_state"], "acceptance")
         self.assertEqual(promotion.status_snapshot()["active_ticket"]["state"], "acceptance")
 
-        health = deployment_queue.enqueue(
-            "check_deployment_health", {"deployment_id": "promotion-a"}
-        )
+        health = deployment_queue.enqueue("check_deployment_health", {"deployment_id": "promotion-a"})
         self.assertTrue(health["promotion_managed"])
         self._write_response(health["agent_request_id"], "check_deployment_health")
         health_report = deployment_queue.get_response(health["request_id"])
         self.assertEqual(health_report["promotion_state"], "succeeded")
         self.assertEqual(promotion.status_snapshot()["active_ticket"]["state"], "pre_merge")
 
-        # Reading the older deployment report again must not regress PRE-MERGE.
         deployment_queue.get_response(deployed["request_id"])
         self.assertEqual(promotion.status_snapshot()["active_ticket"]["state"], "pre_merge")
 
@@ -213,18 +251,18 @@ class PromotionControlV3Tests(unittest.TestCase):
         self.assertEqual(report["promotion_state"], "waiting_refresh")
         self.assertEqual(len(list((deployment_queue.QUEUE_ROOT / "incoming").glob("*.json"))), 0)
 
-    def test_authoritative_attestation_requires_exact_pr_main_and_workflows(self) -> None:
+    def test_authoritative_attestation_uses_effective_current_main_diff(self) -> None:
         self.attestation_patch.stop()
+        requested_paths = []
 
         def github(path: str):
+            requested_paths.append(path)
             if path == "branches/main":
                 return {"commit": {"sha": SHA_B}}
             if path == f"commits/{SHA_A}/pulls":
                 return [{"number": 401, "state": "open", "head": {"sha": SHA_A}, "base": {"ref": "main"}}]
             if path == f"compare/{SHA_B}...{SHA_A}":
-                return {"behind_by": 0}
-            if path.startswith("pulls/401/files"):
-                return [{"filename": "services/pdp_mcp/server.py"}]
+                return {"behind_by": 0, "files": [{"filename": "services/pdp_mcp/server.py"}]}
             if path.startswith("actions/runs?"):
                 return {
                     "workflow_runs": [
@@ -239,6 +277,9 @@ class PromotionControlV3Tests(unittest.TestCase):
             value = promotion.attest_commit(SHA_A, allow_cache=False)
         self.assertEqual(value["main_sha"], SHA_B)
         self.assertEqual(value["pull_request"], 401)
+        self.assertEqual(value["changed_files"], ["services/pdp_mcp/server.py"])
+        self.assertEqual(value["changed_files_source"], "current-main-compare")
+        self.assertFalse(any(path.startswith("pulls/401/files") for path in requested_paths))
         self.assertEqual(value["workflow_evidence"]["PDP One CI"]["run_id"], 12)
 
         def stale(path: str):
@@ -247,7 +288,7 @@ class PromotionControlV3Tests(unittest.TestCase):
             if path == f"commits/{SHA_A}/pulls":
                 return [{"number": 401, "state": "open", "head": {"sha": SHA_A}, "base": {"ref": "main"}}]
             if path == f"compare/{SHA_B}...{SHA_A}":
-                return {"behind_by": 1}
+                return {"behind_by": 1, "files": [{"filename": "services/pdp_mcp/server.py"}]}
             raise AssertionError(path)
 
         with mock.patch.object(promotion, "_github_json", side_effect=stale):
@@ -256,6 +297,36 @@ class PromotionControlV3Tests(unittest.TestCase):
 
         self.attestation_patch = mock.patch.object(promotion, "attest_commit", side_effect=self._attest)
         self.attestation_patch.start()
+
+    def test_missing_agent_binding_becomes_decision_required_instead_of_endless_pending(self) -> None:
+        created = promotion._iso(promotion._now() - timedelta(seconds=hardening.ORPHAN_BINDING_SECONDS + 1))
+        client_id = "11111111-1111-1111-1111-111111111111"
+        promotion._atomic_json(
+            promotion._request_path(client_id),
+            {
+                "schema": "pdp-one.promotion-request.v3",
+                "client_request_id": client_id,
+                "action": "deploy_approved_release",
+                "commit_sha": SHA_A,
+                "deployment_id": "orphan-binding",
+                "preview_id": "preview-orphan",
+                "pull_request": 401,
+                "main_sha": SHA_B,
+                "state": "deploying",
+                "created_at": created,
+                "updated_at": created,
+                "agent_request_id": None,
+            },
+        )
+        status = promotion.public_request_status(client_id)
+        self.assertEqual(status["promotion_state"], "decision_required")
+        self.assertEqual(status["decision_reason"], "agent_request_binding_missing")
+
+    def test_status_exposes_bounded_github_reconciliation(self) -> None:
+        status = promotion.status_snapshot()
+        self.assertGreaterEqual(status["github_reconcile_interval_seconds"], 30)
+        self.assertEqual(status["effective_diff_source"], "current-main-compare")
+        self.assertTrue(status["prepublish_agent_binding"])
 
     def test_image_requirement_matches_pull_request_ignore_boundary(self) -> None:
         self.assertFalse(promotion._image_evidence_required(["scripts/windows/Test.ps1", "tests/x.test.mjs", "README.md"]))
