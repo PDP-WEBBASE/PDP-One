@@ -22,6 +22,7 @@ from procurement.models_extraction import (
 
 HEZAREH_CONNECTOR_KEYS = frozenset({"hezareh_tenders", "hezareh_inquiries"})
 PARSNAMAD_INQUIRY_CONNECTOR_KEY = "parsnamad_inquiries"
+SETAD_TENDER_CONNECTOR_KEY = "setad_tenders"
 HEZAREH_PRESERVED_DETAIL_FIELDS = (
     "description",
     "conditions",
@@ -78,6 +79,65 @@ def _is_hezareh(connector: ProcurementConnector) -> bool:
 
 def _is_parsnamad_inquiry(connector: ProcurementConnector) -> bool:
     return connector.key == PARSNAMAD_INQUIRY_CONNECTOR_KEY
+
+
+def _is_setad_tender(connector: ProcurementConnector) -> bool:
+    return connector.key == SETAD_TENDER_CONNECTOR_KEY
+
+
+def _setad_recent_overlap_cutoff(
+    run: ExtractionRun,
+    connector: ProcurementConnector,
+    *,
+    first_run: bool,
+):
+    """Return the bounded recent-change floor for normal Setad tender incrementals."""
+    if (
+        not _is_setad_tender(connector)
+        or run.mode != ExtractionRun.Mode.INCREMENTAL
+        or first_run
+        or connector.overlap_days <= 0
+    ):
+        return None
+    return timezone.localdate() - timedelta(days=connector.overlap_days)
+
+
+def _page_proves_recent_overlap_boundary(dates, cutoff_date) -> bool:
+    """A page proves the overlap floor only when every row is dated and older."""
+    if cutoff_date is None or not dates:
+        return False
+    return all(value is not None and value < cutoff_date for value in dates)
+
+
+def _next_known_page_count(current: int, page_counts: dict) -> int:
+    if (
+        page_counts["new"] == 0
+        and page_counts["updated"] == 0
+        and page_counts["duplicate"] > 0
+    ):
+        return current + 1
+    return 0
+
+
+def _known_boundary_can_stop(
+    *,
+    connector_key: str,
+    page_number: int,
+    consecutive_known_pages: int,
+    recent_overlap_required: bool,
+    recent_overlap_satisfied: bool,
+) -> bool:
+    if consecutive_known_pages < 2:
+        return False
+    if connector_key == "hezareh_inquiries" and page_number < 3:
+        return False
+    if (
+        connector_key == SETAD_TENDER_CONNECTOR_KEY
+        and recent_overlap_required
+        and not recent_overlap_satisfied
+    ):
+        return False
+    return True
 
 
 def _preserved_hezareh_detail(parsed, source_notice: SourceNotice | None) -> dict | None:
@@ -498,6 +558,13 @@ def _execute_connector(
     fetcher = fetcher_for(connector, allowed_host=allowed_host)
     page_cap = min(run.page_cap or connector.max_pages, connector.max_pages)
     first_run, cutoff_date, policy = _date_policy(run, connector)
+    recent_overlap_cutoff = _setad_recent_overlap_cutoff(
+        run,
+        connector,
+        first_run=first_run,
+    )
+    recent_overlap_required = recent_overlap_cutoff is not None
+    recent_overlap_satisfied = not recent_overlap_required
     hezareh_deferred_details = bool(
         _is_hezareh(connector)
         and run.include_details
@@ -534,6 +601,12 @@ def _execute_connector(
         "recovered_pages": [],
         "suspicious_pages": [],
         "known_boundary_pages": 0,
+        "recent_overlap_required": recent_overlap_required,
+        "recent_overlap_days": connector.overlap_days if recent_overlap_required else 0,
+        "recent_overlap_cutoff_date": recent_overlap_cutoff.isoformat() if recent_overlap_cutoff else None,
+        "recent_overlap_satisfied": recent_overlap_satisfied,
+        "recent_overlap_boundary_page": None,
+        "known_boundary_deferred_for_recent_overlap": 0,
         "detail_policy": "deferred_after_list_boundary" if deferred_details else "inline",
         "detail_candidates": 0,
         "detail_attempted": 0,
@@ -723,6 +796,14 @@ def _execute_connector(
 
         dates = [_published_date(item) for item in original_notices]
         known_dates = [value for value in dates if value is not None]
+        if (
+            recent_overlap_required
+            and not recent_overlap_satisfied
+            and _page_proves_recent_overlap_boundary(dates, recent_overlap_cutoff)
+        ):
+            recent_overlap_satisfied = True
+            summary["recent_overlap_satisfied"] = True
+            summary["recent_overlap_boundary_page"] = page_number
         if cutoff_date and known_dates and max(known_dates) < cutoff_date:
             summary["pages"] += 1
             summary["completeness"] = "complete"
@@ -874,17 +955,27 @@ def _execute_connector(
         connector.save(update_fields=["last_successful_page", "updated_at"])
 
         if run.mode == ExtractionRun.Mode.INCREMENTAL and not first_run:
-            if page_counts["new"] == 0 and page_counts["updated"] == 0 and page_counts["duplicate"] > 0:
-                consecutive_known_pages += 1
-                summary["known_boundary_pages"] = consecutive_known_pages
-            else:
-                consecutive_known_pages = 0
-            if consecutive_known_pages >= 2 and (
-                connector.key != "hezareh_inquiries" or page_number >= 3
+            consecutive_known_pages = _next_known_page_count(
+                consecutive_known_pages,
+                page_counts,
+            )
+            summary["known_boundary_pages"] = consecutive_known_pages
+            if _known_boundary_can_stop(
+                connector_key=connector.key,
+                page_number=page_number,
+                consecutive_known_pages=consecutive_known_pages,
+                recent_overlap_required=recent_overlap_required,
+                recent_overlap_satisfied=recent_overlap_satisfied,
             ):
                 summary["completeness"] = "complete"
-                summary["stop_reason"] = "known_data_boundary_reached"
+                summary["stop_reason"] = (
+                    "known_data_boundary_after_recent_overlap"
+                    if recent_overlap_required
+                    else "known_data_boundary_reached"
+                )
                 break
+            if consecutive_known_pages >= 2 and recent_overlap_required and not recent_overlap_satisfied:
+                summary["known_boundary_deferred_for_recent_overlap"] += 1
 
         if parsed_page.end_of_results is True:
             summary["completeness"] = "complete"
@@ -897,7 +988,16 @@ def _execute_connector(
             if summary["reported_total_pages_source"] == "source_report"
             else None
         )
-        if authoritative_total is not None and page_cap < authoritative_total:
+        if (
+            recent_overlap_required
+            and not recent_overlap_satisfied
+            and (authoritative_total is None or page_cap < authoritative_total)
+        ):
+            summary["status"] = "succeeded_with_warnings"
+            summary["warnings"] += 1
+            summary["completeness"] = "recent_overlap_unverified"
+            summary["stop_reason"] = "page_cap_before_recent_overlap_boundary"
+        elif authoritative_total is not None and page_cap < authoritative_total:
             summary["status"] = "succeeded_with_warnings"
             summary["warnings"] += 1
             summary["completeness"] = "limited_by_page_cap"
