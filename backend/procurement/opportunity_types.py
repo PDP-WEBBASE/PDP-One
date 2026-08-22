@@ -147,6 +147,10 @@ _NEGATED_SERVICE_MARKERS = (
     "خدمات طراحی مشخص نیست", "خدمت مشاوره مشخص نیست", "صرفا خرید",
     "صرفاً خرید", "موضوع خرید", "عنوان خرید",
 )
+_NEGATED_EVIDENCE_MARKERS = (
+    "مشخص نشده", "مشخص نیست", "فاقد", "بدون خدمات", "نه خدمات",
+    "عدم پیگیری مگر", "مگر شرح", "در برابر", "احراز نشده", "اثبات نشده",
+)
 
 
 def _score(text: str, patterns: Iterable[tuple[str, int]]) -> tuple[int, list[str]]:
@@ -196,13 +200,20 @@ def classify_business_opportunity_type(
             evidence=(explicit_text,),
         )
 
-    text = _normalize_text(" ".join(str(value or "") for value in evidence_values))
+    evidence_fragments = [_normalize_text(value) for value in evidence_values if value not in (None, "")]
+    text = _normalize_text(" ".join(evidence_fragments))
     if not text:
         return OpportunityTypeClassification()
 
-    epc_score, epc_evidence = _score(text, _EPC_PATTERNS)
-    consulting_score, consulting_evidence = _score(text, _CONSULTING_PATTERNS)
-    construction_score, construction_evidence = _score(text, _CONSTRUCTION_PATTERNS)
+    scoring_text = " ".join(
+        fragment
+        for fragment in evidence_fragments
+        if not any(marker in fragment for marker in _NEGATED_EVIDENCE_MARKERS)
+    )
+
+    epc_score, epc_evidence = _score(scoring_text, _EPC_PATTERNS)
+    consulting_score, consulting_evidence = _score(scoring_text, _CONSULTING_PATTERNS)
+    construction_score, construction_evidence = _score(scoring_text, _CONSTRUCTION_PATTERNS)
     ranked = sorted(
         [
             (epc_score, EPC, epc_evidence),

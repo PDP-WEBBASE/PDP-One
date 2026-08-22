@@ -61,17 +61,27 @@ def _classify(explicit, values, confidence=None, reason=""):
             )[:1000]
         return "unclassified", None, "مقدار صریح نوع فرصت معتبر نیست و برای بررسی انسانی نگه داشته شد."
 
-    text = _text(" ".join(str(value or "") for value in values))
-    epc = _score(text, [
+    fragments = [_text(value) for value in values if value not in (None, "")]
+    text = _text(" ".join(fragments))
+    negated_evidence_markers = (
+        "مشخص نشده", "مشخص نیست", "فاقد", "بدون خدمات", "نه خدمات",
+        "عدم پیگیری مگر", "مگر شرح", "در برابر", "احراز نشده", "اثبات نشده",
+    )
+    scoring_text = " ".join(
+        fragment
+        for fragment in fragments
+        if not any(marker in fragment for marker in negated_evidence_markers)
+    )
+    epc = _score(scoring_text, [
         ("epc", 12), ("طرح و ساخت", 10), ("طراحی و ساخت", 9),
         ("مهندسی تامین و ساخت", 12), ("مهندسی تأمین و ساخت", 12),
         ("طراحی تامین و اجرا", 11), ("طراحی تأمین و اجرا", 11),
     ])
-    consulting = _score(text, [
+    consulting = _score(scoring_text, [
         ("خدمات مشاوره", 8), ("مشاور", 5), ("مطالعات", 5),
         ("امکان سنجی", 5), ("طراحی", 3), ("نظارت", 4), ("مدیریت طرح", 5),
     ])
-    construction = _score(text, [
+    construction = _score(scoring_text, [
         ("احداث", 6), ("عملیات اجرایی", 6), ("پیمانکاری", 5),
         ("اجرا", 3), ("ساخت", 3), ("بهسازی", 3), ("مرمت", 3), ("تعمیر", 2),
     ])

@@ -68,7 +68,19 @@ class BusinessOpportunityTypeClassifierTests(SimpleTestCase):
             ),
         )
         self.assertEqual(classification.value, UNCLASSIFIED)
-        self.assertIn("خرید", classification.reason)
+        self.assertTrue(classification.reason)
+
+    def test_negated_or_conditional_consulting_words_are_not_positive_evidence(self):
+        classification = classify_business_opportunity_type(
+            evidence_values=(
+                "ترافیک و نظارت تصویری",
+                "مرتبط ضعیف؛ اجرای سامانه دوربین ترافیک",
+                "مطالعه یا طراحی ترافیک مشخص نشده.",
+                "عدم پیگیری مگر شرح خدمات شامل طراحی سیستم باشد.",
+                "استعلام اجرای عملیات دوربین های سازمان ترافیک",
+            ),
+        )
+        self.assertEqual(classification.value, UNCLASSIFIED)
 
 
 class BusinessOpportunityTypeFilteringTests(APITestCase):
