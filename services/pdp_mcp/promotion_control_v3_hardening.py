@@ -26,6 +26,21 @@ ORPHAN_BINDING_SECONDS = max(
 )
 
 
+_original_configure_queue_root = promotion.configure_queue_root
+
+
+def configure_queue_root(queue_root) -> None:
+    """Keep V3 state and the queue emergency reserve on the same durable root."""
+    _original_configure_queue_root(queue_root)
+    deployment_queue.RESERVE_PATH = promotion.ROOT / ".queue-emergency-reserve"
+
+
+# Apply the durable path before tools/status are served. In CI, the helper
+# safely declines to allocate the reserve when the queue filesystem is absent.
+configure_queue_root(deployment_queue.QUEUE_ROOT)
+deployment_queue._ensure_emergency_reserve()
+
+
 def attest_commit(commit_sha: str, *, allow_cache: bool = True) -> dict[str, Any]:
     """Attest exact candidate using the effective current-main -> head diff."""
     commit = deployment_queue.validate_commit(commit_sha)
@@ -218,10 +233,12 @@ def status_snapshot() -> dict[str, Any]:
     value["github_reconcile_interval_seconds"] = GITHUB_RECONCILE_SECONDS
     value["effective_diff_source"] = "current-main-compare"
     value["prepublish_agent_binding"] = True
+    value["emergency_reserve_host_backed"] = deployment_queue.RESERVE_PATH.parent == promotion.ROOT
     return value
 
 
 # Apply the hardening before the MCP server registers or serves deployment tools.
+promotion.configure_queue_root = configure_queue_root
 promotion.attest_commit = attest_commit
 promotion._public_request_status_unlocked = _public_request_status_unlocked
 promotion.publish_failed = publish_failed
