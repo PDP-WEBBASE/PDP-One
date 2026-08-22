@@ -29,8 +29,6 @@ RUNTIME_MCP_TOOLSET_REVISION = "pdp-one.mcp-toolset.v2"
 DEFAULT_TTL_SECONDS = 300
 MAX_TTL_SECONDS = 1800
 ACTION_TTL_SECONDS = {
-    # Layered health, exact Agent synchronization and composite promotion can
-    # wait behind Windows startup, Agent restart, and public-route retries.
     "check_deployment_health": 1800,
     "promote_exact_candidate": 1800,
     "sync_agent_from_exact_commit": 1800,
@@ -76,6 +74,16 @@ _SAFE_REPORT_FIELDS = (
     "retained_previous_images",
     "connectivity_repair_attempted",
     "connectivity_repair_succeeded",
+    "connectivity_edge_impacted",
+    "connectivity_edge_refresh_performed",
+    "connectivity_edge_preserved",
+    "automatic_recovery_enabled",
+    "automatic_recovery_attempted",
+    "automatic_recovery_succeeded",
+    "recovered_commit",
+    "recovery_health",
+    "recovery_error",
+    "recovery_instruction",
     "error",
 )
 _SECRET_TEXT_RE = re.compile(
@@ -88,9 +96,6 @@ def _utcnow() -> datetime:
 
 
 def _disk_free_bytes() -> int:
-    # This is intentionally the signed-queue filesystem safety metric. It is
-    # not advertised as Windows C: capacity; Windows-side Disk Guard reports
-    # remain authoritative for host C: free-space decisions.
     probe = QUEUE_ROOT if QUEUE_ROOT.exists() else QUEUE_ROOT.parent
     try:
         return int(shutil.disk_usage(probe).free)
@@ -207,11 +212,7 @@ def _read_sanitized_deployment_report(deployment_id: str) -> dict[str, Any] | No
         return None
     if not isinstance(raw, dict) or str(raw.get("deployment_id", "")) != normalized:
         return None
-    return {
-        key: _sanitize_report_value(raw[key])
-        for key in _SAFE_REPORT_FIELDS
-        if key in raw
-    }
+    return {key: _sanitize_report_value(raw[key]) for key in _SAFE_REPORT_FIELDS if key in raw}
 
 
 def _read_agent_watchdog_status() -> dict[str, Any]:
@@ -232,8 +233,7 @@ def _read_agent_watchdog_status() -> dict[str, Any]:
             raw = json.load(handle)
         if not isinstance(raw, dict) or str(raw.get("schema", "")) != "pdp-one.deployment-agent-watchdog.v1":
             return unavailable
-        checked_at_text = str(raw.get("checked_at", ""))
-        checked_at = datetime.fromisoformat(checked_at_text.replace("Z", "+00:00"))
+        checked_at = datetime.fromisoformat(str(raw.get("checked_at", "")).replace("Z", "+00:00"))
         if checked_at.tzinfo is None:
             checked_at = checked_at.replace(tzinfo=timezone.utc)
         age = max(0, int((_utcnow() - checked_at.astimezone(timezone.utc)).total_seconds()))
@@ -275,9 +275,7 @@ def _read_agent_capability_status() -> dict[str, Any]:
             return unavailable
         protocol = raw.get("agent_protocol_version")
         return {
-            "stable_operational_interface_revision": str(
-                raw.get("stable_operational_interface_revision", STABLE_OPERATIONAL_INTERFACE_REVISION)
-            )[:128],
+            "stable_operational_interface_revision": str(raw.get("stable_operational_interface_revision", STABLE_OPERATIONAL_INTERFACE_REVISION))[:128],
             "agent_protocol_version": int(protocol) if protocol is not None else None,
             "agent_sync_capable": bool(raw.get("agent_sync_capable", False)),
             "agent_self_reconcile_capable": bool(raw.get("agent_self_reconcile_capable", False)),
@@ -317,8 +315,7 @@ def _read_public_mcp_connectivity_status() -> dict[str, Any]:
             raw = json.load(handle)
         if not isinstance(raw, dict) or str(raw.get("schema", "")) != "pdp-one.public-mcp-connectivity.v1":
             return unavailable
-        checked_at_text = str(raw.get("checked_at", ""))
-        checked_at = datetime.fromisoformat(checked_at_text.replace("Z", "+00:00"))
+        checked_at = datetime.fromisoformat(str(raw.get("checked_at", "")).replace("Z", "+00:00"))
         if checked_at.tzinfo is None:
             checked_at = checked_at.replace(tzinfo=timezone.utc)
         age = max(0, int((_utcnow() - checked_at.astimezone(timezone.utc)).total_seconds()))
@@ -345,10 +342,7 @@ def _read_public_mcp_connectivity_status() -> dict[str, Any]:
 
 
 def _pending_request_diagnostics(incoming: Path) -> dict[str, Any]:
-    result = {
-        "expired_signed_requests": 0,
-        "oldest_pending_age_seconds": None,
-    }
+    result = {"expired_signed_requests": 0, "oldest_pending_age_seconds": None}
     if not incoming.exists() or len(SIGNING_KEY) < 32:
         return result
     now = _utcnow()
@@ -394,9 +388,7 @@ def enqueue(
     _require_queue()
     free_bytes = _disk_free_bytes()
     if free_bytes >= 0 and free_bytes < LOW_SPACE_BYTES and action != "run_disk_maintenance":
-        raise RuntimeError(
-            "Deployment-agent storage is full. Run signed disk maintenance before starting another action."
-        )
+        raise RuntimeError("Deployment-agent storage is full. Run signed disk maintenance before starting another action.")
     lifetime = ACTION_TTL_SECONDS.get(action, DEFAULT_TTL_SECONDS) if ttl_seconds is None else int(ttl_seconds)
     if not 30 <= lifetime <= MAX_TTL_SECONDS:
         raise ValueError(f"Queue request lifetime must be between 30 and {MAX_TTL_SECONDS} seconds.")
@@ -424,21 +416,32 @@ def enqueue(
     }
     target = QUEUE_ROOT / "incoming" / f"{request_id}.json"
     fd, temporary_name = tempfile.mkstemp(prefix=".request-", suffix=".tmp", dir=target.parent)
+    promotion_bound = False
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             json.dump(envelope, handle, separators=(",", ":"))
             handle.flush()
             os.fsync(handle.fileno())
+        if promotion and promotion_context and promotion_context.get("managed"):
+            # Bind the durable public V3 request to its exact signed Agent ID
+            # before the file becomes visible to the Windows Agent. This
+            # removes the restart race that could leave a client request
+            # permanently pending after a fast Agent response/MCP restart.
+            promotion.after_enqueue(action, params or {}, request_id, promotion_context)
+            promotion_bound = True
         os.replace(temporary_name, target)
-    except Exception:
+    except Exception as exc:
         try:
             os.unlink(temporary_name)
         except FileNotFoundError:
             pass
+        if promotion_bound and promotion:
+            publish_failed = getattr(promotion, "publish_failed", None)
+            if callable(publish_failed):
+                publish_failed(request_id, promotion_context, type(exc).__name__)
         raise
 
     if promotion and promotion_context and promotion_context.get("managed"):
-        promotion.after_enqueue(action, params or {}, request_id, promotion_context)
         public_request_id = str(promotion_context.get("client_request_id") or request_id)
         return {
             "request_id": public_request_id,
@@ -479,7 +482,6 @@ def get_response(request_id: str) -> dict[str, Any]:
         return {"request_id": normalized, "status": "pending"}
     with path.open("r", encoding="utf-8-sig") as handle:
         result = json.load(handle)
-    # The agent never returns secrets. Keep a strict top-level type here.
     if not isinstance(result, dict):
         raise RuntimeError("The deployment-agent response is invalid.")
     if result.get("status") == "failed" and result.get("action") in {"deploy_approved_release", "promote_exact_candidate"}:

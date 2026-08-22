@@ -10,6 +10,10 @@ const deployment = fs.readFileSync(
   path.join(root, 'scripts', 'windows', 'Invoke-PDPOneScopedRegistryDeployment.ps1'),
   'utf8',
 );
+const recovery = fs.readFileSync(
+  path.join(root, 'scripts', 'windows', 'Restore-PDPOneAcceptedRelease.ps1'),
+  'utf8',
+);
 
 test('Connectivity Edge impact is explicit and fail-closed when scope cannot be resolved', () => {
   assert.match(deployment, /function Test-PDPOneConnectivityEdgeImpact/);
@@ -69,15 +73,16 @@ test('Connectivity Edge refresh is gated and bounded', () => {
   assert.match(edgeBlock, /connectivity_edge_preserved = \$false/);
 });
 
-test('failed deployment recovery preserves the Edge unless that release impacted it', () => {
-  const catchStart = deployment.indexOf('} catch {\n    $report.status = "failed"');
+test('failed deployment recovery preserves the Edge unless that exact release impacted it', () => {
+  const catchStart = deployment.indexOf('} catch {\n    $deploymentError =');
   assert.ok(catchStart >= 0, 'top-level deployment catch block must exist');
   const catchBlock = deployment.slice(catchStart);
-  assert.match(
-    catchBlock,
-    /"db", "redis", "backend", "worker", "beat", "mcp", "web"/,
-  );
-  assert.match(catchBlock, /if \(\$edgeImpact\) \{/);
+  assert.match(catchBlock, /Restore-PDPOneAcceptedRelease\.ps1/);
+  assert.match(catchBlock, /if \(\$edgeImpact\) \{ \$recoveryArguments \+= "-RefreshConnectivityEdge" \}/);
+  assert.match(recovery, /if \(\$RefreshConnectivityEdge\) \{/);
+  assert.match(recovery, /"stop", "tailscale", "nginx"/);
+  assert.match(recovery, /"--no-deps", "nginx"/);
+  assert.match(recovery, /"--no-deps", "tailscale"/);
   assert.doesNotMatch(
     catchBlock,
     /@\("compose", "--profile", "tunnel", "up", "--detach", "--no-build", "--pull", "never"\)\s*-FailureMessage "Services could not be restarted after the failed deployment/,
@@ -95,9 +100,11 @@ test('deployment state records whether the Edge was impacted, refreshed or prese
 });
 
 test('edge isolation does not introduce destructive or credential-reset operations', () => {
-  assert.doesNotMatch(deployment, /tailscale\s+logout/i);
-  assert.doesNotMatch(deployment, /rotate_mcp_token|TAILSCALE_AUTHKEY/i);
-  assert.doesNotMatch(deployment, /docker\s+(?:volume|system)\s+prune/i);
-  assert.doesNotMatch(deployment, /wsl\s+--unregister|rdctl\s+factory-reset/i);
-  assert.doesNotMatch(deployment, /Invoke-Expression|\biex\b/i);
+  for (const source of [deployment, recovery]) {
+    assert.doesNotMatch(source, /tailscale\s+logout/i);
+    assert.doesNotMatch(source, /rotate_mcp_token|TAILSCALE_AUTHKEY/i);
+    assert.doesNotMatch(source, /docker\s+(?:volume|system)\s+prune/i);
+    assert.doesNotMatch(source, /wsl\s+--unregister|rdctl\s+factory-reset/i);
+    assert.doesNotMatch(source, /Invoke-Expression|\biex\b/i);
+  }
 });

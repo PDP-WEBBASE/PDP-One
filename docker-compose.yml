@@ -74,8 +74,11 @@ services:
       PDP_DEPLOYMENT_REPORTS: /deployment-agent/reports
     volumes:
       - "${PDP_DEPLOYMENT_AGENT_ROOT:-C:/ProgramData/PDP-One/deployment-agent}/queue/incoming:/deployment-agent/queue/incoming"
+      - "${PDP_DEPLOYMENT_AGENT_ROOT:-C:/ProgramData/PDP-One/deployment-agent}/queue/processing:/deployment-agent/queue/processing:ro"
       - "${PDP_DEPLOYMENT_AGENT_ROOT:-C:/ProgramData/PDP-One/deployment-agent}/queue/responses:/deployment-agent/queue/responses:ro"
       - "${PDP_DEPLOYMENT_AGENT_ROOT:-C:/ProgramData/PDP-One/deployment-agent}/queue/rejected:/deployment-agent/queue/rejected:ro"
+      - "${PDP_DEPLOYMENT_AGENT_ROOT:-C:/ProgramData/PDP-One/deployment-agent}/queue/promotion-v3:/deployment-agent/queue/promotion-v3"
+      - "${PDP_DEPLOYMENT_AGENT_ROOT:-C:/ProgramData/PDP-One/deployment-agent}/queue/coordinator:/deployment-agent/queue/coordinator"
       - "${PDP_DEPLOYMENT_AGENT_ROOT:-C:/ProgramData/PDP-One/deployment-agent}/reports:/deployment-agent/reports:ro"
     depends_on: [backend]
     healthcheck:
