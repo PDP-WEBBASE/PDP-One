@@ -118,8 +118,23 @@ class HezarehExtractionProcessTests(TestCase):
             ),
         )
 
+    def _set_detail_enrichment_limit(self, connector: ProcurementConnector, limit: int):
+        source = connector.source
+        configuration = dict(source.configuration or {})
+        configuration["hezareh_detail_enrichment_limit"] = limit
+        source.configuration = configuration
+        source.save(update_fields=["configuration", "updated_at"])
+
+    def test_migrated_default_disables_automatic_detail_enrichment(self):
+        connector = ProcurementConnector.objects.get(key="hezareh_inquiries")
+        self.assertEqual(
+            connector.source.configuration.get("hezareh_detail_enrichment_limit"),
+            0,
+        )
+
     def test_details_are_requested_only_after_list_known_boundary(self):
         connector = ProcurementConnector.objects.get(key="hezareh_inquiries")
+        self._set_detail_enrichment_limit(connector, 1)
         self._seed_known(connector, "920002", "استعلام شناخته شده دو")
         self._seed_known(connector, "920003", "استعلام شناخته شده سه")
 
@@ -185,6 +200,7 @@ class HezarehExtractionProcessTests(TestCase):
 
     def test_detail_security_challenge_does_not_make_list_extraction_partial(self):
         connector = ProcurementConnector.objects.get(key="hezareh_inquiries")
+        self._set_detail_enrichment_limit(connector, 1)
         self._seed_known(connector, "930002", "استعلام شناخته شده دو")
         self._seed_known(connector, "930003", "استعلام شناخته شده سه")
 
