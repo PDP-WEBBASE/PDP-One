@@ -134,6 +134,20 @@ _CONSTRUCTION_PATTERNS = (
     ("تعمیر", 2),
 )
 
+_PROCUREMENT_ONLY_MARKERS = (
+    "خرید", "تامین کالا", "تأمین کالا", "تامین تجهیزات", "تأمین تجهیزات",
+    "خرید تجهیزات", "خرید اقلام", "فروش کالا",
+)
+_STRONG_CONSULTING_MARKERS = (
+    "خدمات مشاوره", "خدمات طراحی", "خدمات مطالعه", "خدمات مطالعات",
+    "مشاور", "نظارت", "مدیریت طرح",
+)
+_NEGATED_SERVICE_MARKERS = (
+    "نه خدمات", "فاقد خدمات", "بدون خدمات", "خدمت طراحی مشخص نیست",
+    "خدمات طراحی مشخص نیست", "خدمت مشاوره مشخص نیست", "صرفا خرید",
+    "صرفاً خرید", "موضوع خرید", "عنوان خرید",
+)
+
 
 def _score(text: str, patterns: Iterable[tuple[str, int]]) -> tuple[int, list[str]]:
     total = 0
@@ -199,6 +213,13 @@ def classify_business_opportunity_type(
     )
     best_score, best_value, best_evidence = ranked[0]
     second_score = ranked[1][0]
+    procurement_only = any(marker in text for marker in _PROCUREMENT_ONLY_MARKERS)
+    strong_consulting = any(marker in text for marker in _STRONG_CONSULTING_MARKERS)
+    negated_service = any(marker in text for marker in _NEGATED_SERVICE_MARKERS)
+    if best_value == CONSULTING and procurement_only and (negated_service or not strong_consulting):
+        return OpportunityTypeClassification(
+            reason="دامنه موجود بر خرید کالا یا تجهیزات دلالت دارد و خدمت مشاوره‌ای مستقلی اثبات نشده است.",
+        )
     minimum = 8 if best_value == EPC else 5
     if best_score < minimum or best_score - second_score < 2:
         return OpportunityTypeClassification(

@@ -80,6 +80,25 @@ def _classify(explicit, values, confidence=None, reason=""):
     ], reverse=True)
     best_score, best_type = ranked[0]
     second_score = ranked[1][0]
+    procurement_only = any(marker in text for marker in (
+        "خرید", "تامین کالا", "تأمین کالا", "تامین تجهیزات", "تأمین تجهیزات",
+        "خرید تجهیزات", "خرید اقلام", "فروش کالا",
+    ))
+    strong_consulting = any(marker in text for marker in (
+        "خدمات مشاوره", "خدمات طراحی", "خدمات مطالعه", "خدمات مطالعات",
+        "مشاور", "نظارت", "مدیریت طرح",
+    ))
+    negated_service = any(marker in text for marker in (
+        "نه خدمات", "فاقد خدمات", "بدون خدمات", "خدمت طراحی مشخص نیست",
+        "خدمات طراحی مشخص نیست", "خدمت مشاوره مشخص نیست", "صرفا خرید",
+        "صرفاً خرید", "موضوع خرید", "عنوان خرید",
+    ))
+    if best_type == "consulting" and procurement_only and (negated_service or not strong_consulting):
+        return (
+            "unclassified",
+            None,
+            "دامنه موجود بر خرید کالا یا تجهیزات دلالت دارد و خدمت مشاوره‌ای مستقلی اثبات نشده است.",
+        )
     minimum = 8 if best_type == "epc" else 5
     if best_score < minimum or best_score - second_score < 2:
         return "unclassified", None, "شواهد تحلیل برای تعیین قطعی نوع فرصت کافی یا بدون ابهام نیست."
@@ -88,7 +107,12 @@ def _classify(explicit, values, confidence=None, reason=""):
     return best_type, confidence_value, f"پیش‌نویس خودکار نوع «{labels[best_type]}» بر پایه شواهد تحلیل موجود."
 
 
-def backfill_business_opportunity_types(apps, schema_editor):
+def backfill_business_opportunity_types(
+    apps,
+    schema_editor,
+    audit_target="0024",
+    current_type=None,
+):
     Notice = apps.get_model("procurement", "ProcurementNotice")
     Draft = apps.get_model("procurement", "NoticeAnalysisDraft")
     Direct = apps.get_model("procurement", "DirectOpportunity")
@@ -100,7 +124,10 @@ def backfill_business_opportunity_types(apps, schema_editor):
     seen_notices = set()
     counts = {"drafts": 0, "notices": 0, "direct": 0, "unclassified": 0}
 
-    drafts = Draft.objects.select_related("notice").order_by(
+    drafts = Draft.objects.select_related("notice")
+    if current_type:
+        drafts = drafts.filter(business_opportunity_type=current_type)
+    drafts = drafts.order_by(
         "notice_id", "-analyzed_at", "-created_at", "-id"
     )
     for draft in drafts.iterator(chunk_size=500):
@@ -128,7 +155,13 @@ def backfill_business_opportunity_types(apps, schema_editor):
         if draft.notice_id not in seen_notices:
             seen_notices.add(draft.notice_id)
             notice = draft.notice
-            if notice.business_opportunity_type_source != "human":
+            if (
+                notice.business_opportunity_type_source != "human"
+                and (
+                    not current_type
+                    or notice.business_opportunity_type == current_type
+                )
+            ):
                 notice.business_opportunity_type = opportunity_type
                 notice.business_opportunity_type_source = (
                     "automated_draft" if opportunity_type != "unclassified" else "unassigned"
@@ -166,7 +199,10 @@ def backfill_business_opportunity_types(apps, schema_editor):
             batch_size=500,
         )
 
-    for direct in Direct.objects.filter(soft_deleted_at__isnull=True).iterator(chunk_size=500):
+    direct_queryset = Direct.objects.filter(soft_deleted_at__isnull=True)
+    if current_type:
+        direct_queryset = direct_queryset.filter(business_opportunity_type=current_type)
+    for direct in direct_queryset.iterator(chunk_size=500):
         if direct.business_opportunity_type_source == "human":
             continue
         opportunity_type, confidence, reason = _classify(
@@ -196,11 +232,17 @@ def backfill_business_opportunity_types(apps, schema_editor):
         )
 
     AuditEvent.objects.create(
-        actor="migration:procurement.0024",
+        actor=f"migration:procurement.{audit_target}",
         action="procurement.business_opportunity_type.backfill",
         target_type="procurement_opportunity_type_projection",
-        target_id="0024",
-        payload={**counts, "human_choices_overwritten": 0, "draft_only": True},
+        target_id=audit_target,
+        payload={
+            **counts,
+            "human_choices_overwritten": 0,
+            "draft_only": True,
+            "correction": audit_target != "0024",
+            "current_type_scope": current_type or "all",
+        },
     )
 
 

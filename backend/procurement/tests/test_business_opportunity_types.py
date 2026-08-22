@@ -59,6 +59,17 @@ class BusinessOpportunityTypeClassifierTests(SimpleTestCase):
         self.assertEqual(classification.value, UNCLASSIFIED)
         self.assertIn("معتبر نیست", classification.reason)
 
+    def test_purchase_only_with_negated_design_reference_stays_unclassified(self):
+        classification = classify_business_opportunity_type(
+            evidence_values=(
+                "استعلام ادوات ایستگاه هیدرومتری مطابق لیست پیوست",
+                "خرید تجهیزات پایش منابع آب",
+                "موضوع خرید تجهیزات آماده است نه خدمات مطالعه یا طراحی.",
+            ),
+        )
+        self.assertEqual(classification.value, UNCLASSIFIED)
+        self.assertIn("خرید", classification.reason)
+
 
 class BusinessOpportunityTypeFilteringTests(APITestCase):
     def setUp(self):
