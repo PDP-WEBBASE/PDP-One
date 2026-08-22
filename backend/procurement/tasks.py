@@ -21,6 +21,7 @@ from procurement.models_extraction import (
 
 
 HEZAREH_CONNECTOR_KEYS = frozenset({"hezareh_tenders", "hezareh_inquiries"})
+PARSNAMAD_INQUIRY_CONNECTOR_KEY = "parsnamad_inquiries"
 HEZAREH_PRESERVED_DETAIL_FIELDS = (
     "description",
     "conditions",
@@ -35,6 +36,9 @@ HEZAREH_PRESERVED_DETAIL_FIELDS = (
     "email",
     "website",
     "address",
+)
+PARSNAMAD_LIST_OWNED_DETAIL_FIELDS = frozenset(
+    {"title", "province", "published_raw", "detail_url", "source_record_id"}
 )
 
 
@@ -72,6 +76,10 @@ def _is_hezareh(connector: ProcurementConnector) -> bool:
     return connector.key in HEZAREH_CONNECTOR_KEYS
 
 
+def _is_parsnamad_inquiry(connector: ProcurementConnector) -> bool:
+    return connector.key == PARSNAMAD_INQUIRY_CONNECTOR_KEY
+
+
 def _preserved_hezareh_detail(parsed, source_notice: SourceNotice | None) -> dict | None:
     """Reuse prior enrichment without allowing stale detail to override fresh list fields."""
     if source_notice is None:
@@ -96,6 +104,27 @@ def _preserved_hezareh_detail(parsed, source_notice: SourceNotice | None) -> dic
     return preserved or None
 
 
+def _successful_parsnamad_detail(detail: dict | None) -> dict | None:
+    """Keep successful rich detail while making fresh list identity fields authoritative."""
+    if not isinstance(detail, dict) or detail.get("detail_status") != "enriched":
+        return None
+    preserved = {
+        key: value
+        for key, value in detail.items()
+        if key not in PARSNAMAD_LIST_OWNED_DETAIL_FIELDS
+    }
+    return preserved or None
+
+
+def _preserved_parsnamad_detail(source_notice: SourceNotice | None) -> dict | None:
+    if source_notice is None:
+        return None
+    raw_payload = source_notice.raw_payload or {}
+    if not isinstance(raw_payload, dict):
+        return None
+    return _successful_parsnamad_detail(raw_payload.get("detail"))
+
+
 def _content_retry_settings(source: ProcurementSource) -> tuple[int, int]:
     configuration = source.configuration or {}
     retry_count = _safe_int(configuration.get("content_retry_count"), 2)
@@ -105,6 +134,14 @@ def _content_retry_settings(source: ProcurementSource) -> tuple[int, int]:
 
 def _hezareh_detail_enrichment_limit(source: ProcurementSource) -> int:
     configured = _safe_int((source.configuration or {}).get("hezareh_detail_enrichment_limit"), 10)
+    return max(0, min(configured, 20))
+
+
+def _parsnamad_detail_enrichment_limit(source: ProcurementSource) -> int:
+    configured = _safe_int(
+        (source.configuration or {}).get("parsnamad_inquiry_detail_enrichment_limit"),
+        10,
+    )
     return max(0, min(configured, 20))
 
 
@@ -353,6 +390,102 @@ def _enrich_hezareh_details_after_list(
             time.sleep(min(delay_ms, 2000) / 1000)
 
 
+def _enrich_parsnamad_details_after_list(
+    *,
+    run: ExtractionRun,
+    connector: ProcurementConnector,
+    parser,
+    allowed_host: str,
+    candidates: list[tuple[object, int]],
+    summary: dict,
+):
+    """Bound Parsnamad inquiry detail calls to NEW/UPDATED rows after list discovery."""
+    summary["detail_candidates"] = len(candidates)
+    limit = _parsnamad_detail_enrichment_limit(connector.source)
+    selected = candidates[:limit]
+    summary["detail_deferred"] += max(0, len(candidates) - len(selected))
+    if not selected:
+        return
+
+    detail_fetcher = fetcher_for(connector, allowed_host=allowed_host)
+    delay_ms = _safe_int((connector.source.configuration or {}).get("detail_delay_ms"), 250)
+    for parsed, page_number in selected:
+        summary["detail_attempted"] += 1
+        try:
+            detail_page = detail_fetcher.fetch_detail(parsed.detail_url)
+            parsed_detail = parser.parse_detail(detail_page.text)
+        except SourceFetchError as exc:
+            summary["warnings"] += 1
+            summary["detail_failed"] += 1
+            _record_error(
+                run,
+                connector,
+                category=exc.category,
+                message="صفحه جزئیات پارس‌نماد دریافت نشد؛ داده فهرست و جزئیات موفق قبلی حفظ شد.",
+                retryable=exc.retryable,
+                url=parsed.detail_url,
+                page_number=page_number,
+                details={"status_code": exc.status_code, "exception": exc.__class__.__name__},
+            )
+            continue
+        except Exception as exc:
+            summary["warnings"] += 1
+            summary["detail_failed"] += 1
+            _record_error(
+                run,
+                connector,
+                category=ExtractionError.Category.PARSE,
+                message="صفحه جزئیات پارس‌نماد پردازش نشد؛ داده فهرست و جزئیات موفق قبلی حفظ شد.",
+                retryable=False,
+                url=parsed.detail_url,
+                page_number=page_number,
+                details={"exception": exc.__class__.__name__},
+            )
+            continue
+
+        detail = _successful_parsnamad_detail(parsed_detail)
+        if detail is None:
+            summary["warnings"] += 1
+            summary["detail_failed"] += 1
+            _record_error(
+                run,
+                connector,
+                category=ExtractionError.Category.PARSE,
+                message="جزئیات پارس‌نماد غنی‌سازی معتبر نداشت؛ داده فهرست و جزئیات موفق قبلی حفظ شد.",
+                retryable=True,
+                url=parsed.detail_url,
+                page_number=page_number,
+                details={"detail_status": parsed_detail.get("detail_status") if isinstance(parsed_detail, dict) else None},
+            )
+            continue
+
+        try:
+            ingest_parsed_notice(
+                connector,
+                parsed,
+                detail=detail,
+                run=None,
+                page_number=page_number,
+            )
+            summary["detail_enriched"] += 1
+        except Exception as exc:
+            summary["warnings"] += 1
+            summary["detail_failed"] += 1
+            _record_error(
+                run,
+                connector,
+                category=ExtractionError.Category.UNEXPECTED,
+                message="جزئیات پارس‌نماد دریافت شد اما به‌روزرسانی غنی‌سازی ناموفق بود؛ داده قبلی حفظ شد.",
+                retryable=True,
+                url=parsed.detail_url or "",
+                page_number=page_number,
+                details={"exception": exc.__class__.__name__, "source_record_id": parsed.source_record_id},
+            )
+
+        if delay_ms > 0:
+            time.sleep(min(delay_ms, 2000) / 1000)
+
+
 def _execute_connector(
     run: ExtractionRun,
     connector: ProcurementConnector,
@@ -370,6 +503,12 @@ def _execute_connector(
         and run.include_details
         and connector.supports_detail
     )
+    parsnamad_deferred_details = bool(
+        _is_parsnamad_inquiry(connector)
+        and run.include_details
+        and connector.supports_detail
+    )
+    deferred_details = hezareh_deferred_details or parsnamad_deferred_details
     summary = {
         "status": "succeeded",
         "mode": run.mode,
@@ -395,7 +534,7 @@ def _execute_connector(
         "recovered_pages": [],
         "suspicious_pages": [],
         "known_boundary_pages": 0,
-        "detail_policy": "deferred_after_list_boundary" if hezareh_deferred_details else "inline",
+        "detail_policy": "deferred_after_list_boundary" if deferred_details else "inline",
         "detail_candidates": 0,
         "detail_attempted": 0,
         "detail_enriched": 0,
@@ -406,6 +545,7 @@ def _execute_connector(
     previous_record_ids: tuple[str, ...] | None = None
     consecutive_known_pages = 0
     hezareh_detail_candidates: list[tuple[object, int]] = []
+    parsnamad_detail_candidates: list[tuple[object, int]] = []
 
     for page_number in range(1, page_cap + 1):
         page_url = _list_page_url(connector, page_number)
@@ -645,6 +785,8 @@ def _execute_connector(
             detail = None
             if hezareh_deferred_details:
                 detail = _preserved_hezareh_detail(parsed, existing_by_record_id.get(parsed.source_record_id))
+            elif parsnamad_deferred_details:
+                detail = _preserved_parsnamad_detail(existing_by_record_id.get(parsed.source_record_id))
             elif run.include_details and connector.supports_detail and parsed.detail_url:
                 try:
                     detail_page = fetcher.fetch_detail(parsed.detail_url)
@@ -697,6 +839,12 @@ def _execute_connector(
                     and item_status in {ExtractionRunItem.Status.NEW, ExtractionRunItem.Status.UPDATED}
                 ):
                     hezareh_detail_candidates.append((parsed, page_number))
+                if (
+                    parsnamad_deferred_details
+                    and parsed.detail_url
+                    and item_status in {ExtractionRunItem.Status.NEW, ExtractionRunItem.Status.UPDATED}
+                ):
+                    parsnamad_detail_candidates.append((parsed, page_number))
             except Exception as exc:
                 summary["failed"] += 1
                 page_counts["failed"] += 1
@@ -792,6 +940,24 @@ def _execute_connector(
     elif hezareh_deferred_details and hezareh_detail_candidates:
         summary["detail_candidates"] = len(hezareh_detail_candidates)
         summary["detail_deferred"] += len(hezareh_detail_candidates)
+
+    if (
+        parsnamad_deferred_details
+        and parsnamad_detail_candidates
+        and summary["completeness"] == "complete"
+        and summary["status"] not in {"failed", "partial"}
+    ):
+        _enrich_parsnamad_details_after_list(
+            run=run,
+            connector=connector,
+            parser=parser,
+            allowed_host=allowed_host,
+            candidates=parsnamad_detail_candidates,
+            summary=summary,
+        )
+    elif parsnamad_deferred_details and parsnamad_detail_candidates:
+        summary["detail_candidates"] = len(parsnamad_detail_candidates)
+        summary["detail_deferred"] += len(parsnamad_detail_candidates)
 
     if summary["status"] == "succeeded" and summary["warnings"]:
         summary["status"] = "succeeded_with_warnings"
