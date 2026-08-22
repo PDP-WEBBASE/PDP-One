@@ -4,6 +4,7 @@ import test from "node:test";
 
 const ui = readFileSync("app/procurement/ProcurementWebPreviewV9Enhancement.tsx", "utf8");
 const composition = readFileSync("app/procurement/ProcurementWorkspaceV23.tsx", "utf8");
+const workspace = readFileSync("app/procurement/ProcurementWorkspaceV13.tsx", "utf8");
 const pagination = readFileSync("app/procurement/ProcurementPaginationStableEnhancement.tsx", "utf8");
 const compactApi = readFileSync("backend/procurement/views_compact_ui.py", "utf8");
 const directApi = readFileSync("backend/procurement/views_direct.py", "utf8");
@@ -15,10 +16,13 @@ test("approved V9 enhancement mounts last over the preserved stable identity lay
   assert.doesNotMatch(ui, /MutationObserver|setInterval\s*\(/);
 });
 
-test("V9 wins the bounded UI sync race and re-homes bulk controls in the approved workflow row", () => {
-  assert.match(ui, /frame1\s*=\s*requestAnimationFrame[\s\S]*frame2\s*=\s*requestAnimationFrame\(sync\)/);
-  assert.match(ui, /BULK_HOST_ID\s*=\s*"pdp-procurement-v2-bulk-host"/);
-  assert.match(ui, /slot\.appendChild\(bulkHost\)/);
+test("V9 controls are native React children and cannot be detached by an async workspace render", () => {
+  assert.match(workspace, /import[\s\S]*ProcurementV9NativeFilters[\s\S]*ProcurementV9NativeToolbar[\s\S]*from "\.\/ProcurementWebPreviewV9Enhancement"/);
+  assert.match(workspace, /pdp-v9-workflow-row[\s\S]*<ProcurementV9NativeToolbar\s*\/>/);
+  assert.match(workspace, /pdp-v9-filter-bar[\s\S]*<ProcurementV9NativeFilters noticeTab\s*\/>/);
+  assert.doesNotMatch(ui, /createPortal|document\.createElement|ensureHosts|FILTER_HOST_ID|TOOLBAR_HOST_ID/);
+  assert.match(ui, /window\.addEventListener\(NOTICE_DATA_EVENT, schedule\)/);
+  assert.match(ui, /window\.addEventListener\(DIRECT_DATA_EVENT, schedule\)/);
   assert.match(ui, /align-items:flex-end!important;justify-content:space-between!important;gap:14px!important/);
 });
 
