@@ -11,6 +11,7 @@ const directApi = readFileSync("backend/procurement/views_direct.py", "utf8");
 test("approved V9 enhancement mounts last over the preserved stable identity layers", () => {
   assert.match(composition, /ProcurementWebPreviewV9Enhancement/);
   assert.ok(composition.indexOf("<ProcurementWebPreviewV9Enhancement />") > composition.indexOf("<ProcurementCardLayoutBulkRemoveV2 />"));
+  assert.match(composition, /import\("\.\/ProcurementWebPreviewV9Enhancement"\)[\s\S]*?ssr:\s*false/);
   assert.doesNotMatch(ui, /MutationObserver|setInterval\s*\(/);
 });
 
