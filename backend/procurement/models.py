@@ -290,3 +290,4 @@ from .models_extraction import (  # noqa: E402,F401
     ExtractionRunItem,
     ExtractionSchedule,
 )
+from .models_internet_usage import InternetUsageEvent  # noqa: E402,F401

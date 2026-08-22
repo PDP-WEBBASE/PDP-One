@@ -18,6 +18,9 @@ from rest_framework.response import Response
 
 from core.models import AuditEvent
 
+from .internet_usage import record_internet_usage
+from .models_internet_usage import InternetUsageEvent
+
 from .analysis_run_service import (
     active_run,
     cancel_run,
@@ -279,7 +282,26 @@ def download_analysis_dataset(request, dataset_id, filename):
     expected_root = (Path(settings.MEDIA_ROOT) / "procurement-analysis" / str(dataset.id)).resolve()
     if expected_root not in path.parents or not path.is_file():
         return Response({"detail": "مسیر فایل معتبر نیست."}, status=status.HTTP_404_NOT_FOUND)
-    return FileResponse(path.open("rb"), as_attachment=True, filename=path.name)
+    response = FileResponse(path.open("rb"), as_attachment=True, filename=path.name)
+    original_stream = response.streaming_content
+
+    def metered_stream():
+        completed = False
+        try:
+            for chunk in original_stream:
+                yield chunk
+            completed = True
+        finally:
+            if completed:
+                record_internet_usage(
+                    activity=InternetUsageEvent.Activity.ANALYSIS,
+                    source="analysis_dataset_download",
+                    upload_bytes=path.stat().st_size,
+                    reference=str(dataset.id),
+                )
+
+    response.streaming_content = metered_stream()
+    return response
 
 
 def _uploaded_results(uploaded) -> tuple[list[dict], str]:
@@ -344,6 +366,13 @@ def import_analysis_results(request, run_id):
             },
             status=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
+    transferred_bytes = int(getattr(uploaded, "size", 0) or request.META.get("CONTENT_LENGTH") or 0)
+    record_internet_usage(
+        activity=InternetUsageEvent.Activity.ANALYSIS,
+        source="analysis_results_import",
+        download_bytes=transferred_bytes,
+        reference=str(import_record.id),
+    )
     return Response({"import": ProcurementAnalysisImportSerializer(import_record).data}, status=status.HTTP_201_CREATED)
 
 
