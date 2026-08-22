@@ -21,6 +21,7 @@ class ProcurementConfig(AppConfig):
             models_codes,
             models_direct,
             models_documents,
+            models_internet_usage,
             analysis_run_service_v2,
             analysis_claim_recovery,
             analysis_claim_integrity,

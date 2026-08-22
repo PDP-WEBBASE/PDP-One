@@ -5,6 +5,7 @@ from rest_framework.test import APIClient
 
 from procurement.models import ProcurementConnector, ProcurementSource
 from procurement.models_extraction import ExtractionPage, ExtractionRun
+from procurement.models_internet_usage import InternetUsageEvent
 
 
 class InternetUsageDashboardTests(TestCase):
@@ -52,3 +53,44 @@ class InternetUsageDashboardTests(TestCase):
         self.assertFalse(activities["ci_images"]["measured"])
         self.assertIsNone(activities["ci_images"]["periods"]["24h"]["total_bytes"])
         self.assertNotIn("recent_runs", response.data)
+
+    def test_reports_completed_transfer_events_for_each_period(self):
+        now = timezone.now()
+        InternetUsageEvent.objects.create(
+            activity=InternetUsageEvent.Activity.ANALYSIS,
+            source="analysis_dataset_download",
+            download_bytes=200,
+            upload_bytes=800,
+            operation_count=1,
+            occurred_at=now,
+            reference="dataset-1",
+        )
+        InternetUsageEvent.objects.create(
+            activity=InternetUsageEvent.Activity.DEPLOYMENT,
+            source="registry_pull",
+            download_bytes=4096,
+            upload_bytes=32,
+            operation_count=1,
+            occurred_at=now - timezone.timedelta(days=3),
+            reference="commit-1",
+        )
+        self.client.force_authenticate(self.user)
+
+        response = self.client.get("/api/v1/procurement/internet-usage-dashboard/")
+
+        self.assertEqual(response.status_code, 200)
+        activities = {item["key"]: item for item in response.data["activities"]}
+        self.assertEqual(activities["analysis"]["periods"]["24h"]["total_bytes"], 1000)
+        self.assertEqual(activities["deployment"]["periods"]["24h"]["total_bytes"], 0)
+        self.assertEqual(activities["deployment"]["periods"]["7d"]["total_bytes"], 4128)
+        self.assertTrue(activities["deployment"]["measured"])
+        self.assertEqual(response.data["measured_totals"]["7d"], 5128)
+
+    def test_uninstrumented_activity_is_not_reported_as_zero(self):
+        self.client.force_authenticate(self.user)
+
+        response = self.client.get("/api/v1/procurement/internet-usage-dashboard/")
+
+        activities = {item["key"]: item for item in response.data["activities"]}
+        self.assertFalse(activities["web_users"]["measured"])
+        self.assertIsNone(activities["web_users"]["periods"]["24h"]["total_bytes"])
