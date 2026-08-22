@@ -10,6 +10,7 @@ from django.utils import timezone
 
 from .models import ProcurementNotice, TimestampedModel
 from .models_extraction import ExtractionRun
+from .opportunity_types import BUSINESS_OPPORTUNITY_TYPE_CHOICES, UNCLASSIFIED
 
 
 def analysis_context_upload_path(instance, filename):
@@ -228,6 +229,20 @@ class NoticeAnalysisDraft(TimestampedModel):
     priority = models.CharField(max_length=12, choices=Priority.choices, default=Priority.MEDIUM)
     fit_for_pdp = models.TextField()
     category = models.CharField(max_length=200, blank=True)
+    business_opportunity_type = models.CharField(
+        max_length=20,
+        choices=BUSINESS_OPPORTUNITY_TYPE_CHOICES,
+        default=UNCLASSIFIED,
+        db_index=True,
+    )
+    business_opportunity_type_confidence = models.DecimalField(
+        max_digits=5,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        validators=[MinValueValidator(0), MaxValueValidator(100)],
+    )
+    business_opportunity_type_reason = models.TextField(blank=True)
     reason = models.TextField()
     recommended_action = models.TextField()
     matched_experience = models.JSONField(default=list, blank=True)

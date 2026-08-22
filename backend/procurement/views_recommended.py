@@ -10,6 +10,7 @@ from core.models import AuditEvent
 
 from .models import ProcurementNotice
 from .models_analysis import NoticeAnalysisDraft
+from .opportunity_types import normalize_requested_business_opportunity_types
 from .serializers import ProcurementNoticeListSerializer
 from .views import _filter_deadline_urgency
 
@@ -117,6 +118,20 @@ class AIRecommendedNoticeViewSet(viewsets.ReadOnlyModelViewSet):
             "submission_deadline",
             params.get("urgency", "").strip(),
         )
+        requested_business_types = [
+            value.strip()
+            for raw in params.getlist("business_opportunity_type")
+            for value in str(raw).split(",")
+            if value.strip()
+        ]
+        if requested_business_types:
+            business_types, invalid_business_type = normalize_requested_business_opportunity_types(
+                requested_business_types
+            )
+            if invalid_business_type or not business_types:
+                queryset = queryset.none()
+            else:
+                queryset = queryset.filter(business_opportunity_type__in=business_types)
         return queryset
 
     @action(detail=True, methods=["post"], url_path="dismiss")

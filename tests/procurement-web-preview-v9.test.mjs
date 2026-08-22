@@ -48,6 +48,9 @@ test("V9 multi-select filters preserve canonical source names and selected-label
   assert.match(pagination, /params\.append\("source_name"/);
   assert.match(pagination, /params\.append\("importance"/);
   assert.match(pagination, /params\.append\("urgency"/);
+  assert.match(pagination, /params\.append\("business_opportunity_type"/);
+  assert.match(compactApi, /business_opportunity_type__in/);
+  assert.match(directApi, /business_opportunity_type__in/);
   assert.match(compactApi, /_multi_query_values/);
   assert.match(directApi, /params\.getlist\("importance"\)/);
 });

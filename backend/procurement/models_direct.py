@@ -4,6 +4,12 @@ from django.db import models
 from django.utils import timezone
 
 from .models import TimestampedModel
+from .opportunity_types import (
+    BUSINESS_OPPORTUNITY_TYPE_CHOICES,
+    BUSINESS_OPPORTUNITY_TYPE_SOURCE_CHOICES,
+    UNASSIGNED_SOURCE,
+    UNCLASSIFIED,
+)
 
 
 class OpportunityContact(TimestampedModel):
@@ -74,6 +80,25 @@ class DirectOpportunity(TimestampedModel):
         choices=OpportunityType.choices,
         default=OpportunityType.UNASSIGNED,
     )
+    business_opportunity_type = models.CharField(
+        max_length=20,
+        choices=BUSINESS_OPPORTUNITY_TYPE_CHOICES,
+        default=UNCLASSIFIED,
+        db_index=True,
+    )
+    business_opportunity_type_source = models.CharField(
+        max_length=24,
+        choices=BUSINESS_OPPORTUNITY_TYPE_SOURCE_CHOICES,
+        default=UNASSIGNED_SOURCE,
+    )
+    business_opportunity_type_confidence = models.DecimalField(
+        max_digits=5,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        validators=[MinValueValidator(0), MaxValueValidator(100)],
+    )
+    business_opportunity_type_reason = models.TextField(blank=True)
     stage = models.CharField(max_length=32, choices=Stage.choices, default=Stage.NEW)
     responsible = models.ForeignKey(
         settings.AUTH_USER_MODEL,

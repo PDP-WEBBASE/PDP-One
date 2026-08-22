@@ -3,6 +3,7 @@ import json
 
 from .models import ProcurementNotice
 from .models_analysis import AnalysisContextSnapshot
+from .opportunity_types import HUMAN_SOURCE
 
 
 def get_active_context() -> AnalysisContextSnapshot | None:
@@ -44,6 +45,11 @@ def notice_basis_payload(notice: ProcurementNotice) -> dict:
         "estimated_amount_rials": str(notice.estimated_amount_rials) if notice.estimated_amount_rials is not None else None,
         "guarantee_amount_rials": str(notice.guarantee_amount_rials) if notice.guarantee_amount_rials is not None else None,
         "qualification_text": notice.qualification_text,
+        "human_business_opportunity_type": (
+            notice.business_opportunity_type
+            if notice.business_opportunity_type_source == HUMAN_SOURCE
+            else None
+        ),
         "source_hashes": source_hashes,
     }
 

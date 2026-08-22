@@ -16,6 +16,7 @@ from .models_direct import (
     OpportunityResult,
 )
 from .permissions_extraction import IsManagerOrReadOnly
+from .opportunity_types import normalize_requested_business_opportunity_types
 from .serializers_direct import (
     DirectOpportunityDetailSerializer,
     DirectOpportunityListSerializer,
@@ -98,6 +99,21 @@ class DirectOpportunityViewSet(
         if importance:
             queryset = queryset.filter(importance__in=importance)
 
+        requested_business_types = [
+            value.strip()
+            for raw in params.getlist("business_opportunity_type")
+            for value in str(raw).split(",")
+            if value.strip()
+        ]
+        if requested_business_types:
+            business_types, invalid_business_type = normalize_requested_business_opportunity_types(
+                requested_business_types
+            )
+            if invalid_business_type or not business_types:
+                queryset = queryset.none()
+            else:
+                queryset = queryset.filter(business_opportunity_type__in=business_types)
+
         urgencies = [value for raw in params.getlist("urgency") for value in raw.split(",") if value]
         if len(urgencies) == 1:
             queryset = _filter_deadline_urgency(queryset, "next_action_due", urgencies[0].strip())
@@ -137,6 +153,7 @@ class DirectOpportunityViewSet(
 
     def perform_update(self, serializer):
         before_stage = serializer.instance.stage
+        before_business_type = serializer.instance.business_opportunity_type
         opportunity = serializer.save(last_activity_at=timezone.now())
         reference_code = None
         try:
@@ -151,6 +168,9 @@ class DirectOpportunityViewSet(
             payload={
                 "stage_before": before_stage,
                 "stage_after": opportunity.stage,
+                "business_opportunity_type_before": before_business_type,
+                "business_opportunity_type_after": opportunity.business_opportunity_type,
+                "business_opportunity_type_source": opportunity.business_opportunity_type_source,
                 "reference_code": reference_code,
             },
         )

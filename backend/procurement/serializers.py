@@ -162,6 +162,12 @@ class ProcurementNoticeListSerializer(serializers.ModelSerializer):
     type_resolution_status_label = serializers.CharField(source="get_type_resolution_status_display", read_only=True)
     processing_status_label = serializers.CharField(source="get_processing_status_display", read_only=True)
     importance_label = serializers.CharField(source="get_importance_display", read_only=True)
+    business_opportunity_type_label = serializers.CharField(
+        source="get_business_opportunity_type_display", read_only=True
+    )
+    business_opportunity_type_source_label = serializers.CharField(
+        source="get_business_opportunity_type_source_display", read_only=True
+    )
     case_stage = serializers.CharField(source="case.stage", read_only=True)
     case_stage_label = serializers.CharField(source="case.get_stage_display", read_only=True)
     source_count = serializers.IntegerField(read_only=True)
@@ -175,7 +181,10 @@ class ProcurementNoticeListSerializer(serializers.ModelSerializer):
             "id", "reference_code", "resolved_notice_type", "notice_type_label", "type_resolution_status",
             "type_resolution_status_label", "title", "employer_name", "notice_number", "province",
             "published_date", "submission_deadline", "processing_status", "processing_status_label",
-            "importance", "importance_label", "is_recommended", "case_stage", "case_stage_label",
+            "importance", "importance_label", "business_opportunity_type",
+            "business_opportunity_type_label", "business_opportunity_type_source",
+            "business_opportunity_type_source_label", "business_opportunity_type_confidence",
+            "business_opportunity_type_reason", "is_recommended", "case_stage", "case_stage_label",
             "source_count", "source_name", "source_url", "detail_url", "first_seen_at", "last_seen_at",
         ]
         read_only_fields = fields

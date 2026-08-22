@@ -15,6 +15,7 @@ from .analysis_statistics import procurement_analysis_statistics
 from .models import ProcurementCase, ProcurementNotice
 from .models_analysis import NoticeAnalysisDraft
 from .models_direct import DirectOpportunity
+from .opportunity_types import normalize_requested_business_opportunity_types
 from .serializers import ProcurementNoticeListSerializer
 from .views import NOTICE_RESULT_STAGES, NOTICE_SELECTED_STAGES, NOTICE_SUBMITTED_STAGES
 from .views_recommended import latest_effective_recommended_notice_ids
@@ -209,6 +210,16 @@ def _compact_notice_queryset(request, *, force_recommended: bool = False):
     importance = _multi_query_values(request, "importance")
     if importance:
         queryset = queryset.filter(importance__in=importance)
+
+    requested_business_types = _multi_query_values(request, "business_opportunity_type")
+    if requested_business_types:
+        business_types, invalid_business_type = normalize_requested_business_opportunity_types(
+            requested_business_types
+        )
+        if invalid_business_type or not business_types:
+            queryset = queryset.none()
+        else:
+            queryset = queryset.filter(business_opportunity_type__in=business_types)
 
     published_on = str(request.query_params.get("published_on", "")).strip()
     if published_on:

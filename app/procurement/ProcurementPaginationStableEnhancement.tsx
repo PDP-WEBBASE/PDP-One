@@ -301,6 +301,7 @@ function installPaginationFetchGuard() {
       filters.importance.forEach((value) => nextUrl.searchParams.append("importance", value));
       filters.urgency.forEach((value) => nextUrl.searchParams.append("urgency", value));
       if (filters.directType) nextUrl.searchParams.set("opportunity_type", filters.directType);
+      filters.opportunityTypes.forEach((value) => nextUrl.searchParams.append("business_opportunity_type", value));
       nextUrl.searchParams.set("page", String(pageState.page));
       nextUrl.searchParams.set("page_size", String(pageState.pageSize));
       const contextKey = JSON.stringify([state.top, state.workflow, nextUrl.search]);
