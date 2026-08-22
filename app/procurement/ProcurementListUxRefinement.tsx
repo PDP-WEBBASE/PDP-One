@@ -149,7 +149,11 @@ function currentSection(state = getProcurementStableViewState()) {
   return button?.closest("section") as HTMLElement | null;
 }
 
-function findArticle(section: HTMLElement, title: string, employer: string) {
+function findArticle(section: HTMLElement, id: string, title: string, employer: string) {
+  const identified = Array.from(section.querySelectorAll<HTMLElement>("article[data-pdp-notice-id]")).find(
+    (article) => article.dataset.pdpNoticeId === id,
+  );
+  if (identified) return identified;
   const key = rowKey(title, employer);
   return Array.from(section.querySelectorAll<HTMLElement>("article")).find((article) => {
     const heading = normalize(article.querySelector("h3")?.textContent);
@@ -323,7 +327,7 @@ function syncNoticeRows(section: HTMLElement, payload: NoticePayload | null, sel
   });
 
   payload.results.forEach((item) => {
-    const article = findArticle(section, item.title, item.employer_name);
+    const article = findArticle(section, item.id, item.title, item.employer_name);
     if (!article) return;
     article.classList.add("pdp-ux-record");
     const content = article.children.item(0) as HTMLElement | null;
@@ -439,11 +443,12 @@ async function updateDirectToSelected(item: DirectRow, button: HTMLButtonElement
 }
 
 function syncDirectRows(section: HTMLElement, rows: DirectRow[]) {
+  const byId = new Map(rows.map((item) => [item.id, item]));
   const byKey = new Map(rows.map((item) => [rowKey(item.title, item.employer_name), item]));
   Array.from(section.querySelectorAll<HTMLElement>("article")).forEach((article) => {
     const heading = normalize(article.querySelector("h3")?.textContent);
     const employer = normalize(article.querySelector("p")?.textContent);
-    const item = byKey.get(rowKey(heading, employer));
+    const item = (article.dataset.pdpDirectId && byId.get(article.dataset.pdpDirectId)) || byKey.get(rowKey(heading, employer));
     if (!item) return;
     article.classList.add("pdp-ux-record");
     const decision = article.children.item(1) as HTMLElement | null;
