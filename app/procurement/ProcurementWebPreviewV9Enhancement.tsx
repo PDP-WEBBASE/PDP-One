@@ -1,7 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { createPortal } from "react-dom";
+import { useEffect, useMemo, useState } from "react";
 import { emitProcurementUiSync, PROCUREMENT_UI_SYNC_EVENT } from "./procurementUiSync";
 import {
   getProcurementStableViewState,
@@ -22,9 +21,9 @@ type V9Window = Window & {
   __pdpV9OpportunityTypes?: string[];
 };
 
-const FILTER_HOST_ID = "pdp-procurement-v9-filter-host";
-const TOOLBAR_HOST_ID = "pdp-procurement-v9-toolbar-host";
-const BULK_HOST_ID = "pdp-procurement-v2-bulk-host";
+const CLEAR_EVENT = "pdp-procurement-v9-clear-filters";
+const NOTICE_DATA_EVENT = "pdp-procurement-compact-notice-data";
+const DIRECT_DATA_EVENT = "pdp-procurement-direct-page-data";
 const fa = new Intl.NumberFormat("fa-IR");
 const faDate = new Intl.DateTimeFormat("fa-IR-u-ca-persian", { year: "numeric", month: "2-digit", day: "2-digit", timeZone: "UTC" });
 const faMonth = new Intl.DateTimeFormat("fa-IR-u-ca-persian", { year: "numeric", month: "long", timeZone: "UTC" });
@@ -66,17 +65,6 @@ function currentSection() {
   return button?.closest("section") as HTMLElement | null;
 }
 
-function findFilterBar(section: HTMLElement) {
-  const search = Array.from(section.querySelectorAll<HTMLLabelElement>("label")).find((label) => normalize(label.textContent).startsWith("جست‌وجو"));
-  return search?.parentElement as HTMLElement | null;
-}
-
-function hideNativeFilter(filterBar: HTMLElement, prefix: string) {
-  Array.from(filterBar.querySelectorAll<HTMLLabelElement>("label")).forEach((label) => {
-    if (normalize(label.textContent).startsWith(prefix)) label.classList.add("pdp-v9-native-filter");
-  });
-}
-
 function statusTone(value: string) {
   const text = normalize(value);
   if (text.includes("بسیار زیاد") || text.includes("بحرانی") || text.includes("گذشته") || text.includes("منقضی")) return "danger";
@@ -112,18 +100,9 @@ function normalizeMetadataBadges(section: HTMLElement) {
   });
 }
 
-function ensureHosts() {
+function syncPresentation() {
   const section = currentSection();
-  if (!section) return { filter: null, toolbar: null };
-  const filterBar = findFilterBar(section);
-  if (!filterBar) return { filter: null, toolbar: null };
-  filterBar.classList.add("pdp-v9-filter-bar");
-  hideNativeFilter(filterBar, "منبع");
-  hideNativeFilter(filterBar, "اهمیت");
-  hideNativeFilter(filterBar, "فوریت");
-  hideNativeFilter(filterBar, "وضعیت مهلت");
-  hideNativeFilter(filterBar, "تاریخ انتشار");
-  filterBar.querySelectorAll<HTMLElement>(".pdp-v2-row-count").forEach((node) => { node.style.display = "none"; });
+  if (!section) return;
   section.querySelectorAll<HTMLElement>("article[data-pdp-direct-id]").forEach((article) => {
     const content = article.children.item(0) as HTMLElement | null;
     const decision = article.children.item(1) as HTMLElement | null;
@@ -132,35 +111,19 @@ function ensureHosts() {
     decision?.querySelector("dl")?.classList.add("pdp-v9-responsible-hidden");
   });
   normalizeMetadataBadges(section);
-
-  let filter = filterBar.querySelector<HTMLElement>(`#${FILTER_HOST_ID}`);
-  if (!filter) {
-    filter = document.createElement("div");
-    filter.id = FILTER_HOST_ID;
-    const clearGroup = Array.from(filterBar.querySelectorAll<HTMLButtonElement>("button")).find((button) => normalize(button.textContent).startsWith("پاک"))?.parentElement;
-    filterBar.insertBefore(filter, clearGroup || null);
-  }
-
-  const workflowButton = Array.from(section.querySelectorAll<HTMLButtonElement>("button")).find((button) => normalize(button.textContent) === stableWorkflowLabel());
-  const workflowRow = workflowButton?.parentElement as HTMLElement | null;
-  let toolbar = workflowRow?.querySelector<HTMLElement>(`#${TOOLBAR_HOST_ID}`) || null;
-  if (workflowRow) {
-    workflowRow.classList.add("pdp-v9-workflow-row");
-    if (!toolbar) {
-      toolbar = document.createElement("div");
-      toolbar.id = TOOLBAR_HOST_ID;
-      workflowRow.appendChild(toolbar);
-    }
-  }
-  return { filter, toolbar };
 }
 
+let publishFrame = 0;
 function publish(next: Partial<V9Window>) {
+  if (typeof window === "undefined") return;
   const guarded = window as V9Window;
   Object.assign(guarded, next);
   guarded.__pdpPaginationPage = 1;
   guarded.__pdpStableListCache?.clear();
-  emitProcurementUiSync({ source: "procurement-web-preview-v9", bulkWorkspace: true });
+  window.cancelAnimationFrame(publishFrame);
+  publishFrame = window.requestAnimationFrame(() => {
+    emitProcurementUiSync({ source: "procurement-web-preview-v9", bulkWorkspace: true });
+  });
 }
 
 function selectedLabel(values: string[], options: Option[], empty: string, namesAlways = false) {
@@ -211,86 +174,103 @@ function JalaliRange({ from, to, onChange }: { from: string; to: string; onChang
   return <label className="pdp-v9-field pdp-v9-date-field"><span>تاریخ انتشار</span><details className="pdp-v9-select pdp-v9-calendar"><summary>{display}</summary><div className="pdp-v9-calendar-panel"><header><button type="button" onClick={() => move(32)}>‹</button><b>{faMonth.format(anchor)}</b><button type="button" onClick={() => move(-32)}>›</button></header><div className="pdp-v9-week">{["ش", "ی", "د", "س", "چ", "پ", "ج"].map((day) => <span key={day}>{day}</span>)}</div><div className="pdp-v9-days">{Array.from({ length: leading }).map((_, index) => <i key={`blank-${index}`} />)}{days.map((day) => { const value = iso(day); const selected = value === from || value === to; const ranged = from && to && value > from && value < to; return <button type="button" key={value} className={selected ? "selected" : ranged ? "ranged" : ""} onClick={() => choose(value)}>{fa.format(dateParts(day).day)}</button>; })}</div><footer><button type="button" onClick={() => onChange("", "")}>پاک‌کردن بازه</button></footer></div></details></label>;
 }
 
-export default function ProcurementWebPreviewV9Enhancement() {
-  const guarded = window as V9Window;
-  const [filterHost, setFilterHost] = useState<HTMLElement | null>(null);
-  const [toolbarHost, setToolbarHost] = useState<HTMLElement | null>(null);
-  const [sources, setSources] = useState<string[]>(guarded.__pdpV9Sources || []);
-  const [importance, setImportance] = useState<string[]>(guarded.__pdpV9Importance || []);
-  const [urgency, setUrgency] = useState<string[]>(guarded.__pdpV9Urgency || []);
-  const [deadlines, setDeadlines] = useState<string[]>(guarded.__pdpV9DeadlineStatuses || []);
-  const [opportunities, setOpportunities] = useState<string[]>(guarded.__pdpV9OpportunityTypes || ["consulting", "epc"]);
-  const [publishedFrom, setPublishedFrom] = useState(guarded.__pdpV9PublishedFrom || "");
-  const [publishedTo, setPublishedTo] = useState(guarded.__pdpV9PublishedTo || "");
-  const [, setRevision] = useState(0);
+function browserState() {
+  return typeof window === "undefined" ? null : window as V9Window;
+}
 
-  const sync = useCallback(() => {
-    const hosts = ensureHosts();
-    setFilterHost((current) => current === hosts.filter ? current : hosts.filter);
-    setToolbarHost((current) => current === hosts.toolbar ? current : hosts.toolbar);
-    setRevision((value) => value + 1);
-  }, []);
+export function resetProcurementV9NativeFilters() {
+  if (typeof window !== "undefined") window.dispatchEvent(new Event(CLEAR_EVENT));
+}
+
+export function ProcurementV9NativeFilters({ noticeTab }: { noticeTab: boolean }) {
+  const [sources, setSources] = useState<string[]>(() => browserState()?.__pdpV9Sources || []);
+  const [importance, setImportance] = useState<string[]>(() => browserState()?.__pdpV9Importance || []);
+  const [urgency, setUrgency] = useState<string[]>(() => browserState()?.__pdpV9Urgency || []);
+  const [deadlines, setDeadlines] = useState<string[]>(() => browserState()?.__pdpV9DeadlineStatuses || []);
+  const [publishedFrom, setPublishedFrom] = useState(() => browserState()?.__pdpV9PublishedFrom || "");
+  const [publishedTo, setPublishedTo] = useState(() => browserState()?.__pdpV9PublishedTo || "");
 
   useEffect(() => {
-    let frame1 = 0;
-    let frame2 = 0;
-    const schedule = () => {
-      cancelAnimationFrame(frame1);
-      cancelAnimationFrame(frame2);
-      frame1 = requestAnimationFrame(() => {
-        frame2 = requestAnimationFrame(sync);
-      });
-    };
-    window.addEventListener(PROCUREMENT_STABLE_VIEW_STATE_EVENT, schedule);
-    window.addEventListener(PROCUREMENT_UI_SYNC_EVENT, schedule);
-    document.addEventListener("click", schedule, true);
-    schedule();
-    return () => { window.removeEventListener(PROCUREMENT_STABLE_VIEW_STATE_EVENT, schedule); window.removeEventListener(PROCUREMENT_UI_SYNC_EVENT, schedule); document.removeEventListener("click", schedule, true); cancelAnimationFrame(frame1); cancelAnimationFrame(frame2); };
-  }, [sync]);
+    publish({ __pdpV9Sources: sources, __pdpV9Importance: importance, __pdpV9Urgency: urgency, __pdpV9DeadlineStatuses: deadlines, __pdpV9PublishedFrom: publishedFrom, __pdpV9PublishedTo: publishedTo });
+  }, [sources, importance, urgency, deadlines, publishedFrom, publishedTo]);
 
   useEffect(() => {
-    if (!toolbarHost) return;
-    const frame = requestAnimationFrame(() => {
-      const slot = toolbarHost.querySelector<HTMLElement>("#pdp-procurement-v9-bulk-slot");
-      const bulkHost = document.getElementById(BULK_HOST_ID);
-      if (slot && bulkHost && bulkHost.parentElement !== slot) slot.appendChild(bulkHost);
-    });
-    return () => cancelAnimationFrame(frame);
-  }, [toolbarHost]);
-
-  useEffect(() => {
-    publish({ __pdpV9Sources: sources, __pdpV9Importance: importance, __pdpV9Urgency: urgency, __pdpV9DeadlineStatuses: deadlines, __pdpV9OpportunityTypes: opportunities, __pdpV9PublishedFrom: publishedFrom, __pdpV9PublishedTo: publishedTo });
-  }, [sources, importance, urgency, deadlines, opportunities, publishedFrom, publishedTo]);
-
-  useEffect(() => {
-    const clear = (event: Event) => {
-      const button = event.target instanceof Element ? event.target.closest("button") : null;
-      if (!button || !normalize(button.textContent).startsWith("پاک") || !currentSection()?.contains(button)) return;
+    const clear = () => {
       setSources([]);
       setImportance([]);
       setUrgency([]);
       setDeadlines([]);
       setPublishedFrom("");
       setPublishedTo("");
-      setOpportunities(["consulting", "epc"]);
     };
-    document.addEventListener("click", clear, true);
-    return () => document.removeEventListener("click", clear, true);
+    window.addEventListener(CLEAR_EVENT, clear);
+    return () => window.removeEventListener(CLEAR_EVENT, clear);
   }, []);
 
-  const state = getProcurementStableViewState();
-  const noticeTab = state.top === "tenders" || state.top === "inquiries";
-  const filters = filterHost ? createPortal(<div className="pdp-v9-filter-grid" dir="rtl">{noticeTab && <MultiSelect title="منبع" values={sources} options={sourceOptions} empty="همه منابع" onChange={setSources} />}<MultiSelect title="اهمیت" values={importance} options={importanceOptions} empty="همه سطوح" onChange={setImportance} /><MultiSelect title="فوریت" values={urgency} options={urgencyOptions} empty="همه وضعیت‌ها" onChange={setUrgency} />{noticeTab && <><MultiSelect title="وضعیت مهلت" values={deadlines} options={deadlineOptions} empty="همه وضعیت‌ها" onChange={setDeadlines} /><JalaliRange from={publishedFrom} to={publishedTo} onChange={(from, to) => { setPublishedFrom(from); setPublishedTo(to); }} /></>}</div>, filterHost) : null;
-  const toolbar = toolbarHost ? createPortal(<div className="pdp-v9-toolbar" dir="rtl"><MultiSelect title="نوع فرصت" values={opportunities} options={opportunityOptions} empty="انتخاب نوع فرصت" namesAlways onChange={setOpportunities} /><div id="pdp-procurement-v9-bulk-slot" /></div>, toolbarHost) : null;
+  return <div className="pdp-v9-filter-grid" dir="rtl">
+    {noticeTab && <MultiSelect title="منبع" values={sources} options={sourceOptions} empty="همه منابع" onChange={setSources} />}
+    <MultiSelect title="اهمیت" values={importance} options={importanceOptions} empty="همه سطوح" onChange={setImportance} />
+    <MultiSelect title="فوریت" values={urgency} options={urgencyOptions} empty="همه وضعیت‌ها" onChange={setUrgency} />
+    {noticeTab && <>
+      <MultiSelect title="وضعیت مهلت" values={deadlines} options={deadlineOptions} empty="همه وضعیت‌ها" onChange={setDeadlines} />
+      <JalaliRange from={publishedFrom} to={publishedTo} onChange={(from, to) => { setPublishedFrom(from); setPublishedTo(to); }} />
+    </>}
+  </div>;
+}
+
+export function ProcurementV9NativeToolbar() {
+  const [opportunities, setOpportunities] = useState<string[]>(() => browserState()?.__pdpV9OpportunityTypes || ["consulting", "epc"]);
+
+  useEffect(() => {
+    publish({ __pdpV9OpportunityTypes: opportunities });
+  }, [opportunities]);
+
+  useEffect(() => {
+    const clear = () => setOpportunities(["consulting", "epc"]);
+    window.addEventListener(CLEAR_EVENT, clear);
+    return () => window.removeEventListener(CLEAR_EVENT, clear);
+  }, []);
+
+  return <div className="pdp-v9-toolbar" dir="rtl">
+    <MultiSelect title="نوع فرصت" values={opportunities} options={opportunityOptions} empty="انتخاب نوع فرصت" namesAlways onChange={setOpportunities} />
+    <div id="pdp-procurement-v9-bulk-slot" />
+  </div>;
+}
+
+export default function ProcurementWebPreviewV9Enhancement() {
+  useEffect(() => {
+    let frame1 = 0;
+    let frame2 = 0;
+    const schedule = () => {
+      window.cancelAnimationFrame(frame1);
+      window.cancelAnimationFrame(frame2);
+      frame1 = window.requestAnimationFrame(() => {
+        frame2 = window.requestAnimationFrame(syncPresentation);
+      });
+    };
+    window.addEventListener(PROCUREMENT_STABLE_VIEW_STATE_EVENT, schedule);
+    window.addEventListener(PROCUREMENT_UI_SYNC_EVENT, schedule);
+    window.addEventListener(NOTICE_DATA_EVENT, schedule);
+    window.addEventListener(DIRECT_DATA_EVENT, schedule);
+    schedule();
+    return () => {
+      window.removeEventListener(PROCUREMENT_STABLE_VIEW_STATE_EVENT, schedule);
+      window.removeEventListener(PROCUREMENT_UI_SYNC_EVENT, schedule);
+      window.removeEventListener(NOTICE_DATA_EVENT, schedule);
+      window.removeEventListener(DIRECT_DATA_EVENT, schedule);
+      window.cancelAnimationFrame(frame1);
+      window.cancelAnimationFrame(frame2);
+    };
+  }, []);
 
   return <><style>{`
     .pdp-v9-native-filter{display:none!important}.pdp-v9-filter-bar{grid-template-columns:minmax(230px,1.55fr) repeat(5,minmax(108px,.72fr)) minmax(225px,1.18fr) auto!important;gap:6px!important;align-items:end!important;padding:9px!important}.pdp-v9-filter-bar>label{font-size:12px!important;line-height:1.25!important;font-weight:700!important;gap:4px!important}.pdp-v9-filter-bar>label input,.pdp-v9-filter-bar>label select{min-height:34px!important;padding:5px 7px!important;font-size:11.5px!important;line-height:1.2!important;font-weight:400!important}.pdp-v9-filter-bar .pdp-v2-clear-group button{min-height:34px!important;padding:4px 9px!important;font-size:12px!important;font-weight:700!important}.pdp-v9-filter-bar .pdp-v2-row-count{display:none!important}
-    #${FILTER_HOST_ID}{display:contents}.pdp-v9-filter-grid{display:contents}.pdp-v9-field{position:relative;display:grid;gap:4px;min-width:0;font-size:12px;line-height:1.25;font-weight:700;color:#17202a}.pdp-v9-select{position:relative;min-width:0;font-weight:400}.pdp-v9-select>summary{display:flex;align-items:center;justify-content:space-between;min-height:34px;padding:5px 8px;border:1px solid rgba(15,23,42,.16);border-radius:8px;background:#fff;color:#17202a;font-size:11.5px;cursor:pointer;list-style:none;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.pdp-v9-select>summary::-webkit-details-marker{display:none}.pdp-v9-select>summary::before{content:"⌄";color:#64748b;font-size:13px;margin-left:8px}.pdp-v9-menu{position:absolute;z-index:60;top:calc(100% + 5px);right:0;min-width:190px;padding:8px;border:1px solid #cbd5e1;border-radius:10px;background:#fff;box-shadow:0 14px 32px rgba(15,23,42,.16)}.pdp-v9-menu label{display:flex;align-items:center;gap:7px;min-height:29px;padding:4px 6px;border-radius:7px;color:#334155;font-size:11px;font-weight:400;white-space:nowrap}.pdp-v9-menu label:hover{background:#f1f5f9}.pdp-v9-menu input{width:15px;height:15px;margin:0;accent-color:#145563}
-    .pdp-v9-workflow-row{display:flex!important;align-items:flex-end!important;justify-content:space-between!important;gap:14px!important;width:100%!important;margin-bottom:14px!important;overflow:visible!important}.pdp-v9-workflow-row #${TOOLBAR_HOST_ID}{margin-right:auto;flex:0 0 auto}.pdp-v9-toolbar{display:flex;align-items:flex-end;justify-content:flex-end;gap:6px;direction:rtl;overflow:visible}.pdp-v9-toolbar .pdp-v9-field{min-width:165px}.pdp-v9-toolbar .pdp-v9-select>summary{min-height:34px}.pdp-v9-toolbar #pdp-procurement-v9-bulk-slot{display:flex;align-items:flex-end}
+    .pdp-v9-filter-grid{display:contents}.pdp-v9-field{position:relative;display:grid;gap:4px;min-width:0;font-size:12px;line-height:1.25;font-weight:700;color:#17202a}.pdp-v9-select{position:relative;min-width:0;font-weight:400}.pdp-v9-select>summary{display:flex;align-items:center;justify-content:space-between;min-height:34px;padding:5px 8px;border:1px solid rgba(15,23,42,.16);border-radius:8px;background:#fff;color:#17202a;font-size:11.5px;cursor:pointer;list-style:none;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.pdp-v9-select>summary::-webkit-details-marker{display:none}.pdp-v9-select>summary::before{content:"⌄";color:#64748b;font-size:13px;margin-left:8px}.pdp-v9-menu{position:absolute;z-index:60;top:calc(100% + 5px);right:0;min-width:190px;padding:8px;border:1px solid #cbd5e1;border-radius:10px;background:#fff;box-shadow:0 14px 32px rgba(15,23,42,.16)}.pdp-v9-menu label{display:flex;align-items:center;gap:7px;min-height:29px;padding:4px 6px;border-radius:7px;color:#334155;font-size:11px;font-weight:400;white-space:nowrap}.pdp-v9-menu label:hover{background:#f1f5f9}.pdp-v9-menu input{width:15px;height:15px;margin:0;accent-color:#145563}
+    .pdp-v9-workflow-row{display:flex!important;align-items:flex-end!important;justify-content:space-between!important;gap:14px!important;width:100%!important;margin-bottom:14px!important;overflow:visible!important}.pdp-v9-workflow-row>.pdp-v9-toolbar{margin-right:auto;flex:0 0 auto}.pdp-v9-toolbar{display:flex;align-items:flex-end;justify-content:flex-end;gap:6px;direction:rtl;overflow:visible}.pdp-v9-toolbar .pdp-v9-field{min-width:165px}.pdp-v9-toolbar .pdp-v9-select>summary{min-height:34px}.pdp-v9-toolbar #pdp-procurement-v9-bulk-slot{display:flex;align-items:flex-end}
     .pdp-v9-calendar-panel{position:absolute;z-index:70;top:calc(100% + 5px);right:0;left:auto;width:304px;padding:11px;border:1px solid #cbd5e1;border-radius:12px;background:#fff;box-shadow:0 16px 34px rgba(15,23,42,.18)}.pdp-v9-calendar-panel header{display:flex;align-items:center;justify-content:space-between;margin-bottom:9px}.pdp-v9-calendar-panel header button,.pdp-v9-calendar-panel footer button{border:1px solid #dbe3ec;border-radius:8px;background:#fff;padding:4px 9px;font:inherit;cursor:pointer}.pdp-v9-week,.pdp-v9-days{display:grid;grid-template-columns:repeat(7,1fr);gap:3px}.pdp-v9-week span{text-align:center;color:#64748b;font-size:10px}.pdp-v9-days i{min-height:31px}.pdp-v9-days button{min-height:31px;border:0;border-radius:7px;background:#fff;font:inherit;font-size:10.5px;cursor:pointer}.pdp-v9-days button:hover,.pdp-v9-days button.ranged{background:#e3eef0}.pdp-v9-days button.selected{background:#145563;color:#fff;font-weight:700}.pdp-v9-calendar-panel footer{margin-top:8px;text-align:left}
     .pdp-v2-selected-count,.pdp-ux-selected-count{display:none!important}.pdp-v2-decision>dl,.pdp-ux-record>div:last-child>dl{display:none!important}.pdp-v2-meta-row>*{box-sizing:border-box;min-height:22px!important;padding:2px 8px!important;border-radius:999px!important;font-size:10.5px!important;line-height:1.45!important;font-weight:700!important}.pdp-v2-meta-row button{font-size:10.5px!important}.pdp-v9-neutral{border-color:#cbd5e1!important;background:#f8fafc!important;color:#334155!important}.pdp-v9-danger{border-color:#fecdd3!important;background:#fff1f2!important;color:#be123c!important}.pdp-v9-high{border-color:#fed7aa!important;background:#fff7ed!important;color:#c2410c!important}.pdp-v9-medium{border-color:#eadb94!important;background:#fff9dd!important;color:#776210!important}.pdp-v9-safe{border-color:#99f6e4!important;background:#f0fdfa!important;color:#0f766e!important}
     .pdp-v9-responsible-hidden{display:none!important}.pdp-v9-direct-status>*{box-sizing:border-box;min-height:22px!important;padding:2px 8px!important;border-radius:999px!important;font-size:10.5px!important;line-height:1.45!important;font-weight:700!important}
     @media(max-width:1450px){.pdp-v9-filter-bar{grid-template-columns:minmax(220px,1.4fr) repeat(6,minmax(88px,.7fr)) minmax(130px,.75fr)!important}}
-    @media(max-width:980px){.pdp-v9-workflow-row{flex-wrap:wrap!important}.pdp-v9-workflow-row #${TOOLBAR_HOST_ID}{margin-right:0;width:100%}.pdp-v9-filter-bar{grid-template-columns:repeat(2,minmax(0,1fr))!important}.pdp-v9-filter-grid{display:contents}.pdp-v9-calendar-panel{right:0;left:auto;max-width:calc(100vw - 32px)}}
-  `}</style>{filters}{toolbar}</>;
+    @media(max-width:980px){.pdp-v9-workflow-row{flex-wrap:wrap!important}.pdp-v9-workflow-row>.pdp-v9-toolbar{margin-right:0;width:100%}.pdp-v9-filter-bar{grid-template-columns:repeat(2,minmax(0,1fr))!important}.pdp-v9-filter-grid{display:contents}.pdp-v9-calendar-panel{right:0;left:auto;max-width:calc(100vw - 32px)}}
+  `}</style></>;
 }
