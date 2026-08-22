@@ -23,6 +23,14 @@ from .views_recommended import latest_effective_recommended_notice_ids
 SOURCE_PRIORITY = ("setad", "hezareh", "parsnamad")
 
 
+def _multi_query_values(request, key: str) -> list[str]:
+    """Accept repeated and comma-separated values while preserving old clients."""
+    values = []
+    for raw in request.query_params.getlist(key):
+        values.extend(part.strip() for part in str(raw).split(","))
+    return list(dict.fromkeys(value for value in values if value))
+
+
 def _source_rank(source) -> tuple[int, str]:
     token = f"{source.key} {source.name}".casefold()
     if "setad" in token or "ستاد" in token:
@@ -111,30 +119,36 @@ def _apply_search(queryset, value: str):
 
 def _apply_deadline_filters(queryset, request):
     now = timezone.now()
-    urgency = str(request.query_params.get("urgency", "")).strip()
     in_24 = now + timedelta(hours=24)
     in_72 = now + timedelta(hours=72)
     in_168 = now + timedelta(hours=168)
-    if urgency == "critical":
-        queryset = queryset.filter(submission_deadline__lt=in_24, submission_deadline__isnull=False)
-    elif urgency == "high":
-        queryset = queryset.filter(submission_deadline__gte=in_24, submission_deadline__lte=in_72)
-    elif urgency == "medium":
-        queryset = queryset.filter(submission_deadline__gt=in_72, submission_deadline__lte=in_168)
-    elif urgency == "normal":
-        queryset = queryset.filter(submission_deadline__gt=in_168)
-    elif urgency == "unknown":
-        queryset = queryset.filter(submission_deadline__isnull=True)
+    urgency_query = Q()
+    for urgency in _multi_query_values(request, "urgency"):
+        if urgency == "critical":
+            urgency_query |= Q(submission_deadline__lt=in_24, submission_deadline__isnull=False)
+        elif urgency == "high":
+            urgency_query |= Q(submission_deadline__gte=in_24, submission_deadline__lte=in_72)
+        elif urgency == "medium":
+            urgency_query |= Q(submission_deadline__gt=in_72, submission_deadline__lte=in_168)
+        elif urgency == "normal":
+            urgency_query |= Q(submission_deadline__gt=in_168)
+        elif urgency == "unknown":
+            urgency_query |= Q(submission_deadline__isnull=True)
+    if urgency_query:
+        queryset = queryset.filter(urgency_query)
 
-    deadline_status = str(request.query_params.get("deadline_status", "")).strip()
-    if deadline_status == "expired":
-        queryset = queryset.filter(submission_deadline__lt=now)
-    elif deadline_status == "expiring":
-        queryset = queryset.filter(submission_deadline__gte=now, submission_deadline__lte=in_72)
-    elif deadline_status == "available":
-        queryset = queryset.filter(submission_deadline__gt=in_72)
-    elif deadline_status == "unknown":
-        queryset = queryset.filter(submission_deadline__isnull=True)
+    deadline_query = Q()
+    for deadline_status in _multi_query_values(request, "deadline_status"):
+        if deadline_status == "expired":
+            deadline_query |= Q(submission_deadline__lt=now)
+        elif deadline_status == "expiring":
+            deadline_query |= Q(submission_deadline__gte=now, submission_deadline__lte=in_72)
+        elif deadline_status == "available":
+            deadline_query |= Q(submission_deadline__gt=in_72)
+        elif deadline_status == "unknown":
+            deadline_query |= Q(submission_deadline__isnull=True)
+    if deadline_query:
+        queryset = queryset.filter(deadline_query)
     return queryset
 
 
@@ -172,15 +186,29 @@ def _compact_notice_queryset(request, *, force_recommended: bool = False):
         start_date = timezone.localdate() - timedelta(days=2)
         queryset = queryset.filter(published_date__gte=start_date)
 
-    source_name = str(request.query_params.get("source_name", "")).strip()
-    if source_name:
-        queryset = queryset.filter(source_links__source_notice__connector__source__name=source_name)
+    source_names = _multi_query_values(request, "source_name")
+    if source_names:
+        source_query = Q()
+        for source_name in source_names:
+            token = source_name.casefold()
+            if "ستاد" in token or "setad" in token:
+                source_query |= Q(source_links__source_notice__connector__source__name__icontains="ستاد")
+                source_query |= Q(source_links__source_notice__connector__source__key__icontains="setad")
+            elif "هزاره" in token or "hezareh" in token:
+                source_query |= Q(source_links__source_notice__connector__source__name__icontains="هزاره")
+                source_query |= Q(source_links__source_notice__connector__source__key__icontains="hezareh")
+            elif "پارس" in token or "parsnamad" in token:
+                source_query |= Q(source_links__source_notice__connector__source__name__icontains="پارس")
+                source_query |= Q(source_links__source_notice__connector__source__key__icontains="parsnamad")
+            else:
+                source_query |= Q(source_links__source_notice__connector__source__name=source_name)
+        queryset = queryset.filter(source_query)
     province = str(request.query_params.get("province", "")).strip()
     if province:
         queryset = queryset.filter(province=province)
-    importance = str(request.query_params.get("importance", "")).strip()
+    importance = _multi_query_values(request, "importance")
     if importance:
-        queryset = queryset.filter(importance=importance)
+        queryset = queryset.filter(importance__in=importance)
 
     published_on = str(request.query_params.get("published_on", "")).strip()
     if published_on:
@@ -188,6 +216,15 @@ def _compact_notice_queryset(request, *, force_recommended: bool = False):
             queryset = queryset.filter(published_date=date.fromisoformat(published_on))
         except ValueError:
             queryset = queryset.none()
+    published_from = str(request.query_params.get("published_from", "")).strip()
+    published_to = str(request.query_params.get("published_to", "")).strip()
+    try:
+        if published_from:
+            queryset = queryset.filter(published_date__gte=date.fromisoformat(published_from))
+        if published_to:
+            queryset = queryset.filter(published_date__lte=date.fromisoformat(published_to))
+    except ValueError:
+        queryset = queryset.none()
 
     queryset = _apply_search(queryset, str(request.query_params.get("search", "")))
     queryset = _apply_deadline_filters(queryset, request)

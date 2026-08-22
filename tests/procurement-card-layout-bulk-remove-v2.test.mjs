@@ -3,6 +3,10 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 
 const component = readFileSync("app/procurement/ProcurementCardLayoutBulkRemoveV2.tsx", "utf8");
+const baseWorkspace = readFileSync("app/procurement/ProcurementWorkspaceV13.tsx", "utf8");
+const compact = readFileSync("app/procurement/ProcurementCompactWorkspaceStableEnhancement.tsx", "utf8");
+const listUx = readFileSync("app/procurement/ProcurementListUxRefinement.tsx", "utf8");
+const actions = readFileSync("app/procurement/ProcurementWorkflowActionsStableEnhancement.tsx", "utf8");
 const workspace = readFileSync("app/procurement/ProcurementWorkspaceV23.tsx", "utf8");
 const urls = readFileSync("backend/procurement/urls.py", "utf8");
 const backend = readFileSync("backend/procurement/views_bulk_workflow.py", "utf8");
@@ -28,9 +32,27 @@ test("layout contract keeps compact metadata in three rows and clamps title by w
   assert.match(component, /pdp-v2-info-row/);
   assert.match(component, /text-overflow:ellipsis/);
   assert.match(component, /white-space:nowrap/);
-  assert.match(component, /تعداد ردیف:/);
+  assert.doesNotMatch(component, /تعداد ردیف:/);
+  assert.doesNotMatch(component, /موردی انتخاب نشده/);
   assert.match(component, /pdp-v2-filter-bar/);
   assert.match(component, /pdp-v2-stable-actions/);
+});
+
+test("notice card refinements bind by stable UUID before mutable title and employer text", () => {
+  assert.match(baseWorkspace, /data-pdp-notice-id=\{item\.id\}/);
+  assert.match(baseWorkspace, /data-pdp-direct-id=\{item\.id\}/);
+  for (const source of [component, compact, listUx]) {
+    assert.match(source, /dataset\.pdpNoticeId\s*===\s*(?:item\.)?id/);
+  }
+  assert.match(actions, /noticeById\.get\(article\.dataset\.pdpNoticeId\)/);
+  assert.match(actions, /directById\.get\(article\.dataset\.pdpDirectId\)/);
+});
+
+test("unknown employer presentation cannot suppress stable workflow actions", () => {
+  assert.match(actions, /function normalizeEmployer/);
+  assert.match(actions, /normalized\s*===\s*"کارفرما نامشخص"\s*\?\s*""/);
+  assert.match(actions, /PROCUREMENT_UI_SYNC_EVENT/);
+  assert.match(actions, /window\.addEventListener\(PROCUREMENT_UI_SYNC_EVENT, schedule\)/);
 });
 
 test("backend removal is bounded and non-destructive for view-only workflows", () => {

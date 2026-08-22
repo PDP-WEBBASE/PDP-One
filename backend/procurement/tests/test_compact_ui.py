@@ -44,7 +44,7 @@ class CompactProcurementUiTests(APITestCase):
             item_count=10,
         )
 
-    def make_notice(self, title, notice_type=ProcurementNotice.NoticeType.INQUIRY, *, deadline=None, published_date=None):
+    def make_notice(self, title, notice_type=ProcurementNotice.NoticeType.INQUIRY, *, deadline=None, published_date=None, importance=ProcurementNotice.Importance.MEDIUM):
         return ProcurementNotice.objects.create(
             resolved_notice_type=notice_type,
             title=title,
@@ -52,6 +52,7 @@ class CompactProcurementUiTests(APITestCase):
             province="اصفهان",
             published_date=published_date or timezone.localdate(),
             submission_deadline=deadline or self.now + timedelta(days=5),
+            importance=importance,
             processing_status=ProcurementNotice.ProcessingStatus.ANALYZED,
             first_seen_at=self.now,
             last_seen_at=self.now,
@@ -153,6 +154,37 @@ class CompactProcurementUiTests(APITestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.data["count"], 1)
         self.assertEqual(response.data["results"][0]["title"], "منقضی")
+
+    def test_v9_accepts_multi_value_filters_and_publication_range(self):
+        first = self.make_notice(
+            "اول بازه",
+            deadline=self.now + timedelta(hours=12),
+            published_date=timezone.localdate() - timedelta(days=2),
+            importance=ProcurementNotice.Importance.HIGH,
+        )
+        second = self.make_notice(
+            "آخر بازه",
+            deadline=self.now + timedelta(days=10),
+            published_date=timezone.localdate(),
+            importance=ProcurementNotice.Importance.LOW,
+        )
+        self.link_source(first, key="setad", name="سامانه ستاد ایران", record_id="v9-s")
+        self.link_source(second, key="hezareh", name="هزاره", record_id="v9-h")
+
+        response = self.client.get(
+            "/api/v1/procurement/ui/notices/",
+            [
+                ("notice_type", "inquiry"), ("workflow", "recent"),
+                ("source_name", "ستاد ایران"), ("source_name", "هزاره"),
+                ("importance", "high"), ("importance", "low"),
+                ("urgency", "critical"), ("urgency", "normal"),
+                ("published_from", str(timezone.localdate() - timedelta(days=2))),
+                ("published_to", str(timezone.localdate())),
+            ],
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["count"], 2)
+        self.assertEqual({row["title"] for row in response.data["results"]}, {"اول بازه", "آخر بازه"})
 
     def test_bulk_dismiss_rejects_only_requested_notice_type_and_preserves_notices(self):
         tender = self.make_notice("پیشنهاد مناقصه", ProcurementNotice.NoticeType.TENDER)

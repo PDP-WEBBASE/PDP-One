@@ -78,6 +78,29 @@ class DirectOpportunityApiTests(TestCase):
         opportunity.refresh_from_db()
         self.assertEqual(opportunity.stage, DirectOpportunity.Stage.SELECTED)
 
+    def test_list_accepts_multiple_importance_and_urgency_values(self):
+        self.client.force_authenticate(self.expert)
+        now = timezone.now()
+        DirectOpportunity.objects.create(
+            title="فوری", importance=DirectOpportunity.Importance.HIGH,
+            next_action_due=now + timedelta(hours=12), responsible=self.expert,
+        )
+        DirectOpportunity.objects.create(
+            title="عادی", importance=DirectOpportunity.Importance.LOW,
+            next_action_due=now + timedelta(days=10), responsible=self.expert,
+        )
+        DirectOpportunity.objects.create(
+            title="حذف‌شونده", importance=DirectOpportunity.Importance.MEDIUM,
+            next_action_due=now + timedelta(days=5), responsible=self.expert,
+        )
+        response = self.client.get(
+            "/api/v1/procurement/direct-opportunities/",
+            [("importance", "high"), ("importance", "low"), ("urgency", "critical"), ("urgency", "normal")],
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["count"], 2)
+        self.assertEqual({row["title"] for row in response.data["results"]}, {"فوری", "عادی"})
+
     def test_follow_up_updates_next_action_and_stage(self):
         opportunity = self.create_quick_opportunity()
         next_due = timezone.now() + timedelta(days=3)
