@@ -188,6 +188,10 @@ function createSourceLink(source: SourceBadge, index: number) {
 }
 
 function findArticleForItem(section: HTMLElement, item: CompactNotice) {
+  const identified = Array.from(section.querySelectorAll<HTMLElement>("article[data-pdp-notice-id]")).find(
+    (article) => article.dataset.pdpNoticeId === item.id,
+  );
+  if (identified) return identified;
   const title = normalize(item.title);
   return Array.from(section.querySelectorAll<HTMLElement>("article")).find((article) => {
     const heading = normalize(article.querySelector("h3")?.textContent);
