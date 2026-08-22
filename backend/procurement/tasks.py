@@ -731,7 +731,9 @@ def _execute_connector(
                 summary["known_boundary_pages"] = consecutive_known_pages
             else:
                 consecutive_known_pages = 0
-            if consecutive_known_pages >= 2:
+            if consecutive_known_pages >= 2 and (
+                connector.key != "hezareh_inquiries" or page_number >= 3
+            ):
                 summary["completeness"] = "complete"
                 summary["stop_reason"] = "known_data_boundary_reached"
                 break
