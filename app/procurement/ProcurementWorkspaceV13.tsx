@@ -3,6 +3,11 @@
 import Link from "next/link";
 import { CSSProperties, FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import ConnectorHealthBanner from "./ConnectorHealthBanner";
+import {
+  ProcurementV9NativeFilters,
+  ProcurementV9NativeToolbar,
+  resetProcurementV9NativeFilters,
+} from "./ProcurementWebPreviewV9Enhancement";
 import { emitProcurementUiSync, PROCUREMENT_UI_SYNC_EVENT, ProcurementUiSyncDetail } from "./procurementUiSync";
 import styles from "./workspace-v4.module.css";
 
@@ -574,6 +579,11 @@ export default function ProcurementWorkspaceV13() {
     setDirectTypeFilter("");
   }
 
+  function clearVisibleFilters() {
+    resetFilters();
+    resetProcurementV9NativeFilters();
+  }
+
   function notify(text: string) {
     setMessage(text);
     window.setTimeout(() => setMessage(""), 5000);
@@ -827,14 +837,15 @@ export default function ProcurementWorkspaceV13() {
       </section>}
 
       {(tab === "tenders" || tab === "inquiries") && <section>
-        <div className={styles.views}>{noticeViews.map(([id,label]) => <button key={id} className={noticeView === id ? styles.active : ""} onClick={() => setNoticeView(id)}>{label}</button>)}</div>
-        <div style={filterStyle}>
+        <div className={`${styles.views} pdp-v9-workflow-row`}>{noticeViews.map(([id,label]) => <button key={id} className={noticeView === id ? styles.active : ""} onClick={() => setNoticeView(id)}>{label}</button>)}<ProcurementV9NativeToolbar /></div>
+        <div className="pdp-v9-filter-bar" style={filterStyle}>
           <label>جست‌وجو<input style={inputStyle} value={search} onChange={(event) => setSearch(event.target.value)} placeholder="عنوان، کارفرما، استان یا کد" /></label>
-          <label>منبع<select style={inputStyle} value={sourceFilter} onChange={(event) => setSourceFilter(event.target.value)}><option value="">همه منابع</option>{[...new Set(notices.map((item) => item.source_name).filter(Boolean))].map((source) => <option key={source}>{source}</option>)}</select></label>
+          <label className="pdp-v9-native-filter">منبع<select style={inputStyle} value={sourceFilter} onChange={(event) => setSourceFilter(event.target.value)}><option value="">همه منابع</option>{[...new Set(notices.map((item) => item.source_name).filter(Boolean))].map((source) => <option key={source}>{source}</option>)}</select></label>
           <label>استان<select style={inputStyle} value={provinceFilter} onChange={(event) => setProvinceFilter(event.target.value)}><option value="">همه استان‌ها</option>{[...new Set(notices.map((item) => item.province).filter(Boolean))].map((province) => <option key={province}>{province}</option>)}</select></label>
-          <label>اهمیت<select style={inputStyle} value={importanceFilter} onChange={(event) => setImportanceFilter(event.target.value)}><option value="">همه سطوح</option>{Object.entries(importanceLabels).map(([value,label]) => <option key={value} value={value}>{label}</option>)}</select></label>
-          <label>فوریت<select style={inputStyle} value={urgencyFilter} onChange={(event) => setUrgencyFilter(event.target.value)}>{urgencyOptions}</select></label>
-          <div style={{display:"flex",alignItems:"end",gap:7}}><button className={styles.secondaryButton} onClick={resetFilters}>پاک‌کردن</button><b>{fa.format(filteredNotices.length)}</b></div>
+          <label className="pdp-v9-native-filter">اهمیت<select style={inputStyle} value={importanceFilter} onChange={(event) => setImportanceFilter(event.target.value)}><option value="">همه سطوح</option>{Object.entries(importanceLabels).map(([value,label]) => <option key={value} value={value}>{label}</option>)}</select></label>
+          <label className="pdp-v9-native-filter">فوریت<select style={inputStyle} value={urgencyFilter} onChange={(event) => setUrgencyFilter(event.target.value)}>{urgencyOptions}</select></label>
+          <ProcurementV9NativeFilters noticeTab />
+          <div className="pdp-v2-clear-group" style={{display:"flex",alignItems:"end",gap:7}}><button className={styles.secondaryButton} onClick={clearVisibleFilters}>پاک‌کردن</button><b className="pdp-v2-row-count">{fa.format(filteredNotices.length)}</b></div>
         </div>
         <div className={styles.recordList}>{filteredNotices.length ? filteredNotices.map((item,index) => { const u=urgency(item.submission_deadline); const selecting=selectingNoticeIds.has(item.id); return <article className={styles.record} style={compactRecordStyle} data-pdp-notice-id={item.id} key={item.id}>
           <div>
@@ -856,16 +867,17 @@ export default function ProcurementWorkspaceV13() {
 
       {tab === "direct" && <section>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:10,flexWrap:"wrap",marginBottom:10}}>
-          <div className={styles.views} style={{marginBottom:0}}>{directViews.map(([id,label]) => <button key={id} className={directView === id ? styles.active : ""} onClick={() => setDirectView(id)}>{label}</button>)}</div>
+          <div className={`${styles.views} pdp-v9-workflow-row`} style={{marginBottom:0}}>{directViews.map(([id,label]) => <button key={id} className={directView === id ? styles.active : ""} onClick={() => setDirectView(id)}>{label}</button>)}<ProcurementV9NativeToolbar /></div>
           <button className={styles.primaryButton} onClick={() => setDirectModal(true)}>ثبت ارجاع مستقیم جدید</button>
         </div>
-        <div style={filterStyle}>
+        <div className="pdp-v9-filter-bar" style={filterStyle}>
           <label>جست‌وجو<input style={inputStyle} value={search} onChange={(event) => setSearch(event.target.value)} placeholder="عنوان، کارفرما، حوزه یا کد" /></label>
           <label>نوع ارجاع<select style={inputStyle} value={directTypeFilter} onChange={(event) => setDirectTypeFilter(event.target.value)}><option value="">همه انواع</option>{[...new Map(directReferrals.map((item) => [item.opportunity_type,item.opportunity_type_label])).entries()].map(([value,label]) => <option key={value} value={value}>{label}</option>)}</select></label>
           <label>استان<select style={inputStyle} value={provinceFilter} onChange={(event) => setProvinceFilter(event.target.value)}><option value="">همه استان‌ها</option>{[...new Set(directReferrals.map((item) => item.province).filter(Boolean))].map((province) => <option key={province}>{province}</option>)}</select></label>
-          <label>اهمیت<select style={inputStyle} value={importanceFilter} onChange={(event) => setImportanceFilter(event.target.value)}><option value="">همه سطوح</option>{Object.entries(importanceLabels).map(([value,label]) => <option key={value} value={value}>{label}</option>)}</select></label>
-          <label>فوریت<select style={inputStyle} value={urgencyFilter} onChange={(event) => setUrgencyFilter(event.target.value)}>{urgencyOptions}</select></label>
-          <b style={{alignSelf:"end"}}>{fa.format(filteredDirect.length)} رکورد</b>
+          <label className="pdp-v9-native-filter">اهمیت<select style={inputStyle} value={importanceFilter} onChange={(event) => setImportanceFilter(event.target.value)}><option value="">همه سطوح</option>{Object.entries(importanceLabels).map(([value,label]) => <option key={value} value={value}>{label}</option>)}</select></label>
+          <label className="pdp-v9-native-filter">فوریت<select style={inputStyle} value={urgencyFilter} onChange={(event) => setUrgencyFilter(event.target.value)}>{urgencyOptions}</select></label>
+          <ProcurementV9NativeFilters noticeTab={false} />
+          <b className="pdp-v2-row-count" style={{alignSelf:"end"}}>{fa.format(filteredDirect.length)} رکورد</b>
         </div>
         <div className={styles.recordList}>{filteredDirect.length ? filteredDirect.map((item,index) => { const u=urgency(item.next_action_due); return <article className={styles.record} style={compactRecordStyle} data-pdp-direct-id={item.id} key={item.id}>
           <div><div className={styles.recordTop}><small><b>ردیف {fa.format(index+1)}</b>{item.reference_code && directView !== "all" && directView !== "recommended" && <> · <span className={styles.codeBadge}>{item.reference_code}</span></>} · {item.opportunity_type_label}</small><div style={{display:"flex",gap:5,alignItems:"center",marginInlineStart:"auto",flexWrap:"wrap"}}><span style={{...importanceBadgeBase,...importanceStyles[item.importance]}}>اهمیت {item.importance_label || importanceLabels[item.importance]}</span><span className={`${styles.urgency} ${styles[u.tone]}`}>{u.label}</span><button className={styles.secondaryButton} style={compactViewStyle} onClick={() => setDetail({kind:"direct",item})}>مشاهده</button></div></div><h3 style={{margin:"4px 0 2px",fontSize:17}}>{item.title}</h3><p>{item.employer_name || "کارفرما نامشخص"}</p><div className={styles.facts} style={{marginTop:5,gap:5}}>{item.domain && <span>{item.domain}</span>}{item.province && <span>{item.province}</span>}{item.probability_percent !== null && <span>احتمال تبدیل: {fa.format(item.probability_percent)}٪</span>}</div></div>
