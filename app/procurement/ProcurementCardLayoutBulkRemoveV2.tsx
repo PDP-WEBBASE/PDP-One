@@ -63,6 +63,10 @@ function currentSection(state: ProcurementStableViewState) {
 }
 
 function findArticle(section: HTMLElement, item: NoticeRow) {
+  const identified = Array.from(section.querySelectorAll<HTMLElement>("article[data-pdp-notice-id]")).find(
+    (article) => article.dataset.pdpNoticeId === item.id,
+  );
+  if (identified) return identified;
   const title = normalize(item.title);
   const employer = normalize(item.employer_name);
   return Array.from(section.querySelectorAll<HTMLElement>("article")).find((article) => {

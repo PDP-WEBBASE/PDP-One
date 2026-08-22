@@ -1,7 +1,7 @@
 "use client";
 
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { emitProcurementUiSync } from "./procurementUiSync";
+import { emitProcurementUiSync, PROCUREMENT_UI_SYNC_EVENT } from "./procurementUiSync";
 import {
   getProcurementStableViewState,
   PROCUREMENT_STABLE_VIEW_STATE_EVENT,
@@ -95,8 +95,13 @@ function normalize(value: string | null | undefined) {
   return String(value || "").replace(/\s+/g, " ").trim();
 }
 
+function normalizeEmployer(value: string | null | undefined) {
+  const normalized = normalize(value);
+  return normalized === "کارفرما نامشخص" ? "" : normalized;
+}
+
 function rowKey(title: string, employer: string) {
-  return `${normalize(title)}\u0000${normalize(employer)}`;
+  return `${normalize(title)}\u0000${normalizeEmployer(employer)}`;
 }
 
 function currentSection(state: ProcurementStableViewState) {
@@ -227,7 +232,9 @@ export default function ProcurementWorkflowActionsStableEnhancement() {
   }, [loadMetadata]);
 
   const noticeByRow = useMemo(() => new Map(noticeRows.map((row) => [rowKey(row.title, row.employer_name), row])), [noticeRows]);
+  const noticeById = useMemo(() => new Map(noticeRows.map((row) => [row.id, row])), [noticeRows]);
   const directByRow = useMemo(() => new Map(directRows.map((row) => [rowKey(row.title, row.employer_name), row])), [directRows]);
+  const directById = useMemo(() => new Map(directRows.map((row) => [row.id, row])), [directRows]);
 
   const removeCase = useCallback(async (meta: CaseMeta, noticeId: string) => {
     if (meta.submission_document_count > 0) return;
@@ -289,10 +296,11 @@ export default function ProcurementWorkflowActionsStableEnhancement() {
         const key = rowKey(title, employer);
         const host = document.createElement("div");
         host.setAttribute(ACTION_ATTRIBUTE, "1");
+        host.classList.add("pdp-v2-stable-actions");
         host.style.cssText = "display:grid;gap:4px;margin-top:4px";
 
         if (state.top === "tenders" || state.top === "inquiries") {
-          const item = noticeByRow.get(key);
+          const item = (article.dataset.pdpNoticeId && noticeById.get(article.dataset.pdpNoticeId)) || noticeByRow.get(key);
           if (!item) continue;
           if (state.workflow === "recommended") {
             const dismiss = actionButton("حذف از پیشنهادی", "danger");
@@ -315,7 +323,7 @@ export default function ProcurementWorkflowActionsStableEnhancement() {
             host.appendChild(result);
           }
         } else if (state.top === "direct") {
-          const item = directByRow.get(key);
+          const item = (article.dataset.pdpDirectId && directById.get(article.dataset.pdpDirectId)) || directByRow.get(key);
           if (!item) continue;
           const documentCount = directDocuments[item.id] || 0;
           if (state.workflow === "recent") {
@@ -339,13 +347,22 @@ export default function ProcurementWorkflowActionsStableEnhancement() {
         if (host.childElementCount) decision.appendChild(host);
       }
     };
-    frame1 = window.requestAnimationFrame(() => { frame2 = window.requestAnimationFrame(sync); });
+    const schedule = () => {
+      window.cancelAnimationFrame(frame1);
+      window.cancelAnimationFrame(frame2);
+      frame1 = window.requestAnimationFrame(() => { frame2 = window.requestAnimationFrame(sync); });
+    };
+    window.addEventListener(PROCUREMENT_UI_SYNC_EVENT, schedule);
+    window.addEventListener(PROCUREMENT_STABLE_VIEW_STATE_EVENT, schedule);
+    schedule();
     return () => {
+      window.removeEventListener(PROCUREMENT_UI_SYNC_EVENT, schedule);
+      window.removeEventListener(PROCUREMENT_STABLE_VIEW_STATE_EVENT, schedule);
       window.cancelAnimationFrame(frame1);
       window.cancelAnimationFrame(frame2);
       document.querySelectorAll(`[${ACTION_ATTRIBUTE}]`).forEach((node) => node.remove());
     };
-  }, [caseMeta, directByRow, directDocuments, dismissRecommendation, noticeByRow, removeCase, updateDirectStage]);
+  }, [caseMeta, directById, directByRow, directDocuments, dismissRecommendation, noticeById, noticeByRow, removeCase, updateDirectStage]);
 
   async function submitUpload(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
