@@ -1,6 +1,6 @@
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Awaitable, Callable
 
 
 @dataclass
@@ -10,23 +10,48 @@ class RouteProbeResult:
     detail: str = ""
 
 
-async def probe_mcp_route_chain() -> RouteProbeResult:
+async def _run_check(
+    adapter: Callable[[], Awaitable[str]] | None,
+    fallback: str,
+) -> str:
+    if adapter is None:
+        return fallback
+    return await adapter()
+
+
+async def probe_mcp_route_chain(
+    *,
+    public_route_check: Callable[[], Awaitable[str]] | None = None,
+    token_route_check: Callable[[], Awaitable[str]] | None = None,
+    nginx_check: Callable[[], Awaitable[str]] | None = None,
+    container_check: Callable[[], Awaitable[str]] | None = None,
+    handshake_check: Callable[[], Awaitable[str]] | None = None,
+) -> RouteProbeResult:
     """Non-destructive MCP route diagnostics.
 
-    This module intentionally does not restart services, rotate credentials,
-    create sessions, or mutate runtime state. It is a diagnostics boundary
-    used before any repair decision.
+    Runtime adapters are injected by the execution environment. This module
+    does not restart services, rotate credentials, create sessions, or mutate
+    runtime state.
     """
+    checks = {
+        "public_route": await _run_check(public_route_check, "unknown"),
+        "token_route": await _run_check(token_route_check, "unknown"),
+        "nginx_endpoint": await _run_check(nginx_check, "unknown"),
+        "mcp_container": await _run_check(container_check, "unknown"),
+        "session_handshake": await _run_check(handshake_check, "not_attempted"),
+    }
+
+    if "failed" in checks.values():
+        status = "failed"
+    elif all(value == "healthy" for value in checks.values()):
+        status = "healthy"
+    else:
+        status = "partial"
+
     return RouteProbeResult(
-        status="not_configured",
-        checks={
-            "public_route": "unknown",
-            "token_route": "unknown",
-            "nginx_endpoint": "unknown",
-            "mcp_container": "unknown",
-            "session_handshake": "not_attempted",
-        },
-        detail="Probe adapters require runtime-specific wiring.",
+        status=status,
+        checks=checks,
+        detail="Runtime-specific adapters determine actual route health.",
     )
 
 
