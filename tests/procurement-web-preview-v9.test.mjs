@@ -20,6 +20,8 @@ test("V9 controls are native React children and cannot be detached by an async w
   assert.match(workspace, /import[\s\S]*ProcurementV9NativeFilters[\s\S]*ProcurementV9NativeToolbar[\s\S]*from "\.\/ProcurementWebPreviewV9Enhancement"/);
   assert.match(workspace, /pdp-v9-workflow-row[\s\S]*<ProcurementV9NativeToolbar\s*\/>/);
   assert.match(workspace, /pdp-v9-filter-bar[\s\S]*<ProcurementV9NativeFilters noticeTab\s*\/>/);
+  assert.match(workspace, /tab === "direct"[\s\S]*ProcurementV9NativeToolbar[\s\S]*ProcurementV9NativeFilters noticeTab=\{false\}/);
+  assert.match(workspace, /function clearVisibleFilters\(\)[\s\S]*resetProcurementV9NativeFilters\(\)/);
   assert.doesNotMatch(ui, /createPortal|document\.createElement|ensureHosts|FILTER_HOST_ID|TOOLBAR_HOST_ID/);
   assert.match(ui, /window\.addEventListener\(NOTICE_DATA_EVENT, schedule\)/);
   assert.match(ui, /window\.addEventListener\(DIRECT_DATA_EVENT, schedule\)/);
