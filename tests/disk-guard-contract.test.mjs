@@ -26,7 +26,7 @@ test("disk guard is structural, advisory, and never prunes Docker volumes", asyn
   assert.match(managed, /-Mode predeploy/);
   assert.match(managed, /-Mode postdeploy/);
   assert.match(registration, /PDP One Disk Guard/);
-  assert.match(registration, /-Mode scheduled/);
+  assert.match(registration, /ScriptArguments @\("-Mode", "scheduled", "-ProjectRoot", \$ProjectRoot\)/);
   assert.match(compose, /max-size: "10m"/);
   assert.match(compose, /max-file: "3"/);
   assert.ok((compose.match(/logging: \*pdp-logging/g) || []).length >= 8);

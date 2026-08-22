@@ -24,11 +24,11 @@ REPORT_ROOT = Path(os.getenv("PDP_DEPLOYMENT_REPORTS", "/deployment-agent/report
 SIGNING_KEY = os.getenv("PDP_DEPLOYMENT_AGENT_SIGNING_KEY", "")
 COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
 IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+STABLE_OPERATIONAL_INTERFACE_REVISION = "pdp-one.stable-bootstrap-control-plane.v1"
+RUNTIME_MCP_TOOLSET_REVISION = "pdp-one.mcp-toolset.v2"
 DEFAULT_TTL_SECONDS = 300
 MAX_TTL_SECONDS = 1800
 ACTION_TTL_SECONDS = {
-    # Layered health, exact Agent synchronization and composite promotion can
-    # wait behind Windows startup, Agent restart, and public-route retries.
     "check_deployment_health": 1800,
     "promote_exact_candidate": 1800,
     "sync_agent_from_exact_commit": 1800,
@@ -74,6 +74,16 @@ _SAFE_REPORT_FIELDS = (
     "retained_previous_images",
     "connectivity_repair_attempted",
     "connectivity_repair_succeeded",
+    "connectivity_edge_impacted",
+    "connectivity_edge_refresh_performed",
+    "connectivity_edge_preserved",
+    "automatic_recovery_enabled",
+    "automatic_recovery_attempted",
+    "automatic_recovery_succeeded",
+    "recovered_commit",
+    "recovery_health",
+    "recovery_error",
+    "recovery_instruction",
     "error",
 )
 _SECRET_TEXT_RE = re.compile(
@@ -86,9 +96,6 @@ def _utcnow() -> datetime:
 
 
 def _disk_free_bytes() -> int:
-    # This is intentionally the signed-queue filesystem safety metric. It is
-    # not advertised as Windows C: capacity; Windows-side Disk Guard reports
-    # remain authoritative for host C: free-space decisions.
     probe = QUEUE_ROOT if QUEUE_ROOT.exists() else QUEUE_ROOT.parent
     try:
         return int(shutil.disk_usage(probe).free)
@@ -149,6 +156,14 @@ def validate_identifier(value: str, field: str) -> str:
     return normalized
 
 
+def _promotion_v3():
+    try:
+        import promotion_control_v3
+    except ImportError:
+        return None
+    return promotion_control_v3
+
+
 def _validated_rejected_deployment_id(request_id: str) -> str | None:
     rejected = QUEUE_ROOT / "rejected" / f"{request_id}.json"
     if not rejected.exists():
@@ -197,11 +212,7 @@ def _read_sanitized_deployment_report(deployment_id: str) -> dict[str, Any] | No
         return None
     if not isinstance(raw, dict) or str(raw.get("deployment_id", "")) != normalized:
         return None
-    return {
-        key: _sanitize_report_value(raw[key])
-        for key in _SAFE_REPORT_FIELDS
-        if key in raw
-    }
+    return {key: _sanitize_report_value(raw[key]) for key in _SAFE_REPORT_FIELDS if key in raw}
 
 
 def _read_agent_watchdog_status() -> dict[str, Any]:
@@ -222,8 +233,7 @@ def _read_agent_watchdog_status() -> dict[str, Any]:
             raw = json.load(handle)
         if not isinstance(raw, dict) or str(raw.get("schema", "")) != "pdp-one.deployment-agent-watchdog.v1":
             return unavailable
-        checked_at_text = str(raw.get("checked_at", ""))
-        checked_at = datetime.fromisoformat(checked_at_text.replace("Z", "+00:00"))
+        checked_at = datetime.fromisoformat(str(raw.get("checked_at", "")).replace("Z", "+00:00"))
         if checked_at.tzinfo is None:
             checked_at = checked_at.replace(tzinfo=timezone.utc)
         age = max(0, int((_utcnow() - checked_at.astimezone(timezone.utc)).total_seconds()))
@@ -239,6 +249,40 @@ def _read_agent_watchdog_status() -> dict[str, Any]:
             "start_requested": bool(raw.get("start_requested", False)),
             "incoming_requests": int(raw.get("incoming_requests", 0)),
             "error": _sanitize_report_value(raw.get("error")),
+        }
+    except (OSError, ValueError, TypeError, json.JSONDecodeError, UnicodeDecodeError):
+        return unavailable
+
+
+def _read_agent_capability_status() -> dict[str, Any]:
+    report_path = REPORT_ROOT / "deployment-agent-watchdog.json"
+    unavailable = {
+        "stable_operational_interface_revision": STABLE_OPERATIONAL_INTERFACE_REVISION,
+        "agent_protocol_version": None,
+        "agent_sync_capable": False,
+        "agent_self_reconcile_capable": False,
+        "agent_bootstrap_manifest_hash": None,
+        "runtime_bootstrap_manifest_hash": None,
+        "agent_candidate_compatibility": "unknown",
+        "agent_migration_stage": None,
+    }
+    if not report_path.exists() or not report_path.is_file():
+        return unavailable
+    try:
+        with report_path.open("r", encoding="utf-8-sig") as handle:
+            raw = json.load(handle)
+        if not isinstance(raw, dict) or str(raw.get("schema", "")) != "pdp-one.deployment-agent-watchdog.v1":
+            return unavailable
+        protocol = raw.get("agent_protocol_version")
+        return {
+            "stable_operational_interface_revision": str(raw.get("stable_operational_interface_revision", STABLE_OPERATIONAL_INTERFACE_REVISION))[:128],
+            "agent_protocol_version": int(protocol) if protocol is not None else None,
+            "agent_sync_capable": bool(raw.get("agent_sync_capable", False)),
+            "agent_self_reconcile_capable": bool(raw.get("agent_self_reconcile_capable", False)),
+            "agent_bootstrap_manifest_hash": _sanitize_report_value(raw.get("agent_bootstrap_manifest_hash")),
+            "runtime_bootstrap_manifest_hash": _sanitize_report_value(raw.get("runtime_bootstrap_manifest_hash")),
+            "agent_candidate_compatibility": str(raw.get("agent_candidate_compatibility", "unknown"))[:64],
+            "agent_migration_stage": _sanitize_report_value(raw.get("agent_migration_stage")),
         }
     except (OSError, ValueError, TypeError, json.JSONDecodeError, UnicodeDecodeError):
         return unavailable
@@ -271,8 +315,7 @@ def _read_public_mcp_connectivity_status() -> dict[str, Any]:
             raw = json.load(handle)
         if not isinstance(raw, dict) or str(raw.get("schema", "")) != "pdp-one.public-mcp-connectivity.v1":
             return unavailable
-        checked_at_text = str(raw.get("checked_at", ""))
-        checked_at = datetime.fromisoformat(checked_at_text.replace("Z", "+00:00"))
+        checked_at = datetime.fromisoformat(str(raw.get("checked_at", "")).replace("Z", "+00:00"))
         if checked_at.tzinfo is None:
             checked_at = checked_at.replace(tzinfo=timezone.utc)
         age = max(0, int((_utcnow() - checked_at.astimezone(timezone.utc)).total_seconds()))
@@ -299,10 +342,7 @@ def _read_public_mcp_connectivity_status() -> dict[str, Any]:
 
 
 def _pending_request_diagnostics(incoming: Path) -> dict[str, Any]:
-    result = {
-        "expired_signed_requests": 0,
-        "oldest_pending_age_seconds": None,
-    }
+    result = {"expired_signed_requests": 0, "oldest_pending_age_seconds": None}
     if not incoming.exists() or len(SIGNING_KEY) < 32:
         return result
     now = _utcnow()
@@ -338,6 +378,9 @@ def enqueue(
     action: str,
     params: dict[str, Any] | None = None,
     ttl_seconds: int | None = None,
+    *,
+    _promotion_internal: bool = False,
+    _promotion_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     if action not in ALLOWED_ACTIONS:
         raise ValueError("Unsupported deployment-agent action.")
@@ -345,12 +388,18 @@ def enqueue(
     _require_queue()
     free_bytes = _disk_free_bytes()
     if free_bytes >= 0 and free_bytes < LOW_SPACE_BYTES and action != "run_disk_maintenance":
-        raise RuntimeError(
-            "Deployment-agent storage is full. Run signed disk maintenance before starting another action."
-        )
+        raise RuntimeError("Deployment-agent storage is full. Run signed disk maintenance before starting another action.")
     lifetime = ACTION_TTL_SECONDS.get(action, DEFAULT_TTL_SECONDS) if ttl_seconds is None else int(ttl_seconds)
     if not 30 <= lifetime <= MAX_TTL_SECONDS:
         raise ValueError(f"Queue request lifetime must be between 30 and {MAX_TTL_SECONDS} seconds.")
+
+    promotion = _promotion_v3()
+    promotion_context = _promotion_context
+    if not _promotion_internal and promotion and action in {"deploy_approved_release", "promote_exact_candidate", "check_deployment_health"}:
+        promotion_context = promotion.before_enqueue(action, params or {})
+        if promotion_context and promotion_context.get("defer"):
+            return dict(promotion_context["response"])
+
     now = _utcnow()
     request_id = str(uuid.uuid4())
     payload = {
@@ -367,18 +416,43 @@ def enqueue(
     }
     target = QUEUE_ROOT / "incoming" / f"{request_id}.json"
     fd, temporary_name = tempfile.mkstemp(prefix=".request-", suffix=".tmp", dir=target.parent)
+    promotion_bound = False
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             json.dump(envelope, handle, separators=(",", ":"))
             handle.flush()
             os.fsync(handle.fileno())
+        if promotion and promotion_context and promotion_context.get("managed"):
+            # Bind the durable public V3 request to its exact signed Agent ID
+            # before the file becomes visible to the Windows Agent. This
+            # removes the restart race that could leave a client request
+            # permanently pending after a fast Agent response/MCP restart.
+            promotion.after_enqueue(action, params or {}, request_id, promotion_context)
+            promotion_bound = True
         os.replace(temporary_name, target)
-    except Exception:
+    except Exception as exc:
         try:
             os.unlink(temporary_name)
         except FileNotFoundError:
             pass
+        if promotion_bound and promotion:
+            publish_failed = getattr(promotion, "publish_failed", None)
+            if callable(publish_failed):
+                publish_failed(request_id, promotion_context, type(exc).__name__)
         raise
+
+    if promotion and promotion_context and promotion_context.get("managed"):
+        public_request_id = str(promotion_context.get("client_request_id") or request_id)
+        return {
+            "request_id": public_request_id,
+            "agent_request_id": request_id,
+            "action": action,
+            "status": "queued",
+            "promotion_managed": True,
+            "expires_at": payload["expires_at"],
+            "emergency_reserve_released": reserve_released,
+        }
+
     return {
         "request_id": request_id,
         "action": action,
@@ -394,20 +468,40 @@ def get_response(request_id: str) -> dict[str, Any]:
         normalized = str(uuid.UUID(request_id))
     except ValueError as exc:
         raise ValueError("request_id is invalid.") from exc
-    path = QUEUE_ROOT / "responses" / f"{normalized}.json"
+
+    promotion = _promotion_v3()
+    mapping = promotion.resolve_request_id(normalized) if promotion else None
+    if mapping and not mapping.get("agent_request_id"):
+        return promotion.public_request_status(str(mapping["client_request_id"]))
+    lookup_id = str(mapping.get("agent_request_id")) if mapping else normalized
+
+    path = QUEUE_ROOT / "responses" / f"{lookup_id}.json"
     if not path.exists():
+        if mapping:
+            return promotion.public_request_status(str(mapping["client_request_id"]))
         return {"request_id": normalized, "status": "pending"}
     with path.open("r", encoding="utf-8-sig") as handle:
         result = json.load(handle)
-    # The agent never returns secrets. Keep a strict top-level type here.
     if not isinstance(result, dict):
         raise RuntimeError("The deployment-agent response is invalid.")
     if result.get("status") == "failed" and result.get("action") in {"deploy_approved_release", "promote_exact_candidate"}:
-        deployment_id = _validated_rejected_deployment_id(normalized)
+        deployment_id = _validated_rejected_deployment_id(lookup_id)
         if deployment_id:
             runtime_report = _read_sanitized_deployment_report(deployment_id)
             if runtime_report:
                 result = {**result, "deployment_report": runtime_report}
+
+    if mapping and promotion:
+        client_id = str(mapping["client_request_id"])
+        promotion.observe_response(client_id, lookup_id, result)
+        public_state = promotion.public_request_status(client_id)
+        result = {
+            **result,
+            "request_id": client_id,
+            "agent_request_id": lookup_id,
+            "promotion_managed": True,
+            "promotion_state": public_state.get("promotion_state"),
+        }
     return result
 
 
@@ -419,7 +513,24 @@ def get_queue_status() -> dict[str, Any]:
     pending = list(incoming.glob("*.json")) if incoming.exists() else []
     pending_diagnostics = _pending_request_diagnostics(incoming)
     watchdog = _read_agent_watchdog_status()
+    capabilities = _read_agent_capability_status()
     connectivity = _read_public_mcp_connectivity_status()
+    promotion = _promotion_v3()
+    try:
+        promotion_status = promotion.status_snapshot() if promotion else {
+            "revision": None,
+            "legacy_deploy_bypass_allowed": True,
+            "active_ticket": None,
+            "ready_count": 0,
+        }
+    except Exception as exc:
+        promotion_status = {
+            "revision": "pdp-one.parallel-promotion-control.v3",
+            "legacy_deploy_bypass_allowed": False,
+            "active_ticket": None,
+            "ready_count": None,
+            "background_error": type(exc).__name__,
+        }
     return {
         "configured": configured,
         "queue_available": incoming.exists() and responses.exists(),
@@ -429,6 +540,14 @@ def get_queue_status() -> dict[str, Any]:
         "completed_responses": len(list(responses.glob("*.json"))) if responses.exists() else 0,
         "transport": "local signed file queue",
         "arbitrary_shell_allowed": False,
+        "stable_operational_interface_revision": STABLE_OPERATIONAL_INTERFACE_REVISION,
+        "runtime_mcp_toolset_revision": RUNTIME_MCP_TOOLSET_REVISION,
+        "connected_tool_schema_observable": False,
+        "connected_tool_schema_revision": None,
+        "schema_refresh_required": None,
+        "schema_refresh_required_for_bootstrap": False,
+        "promotion_control": promotion_status,
+        "agent_capabilities": capabilities,
         "agent_watchdog": watchdog,
         "agent_processor_healthy": bool(
             watchdog.get("available")

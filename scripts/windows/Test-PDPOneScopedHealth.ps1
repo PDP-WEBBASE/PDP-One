@@ -3,6 +3,7 @@
 param(
     [ValidateSet("full", "backend", "mcp", "web", "host", "none")][string]$Profile = "full",
     [int]$TimeoutSeconds = 75,
+    [ValidatePattern('^$|^content-[0-9a-f]{64}$')][string]$ExpectedWebBuildId = "",
     [switch]$SkipPublicCheck
 )
 
@@ -10,6 +11,7 @@ $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
 Set-StrictMode -Version Latest
 . (Join-Path $PSScriptRoot "PDPOne.Common.ps1")
+. (Join-Path $PSScriptRoot "PDPOne.HiddenTask.ps1")
 
 function Wait-PDPOneHttp {
     param([Parameter(Mandatory = $true)][string]$Url, [string]$ExpectedPattern = "", [int]$Timeout = 60)
@@ -49,16 +51,13 @@ function Invoke-PDPOneFullHealthFallback {
     param([switch]$SkipPublic)
     $fullHealthScript = Join-Path $PSScriptRoot "Test-PDPOne.ps1"
     if (-not (Test-Path -LiteralPath $fullHealthScript)) { throw "Full PDP One health script is missing." }
-    $arguments = @(
-        "-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $fullHealthScript,
-        "-SkipChatGPTToolCheck"
-    )
+    $arguments = @("-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $fullHealthScript, "-SkipChatGPTToolCheck")
     if ($SkipPublic) { $arguments += "-SkipPublicCheck" }
     & powershell.exe @arguments
     if ($LASTEXITCODE -ne 0) { throw "Full PDP One health check failed." }
 }
 
-function Ensure-PDPOneDeploymentAgentWatchdogAcceptance {
+function Ensure-PDPOneWindowlessTaskAcceptance {
     param(
         [Parameter(Mandatory = $true)][string]$ProjectRoot,
         [Parameter(Mandatory = $true)][string]$EnvPath,
@@ -68,47 +67,66 @@ function Ensure-PDPOneDeploymentAgentWatchdogAcceptance {
     $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
     $principal = New-Object Security.Principal.WindowsPrincipal($identity)
     if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
-        Write-Verbose "Skipping Windows watchdog acceptance because this health invocation is not elevated."
+        Write-Verbose "Skipping Windows Scheduled Task acceptance because this health invocation is not elevated."
         return
     }
 
     $agentRoot = "C:\ProgramData\PDP-One\deployment-agent"
     try {
         $configuredAgentRoot = [string](Get-PDPOneEnvValue -Path $EnvPath -Name "PDP_DEPLOYMENT_AGENT_ROOT")
-        if (-not [string]::IsNullOrWhiteSpace($configuredAgentRoot)) {
-            $agentRoot = ($configuredAgentRoot -replace '/', '\')
-        }
+        if (-not [string]::IsNullOrWhiteSpace($configuredAgentRoot)) { $agentRoot = ($configuredAgentRoot -replace '/', '\') }
     } catch { }
 
     $agentTaskName = "PDP One Local Deployment Agent"
     $watchdogTaskName = "PDP One Deployment Agent Watchdog"
     $selfTestTaskName = "PDP One Deployment Agent Watchdog Self Test"
     $registerScript = Join-Path $ProjectRoot "scripts\windows\Register-PDPOneStartupTask.ps1"
-    $watchdogScript = Join-Path $ProjectRoot "scripts\windows\Ensure-PDPOneDeploymentAgentHealthy.ps1"
+    $agentWatchdogScript = Join-Path $ProjectRoot "scripts\windows\Ensure-PDPOneDeploymentAgentHealthy.ps1"
     $selfTestScript = Join-Path $ProjectRoot "scripts\windows\Test-PDPOneDeploymentAgentWatchdogSelfHeal.ps1"
+    $hiddenRunner = Join-Path $ProjectRoot "scripts\windows\Run-PDPOneHidden.vbs"
     $watchdogReport = Join-Path $agentRoot "reports\deployment-agent-watchdog.json"
     $selfTestMarker = Join-Path $agentRoot "state\deployment-agent-watchdog-selftest-v1.accepted"
 
-    foreach ($required in @($registerScript, $watchdogScript, $selfTestScript)) {
-        if (-not (Test-Path -LiteralPath $required)) { throw "Required autonomous Agent watchdog file is missing: $(Split-Path $required -Leaf)" }
+    foreach ($required in @($registerScript, $agentWatchdogScript, $selfTestScript, $hiddenRunner)) {
+        if (-not (Test-Path -LiteralPath $required)) { throw "Required windowless Scheduled Task file is missing: $(Split-Path $required -Leaf)" }
     }
 
-    $watchdogTask = Get-ScheduledTask -TaskName $watchdogTaskName -ErrorAction SilentlyContinue
-    if ($null -eq $watchdogTask) {
-        & powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File $registerScript -ProjectRoot $ProjectRoot
-        if ($LASTEXITCODE -ne 0) { throw "Deployment Agent watchdog task registration failed." }
-        $watchdogTask = Get-ScheduledTask -TaskName $watchdogTaskName -ErrorAction SilentlyContinue
+    # Apply the versioned host policy immediately on the exact release. If the
+    # marker is current but any live Task action drifted, force one bounded repair.
+    & $registerScript -ProjectRoot $ProjectRoot -ApplyIfNeeded
+    $recurringTaskNames = @(
+        "PDP One Stable Startup",
+        "PDP One Network Recovery",
+        "PDP One Open Local Web",
+        "PDP One MCP Self Heal",
+        "PDP One Deployment Agent Watchdog",
+        "PDP One Disk Guard"
+    )
+    $recurringHealthy = $true
+    foreach ($taskName in $recurringTaskNames) {
+        $task = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+        if ($null -eq $task -or -not (Test-PDPOneScheduledTaskWindowless -Task $task -HiddenRunnerPath $hiddenRunner)) {
+            $recurringHealthy = $false
+            break
+        }
     }
-    if ($null -eq $watchdogTask) { throw "Deployment Agent watchdog Scheduled Task is still missing after registration." }
-    if ([string]$watchdogTask.State -eq "Disabled") {
-        Enable-ScheduledTask -TaskName $watchdogTaskName -ErrorAction Stop | Out-Null
+    if (-not $recurringHealthy) { & $registerScript -ProjectRoot $ProjectRoot }
+    foreach ($taskName in $recurringTaskNames) {
+        Assert-PDPOneScheduledTaskWindowless -TaskName $taskName -HiddenRunnerPath $hiddenRunner | Out-Null
     }
 
+    # Migrate/recreate the fixed long-running Agent definition without changing
+    # its allowlist, identity or cadence. The watchdog script never stops a
+    # Running Agent; it only repairs the definition and starts it when not Running.
+    & $agentWatchdogScript -AgentRoot $agentRoot -AgentTaskName $agentTaskName | Out-Null
+    $agentTask = Assert-PDPOneScheduledTaskWindowless -TaskName $agentTaskName -HiddenRunnerPath $hiddenRunner
+    if ([string]$agentTask.State -ne "Running") { throw "The PDP One Local Deployment Agent is not Running after windowless task migration." }
+
+    $watchdogTask = Get-ScheduledTask -TaskName $watchdogTaskName -ErrorAction Stop
+    if ([string]$watchdogTask.State -eq "Disabled") { Enable-ScheduledTask -TaskName $watchdogTaskName -ErrorAction Stop | Out-Null }
     $acceptanceStarted = [DateTimeOffset]::UtcNow
     $watchdogTask = Get-ScheduledTask -TaskName $watchdogTaskName -ErrorAction Stop
-    if ([string]$watchdogTask.State -ne "Running") {
-        Start-ScheduledTask -TaskName $watchdogTaskName -ErrorAction Stop
-    }
+    if ([string]$watchdogTask.State -ne "Running") { Start-ScheduledTask -TaskName $watchdogTaskName -ErrorAction Stop }
 
     $deadline = (Get-Date).AddSeconds([Math]::Max(20, $Timeout))
     $watchdogAccepted = $false
@@ -117,12 +135,7 @@ function Ensure-PDPOneDeploymentAgentWatchdogAcceptance {
             try {
                 $status = Get-Content -LiteralPath $watchdogReport -Raw -Encoding UTF8 | ConvertFrom-Json
                 $checkedAt = [DateTimeOffset]::Parse([string]$status.checked_at)
-                if (
-                    [string]$status.schema -eq "pdp-one.deployment-agent-watchdog.v1" -and
-                    [string]$status.status -eq "healthy" -and
-                    [string]$status.task_state_after -eq "Running" -and
-                    $checkedAt -ge $acceptanceStarted.AddSeconds(-5)
-                ) {
+                if ([string]$status.schema -eq "pdp-one.deployment-agent-watchdog.v1" -and [string]$status.status -eq "healthy" -and [string]$status.task_state_after -eq "Running" -and $checkedAt -ge $acceptanceStarted.AddSeconds(-5)) {
                     $watchdogAccepted = $true
                     break
                 }
@@ -130,15 +143,21 @@ function Ensure-PDPOneDeploymentAgentWatchdogAcceptance {
         }
         Start-Sleep -Seconds 1
     }
-    if (-not $watchdogAccepted) { throw "Deployment Agent watchdog did not produce fresh healthy evidence." }
+    if (-not $watchdogAccepted) { throw "Deployment Agent watchdog did not produce fresh healthy evidence after windowless migration." }
 
     if (-not (Test-Path -LiteralPath $selfTestMarker)) {
-        $arguments = "-NoLogo -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$selfTestScript`" -AgentRoot `"$agentRoot`" -AgentTaskName `"$agentTaskName`" -WatchdogTaskName `"$watchdogTaskName`" -SelfTestTaskName `"$selfTestTaskName`" -MaxWaitSeconds 120"
-        $action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument $arguments
+        $action = New-PDPOneHiddenPowerShellAction -ScriptPath $selfTestScript -ScriptArguments @(
+            "-AgentRoot", $agentRoot,
+            "-AgentTaskName", $agentTaskName,
+            "-WatchdogTaskName", $watchdogTaskName,
+            "-SelfTestTaskName", $selfTestTaskName,
+            "-MaxWaitSeconds", "120"
+        ) -HiddenRunnerPath $hiddenRunner
         $trigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddSeconds(45)
         $taskPrincipal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel Highest
         $settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Minutes 6) -MultipleInstances IgnoreNew -StartWhenAvailable
         Register-ScheduledTask -TaskName $selfTestTaskName -Action $action -Trigger $trigger -Principal $taskPrincipal -Settings $settings -Description "One-time bounded proof that the fixed PDP One Deployment Agent watchdog restores the fixed Agent task after a controlled stop. No arbitrary command, data, volume, identity or credential action." -Force | Out-Null
+        Assert-PDPOneScheduledTaskWindowless -TaskName $selfTestTaskName -HiddenRunnerPath $hiddenRunner | Out-Null
     }
 }
 
@@ -149,12 +168,7 @@ if (-not (Test-PDPOneDockerEngine)) { throw "Docker Engine is unavailable." }
 & docker compose config --quiet
 if ($LASTEXITCODE -ne 0) { throw "Docker Compose configuration is invalid." }
 
-# Exact registry deployments always invoke this exact-release health script after
-# copying the release to C:\PDP-One. Use that governed elevated checkpoint to
-# guarantee the Windows Deployment Agent watchdog exists and has fresh healthy
-# evidence, then schedule one bounded post-deployment self-heal proof. Ordinary
-# non-elevated manual health checks remain read-only and skip this host action.
-Ensure-PDPOneDeploymentAgentWatchdogAcceptance -ProjectRoot $projectRoot -EnvPath $envPath -Timeout 45
+Ensure-PDPOneWindowlessTaskAcceptance -ProjectRoot $projectRoot -EnvPath $envPath -Timeout 45
 
 if ($Profile -eq "full") {
     Invoke-PDPOneFullHealthFallback -SkipPublic:$SkipPublicCheck
@@ -163,18 +177,14 @@ if ($Profile -eq "full") {
 
 try {
     $requiredCommon = @("db", "redis", "nginx", "tailscale")
-    foreach ($service in $requiredCommon) {
-        Wait-PDPOneContainerState -Service $service -Timeout $TimeoutSeconds | Out-Null
-    }
+    foreach ($service in $requiredCommon) { Wait-PDPOneContainerState -Service $service -Timeout $TimeoutSeconds | Out-Null }
 
     & docker compose exec -T db pg_isready *> $null
     if ($LASTEXITCODE -ne 0) { throw "PostgreSQL is not ready." }
 
     switch ($Profile) {
         "backend" {
-            foreach ($service in @("backend", "worker", "beat")) {
-                Wait-PDPOneContainerState -Service $service -Timeout $TimeoutSeconds | Out-Null
-            }
+            foreach ($service in @("backend", "worker", "beat")) { Wait-PDPOneContainerState -Service $service -Timeout $TimeoutSeconds | Out-Null }
             & docker compose exec -T backend python manage.py check --database default *> $null
             if ($LASTEXITCODE -ne 0) { throw "Backend Django/database check failed." }
             Wait-PDPOneHttp -Url "http://127.0.0.1:8080/api/v1/auth/session/" -ExpectedPattern '"authenticated"' -Timeout $TimeoutSeconds | Out-Null
@@ -187,14 +197,11 @@ try {
         }
         "web" {
             Wait-PDPOneContainerState -Service "web" -RequireHealthy -Timeout $TimeoutSeconds | Out-Null
-            Wait-PDPOneHttp -Url "http://127.0.0.1:8080/pdp-build.json" -ExpectedPattern '"build_id"' -Timeout $TimeoutSeconds | Out-Null
+            $buildPattern = if ($ExpectedWebBuildId) { '"build_id"\s*:\s*"' + [regex]::Escape($ExpectedWebBuildId) + '"' } else { '"build_id"' }
+            Wait-PDPOneHttp -Url "http://127.0.0.1:8080/pdp-build.json" -ExpectedPattern $buildPattern -Timeout $TimeoutSeconds | Out-Null
         }
-        "host" {
-            Wait-PDPOneHttp -Url "http://127.0.0.1:8080/healthz" -ExpectedPattern '(?i)(PDP One ready|ready|healthy|ok)' -Timeout $TimeoutSeconds | Out-Null
-        }
-        "none" {
-            Wait-PDPOneHttp -Url "http://127.0.0.1:8080/healthz" -ExpectedPattern '(?i)(PDP One ready|ready|healthy|ok)' -Timeout $TimeoutSeconds | Out-Null
-        }
+        "host" { Wait-PDPOneHttp -Url "http://127.0.0.1:8080/healthz" -ExpectedPattern '(?i)(PDP One ready|ready|healthy|ok)' -Timeout $TimeoutSeconds | Out-Null }
+        "none" { Wait-PDPOneHttp -Url "http://127.0.0.1:8080/healthz" -ExpectedPattern '(?i)(PDP One ready|ready|healthy|ok)' -Timeout $TimeoutSeconds | Out-Null }
     }
 
     if (-not $SkipPublicCheck) {
@@ -214,7 +221,8 @@ try {
                     if (-not [bool]$componentHealth.Success) { throw "Scoped public MCP health failed: $($componentHealth.Detail)" }
                 }
                 "web" {
-                    $componentHealth = Test-PDPOnePublicHealth -Url ($base + "/pdp-build.json") -ExpectedPattern '"build_id"' -TimeoutSeconds 25
+                    $buildPattern = if ($ExpectedWebBuildId) { '"build_id"\s*:\s*"' + [regex]::Escape($ExpectedWebBuildId) + '"' } else { '"build_id"' }
+                    $componentHealth = Test-PDPOnePublicHealth -Url ($base + "/pdp-build.json") -ExpectedPattern $buildPattern -TimeoutSeconds 25
                     if (-not [bool]$componentHealth.Success) { throw "Scoped public web health failed: $($componentHealth.Detail)" }
                 }
             }
@@ -222,6 +230,7 @@ try {
     }
 } catch {
     $scopedError = ConvertTo-PDPOneRedactedText $_.Exception.Message
+    if ($ExpectedWebBuildId -and $Profile -eq "web") { throw "Exact web build verification failed: $scopedError" }
     Write-Warning "Scoped health did not pass; running stronger full-health fallback."
     try {
         Invoke-PDPOneFullHealthFallback -SkipPublic:$SkipPublicCheck

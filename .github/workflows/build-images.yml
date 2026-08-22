@@ -137,6 +137,19 @@ jobs:
             WEB_FINGERPRINT=${{ steps.fingerprints.outputs.web_fingerprint }}
             PDP_DOCKER_REGISTRY=${{ steps.base-registry.outputs.registry }}
 
+      - name: Smoke test exact immutable Web runtime CLI
+        shell: bash
+        env:
+          WEB_IMAGE: ${{ steps.plan.outputs.web_image }}
+        run: |
+          set -euo pipefail
+          docker pull "$WEB_IMAGE" >/dev/null
+          docker run --rm --entrypoint sh "$WEB_IMAGE" -lc '
+            test -x /app/node_modules/.bin/vinext
+            test -f /app/package.json
+            node -e "const p=require(\"./package.json\"); if(!p.scripts || !p.scripts.start || !p.scripts.start.includes(\"vinext start\")) process.exit(1)"
+          '
+
       - name: Verify immutable component metadata and repository digests
         if: steps.contract.outputs.required == 'true'
         shell: bash

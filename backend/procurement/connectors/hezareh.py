@@ -1,3 +1,5 @@
+import re
+
 from bs4 import BeautifulSoup
 
 from .base import (
@@ -15,6 +17,8 @@ from .types import ParsedNotice, ParsedPage
 
 class HezarehParser:
     row_selector = "div.table-1 table.table.table-hover tbody tr"
+    source_page_report_re = re.compile(r"صفحه\s*(\d+)\s*از\s*(\d+)", re.IGNORECASE)
+    explicit_date_re = re.compile(r"(?:13|14|20)\d{2}[/-]\d{1,2}[/-]\d{1,2}")
 
     def __init__(self, base_url: str, declared_type: str):
         self.base_url = base_url
@@ -40,7 +44,10 @@ class HezarehParser:
             province = normalize_text(cells[2].get_text(" ", strip=True))
             if province.startswith("استان "):
                 province = province[6:].strip()
-            source_status = normalize_text(cells[3].get_text(" ", strip=True))
+
+            insertion_raw = normalize_text(cells[3].get_text(" ", strip=True))
+            published_raw = first_date(insertion_raw) if self.explicit_date_re.search(insertion_raw) else ""
+            source_status = "" if published_raw else insertion_raw
             deadline_raw = first_date(cells[4].get_text(" ", strip=True))
             image_sources = [normalize_text(img.get("src")) for img in row.select("img[src]")]
             has_documents = bool(cells[5].select_one('a[href*="/services/ntcdoc"]'))
@@ -48,6 +55,8 @@ class HezarehParser:
             is_special = any("special-notice" in source for source in image_sources)
             detected, resolution_status = detect_notice_type(title, self.declared_type)
             raw_payload = {
+                "insertion_raw": insertion_raw,
+                "published_raw": published_raw,
                 "source_status": source_status,
                 "deadline_raw": deadline_raw,
                 "province_raw": normalize_text(cells[2].get_text(" ", strip=True)),
@@ -65,11 +74,13 @@ class HezarehParser:
                     type_resolution_status=resolution_status,
                     title=title,
                     province=province,
+                    published_raw=published_raw,
                     deadline_raw=deadline_raw,
                     position=position,
                     metadata={
+                        "insertion_raw": insertion_raw,
                         "source_status": source_status,
-                        "is_new_on_source": source_status == "جدید",
+                        "is_new_on_source": insertion_raw == "جدید",
                         "is_special_on_source": is_special,
                         "has_documents": has_documents,
                         "has_active_deadline": has_active_deadline,
@@ -92,16 +103,25 @@ class HezarehParser:
         elif not notices:
             warnings.append("no_notice_rows_found")
 
-        current_page = page_number_from_url(page_url, default=1)
+        url_current_page = page_number_from_url(page_url, default=1)
         page_numbers = pagination_page_numbers([page_url, *next_page_urls])
-        total_pages = max(page_numbers) if page_numbers else None
+        visible_total_pages = max(page_numbers) if page_numbers else None
+        source_report = self._source_page_report(soup)
+        if source_report is not None:
+            reported_current_page, total_pages = source_report
+            total_pages_source = "source_report"
+        else:
+            reported_current_page = url_current_page
+            total_pages = visible_total_pages
+            total_pages_source = "visible_links" if visible_total_pages is not None else "unknown"
+
         end_of_results: bool | None = None
         if security_challenge:
             end_of_results = False
-        elif total_pages is not None and current_page is not None:
+        elif source_report is not None and reported_current_page is not None:
             if notices:
-                end_of_results = current_page >= total_pages
-            elif current_page > total_pages:
+                end_of_results = reported_current_page >= total_pages
+            elif reported_current_page > total_pages:
                 end_of_results = True
             else:
                 end_of_results = False
@@ -111,13 +131,15 @@ class HezarehParser:
             notices=notices,
             next_page_urls=next_page_urls,
             warnings=warnings,
-            reported_current_page=current_page,
+            reported_current_page=reported_current_page,
             reported_total_pages=total_pages,
             end_of_results=end_of_results,
             diagnostics={
                 "page_title": page_title[:200],
                 "matched_rows": len(soup.select(self.row_selector)),
                 "security_challenge": security_challenge,
+                "reported_total_pages_source": total_pages_source,
+                "visible_pagination_max": visible_total_pages,
             },
         )
 
@@ -147,6 +169,18 @@ class HezarehParser:
             "website": self._label_value(soup, ["وب سایت", "وب‌سایت"]),
             "address": self._label_value(soup, ["آدرس"]),
         }
+
+    @classmethod
+    def _source_page_report(cls, soup: BeautifulSoup) -> tuple[int, int] | None:
+        text = normalize_text(soup.get_text(" ", strip=True))
+        match = cls.source_page_report_re.search(text)
+        if not match:
+            return None
+        current_page = int(match.group(1))
+        total_pages = int(match.group(2))
+        if current_page < 1 or total_pages < 1 or current_page > total_pages:
+            return None
+        return current_page, total_pages
 
     @staticmethod
     def _is_security_challenge(soup: BeautifulSoup) -> bool:

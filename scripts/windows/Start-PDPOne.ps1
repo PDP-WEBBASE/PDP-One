@@ -55,7 +55,7 @@ try {
     # the exact Windows scripts but the deployment agent does not execute the
     # task-registration script. Apply a versioned task policy once, then leave
     # the schedules untouched on ordinary watchdog/network-triggered runs.
-    $startupPolicyVersion = "2026-08-20-autonomous-ops-v3"
+    $startupPolicyVersion = "2026-08-21-hidden-background-tasks-v5"
     $startupPolicyRoot = "C:\ProgramData\PDP-One\maintenance"
     $startupPolicyPath = Join-Path $startupPolicyRoot "startup-task-policy.version"
     try {
@@ -91,10 +91,6 @@ try {
         return
     }
 
-    # Keep advisory disk maintenance out of the readiness-critical path. Normal
-    # startup uses existing images with no build or pull, while the daily Disk
-    # Guard remains registered separately. The startup-mode guard runs after the
-    # web/API/MCP/public health path is already established.
     $rancherStartupOutput = @(& powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "Start-PDPOneRancherResilient.ps1") -InitialTimeoutSeconds $DockerTimeoutSeconds -RecoveryTimeoutSeconds $RancherRecoveryTimeoutSeconds)
     if ($LASTEXITCODE -ne 0) { throw "Rancher Desktop/Docker recovery could not establish a ready engine." }
     if ($rancherStartupOutput.Count -gt 0) { $report.rancher_startup_report = [string]$rancherStartupOutput[-1] }
@@ -111,6 +107,54 @@ try {
     }
     $report.token_continuity = "verified"
     $mcpPathToken = Get-PDPOneEnvValue -Path $envPath -Name "PDP_MCP_PATH_TOKEN"
+
+    # Stable Startup must converge back to the immutable images from the last
+    # successful governed deployment. A failed candidate activation can leave a
+    # different container image running even though last-deployment.json still
+    # points at the accepted release. Bind Compose to that accepted image map
+    # before it decides whether existing containers need to be recreated.
+    $agentRoot = [string]$env:PDP_DEPLOYMENT_AGENT_ROOT
+    if ([string]::IsNullOrWhiteSpace($agentRoot)) {
+        $agentRoot = "C:\ProgramData\PDP-One\deployment-agent"
+    }
+    $lastDeploymentStatePath = Join-Path $agentRoot "state\last-deployment.json"
+    if (Test-Path -LiteralPath $lastDeploymentStatePath) {
+        try {
+            $acceptedState = Get-Content -LiteralPath $lastDeploymentStatePath -Raw -Encoding UTF8 | ConvertFrom-Json
+            if ($null -ne $acceptedState.active_images) {
+                if ([string]$acceptedState.status -ne "healthy") {
+                    throw "Last deployment state is not healthy."
+                }
+                $acceptedImageVariables = [ordered]@{
+                    backend = "PDP_BACKEND_IMAGE"
+                    mcp = "PDP_MCP_IMAGE"
+                    web = "PDP_WEB_IMAGE"
+                }
+                foreach ($service in @("backend", "mcp", "web")) {
+                    $property = $acceptedState.active_images.PSObject.Properties[$service]
+                    if ($null -eq $property -or [string]::IsNullOrWhiteSpace([string]$property.Value)) {
+                        throw "Last accepted deployment is missing the $service image identity."
+                    }
+                    $image = ([string]$property.Value).Trim()
+                    $expectedPrefix = "ghcr.io/pdp-webbase/pdp-one-$service`:"
+                    if (-not $image.StartsWith($expectedPrefix, [StringComparison]::OrdinalIgnoreCase)) {
+                        throw "Last accepted $service image is outside the governed GHCR namespace."
+                    }
+                    $tag = $image.Substring($expectedPrefix.Length)
+                    if ($tag -notmatch '^(content-[0-9a-f]{64}|[0-9a-f]{40})$') {
+                        throw "Last accepted $service image is not immutable."
+                    }
+                    & docker image inspect $image *> $null
+                    if ($LASTEXITCODE -ne 0) {
+                        throw "Last accepted $service image is not available locally; Stable Startup will not pull or build a substitute."
+                    }
+                    Set-Item -Path ("Env:" + $acceptedImageVariables[$service]) -Value $image
+                }
+            }
+        } catch {
+            throw "Accepted deployment image reconciliation failed. Stable Startup will not guess image identities. $($_.Exception.Message)"
+        }
+    }
 
     & docker compose config --quiet
     if ($LASTEXITCODE -ne 0) { throw "Docker Compose configuration is invalid." }

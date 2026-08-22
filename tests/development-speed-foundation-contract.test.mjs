@@ -27,7 +27,7 @@ test("deployment agent keeps polling and mutex ownership inside the Scheduled Ta
   assert.match(wrapper, /without spawning a detached powershell\.exe/);
 });
 
-test("scoped deployment reuses unchanged immutable images and restarts only affected services", async () => {
+test("scoped deployment reuses unchanged immutable images and restarts only affected application services", async () => {
   const deploy = await load("../scripts/windows/Invoke-PDPOneScopedRegistryDeployment.ps1");
   assert.match(deploy, /Get-PDPOneChangedFilePaths/);
   assert.match(deploy, /Get-PDPOneChangeScope/);
@@ -35,8 +35,12 @@ test("scoped deployment reuses unchanged immutable images and restarts only affe
   assert.match(deploy, /serviceChanged/);
   assert.match(deploy, /Get-PDPOneActivationTargets/);
   assert.match(deploy, /@\("backend", "worker", "beat"\)/);
+  assert.match(deploy, /if \("web" -in \$ChangedServices\) \{ \$targets \+= "web" \}/);
+  assert.doesNotMatch(deploy, /@\("web", "nginx"\)/);
   assert.match(deploy, /@\("compose", "stop"\) \+ \$activationTargets/);
-  assert.match(deploy, /"--no-deps"\) \+ \$activationTargets/);
+  assert.match(deploy, /"--no-deps", "--force-recreate"\) \+ \$activationTargets/);
+  assert.match(deploy, /"-ExpectedWebBuildId", \("content-" \+ \[string\]\$fingerprints\.web\)/);
+  assert.match(deploy, /Test-PDPOneConnectivityEdgeImpact/);
   assert.match(deploy, /\$scope\.topology_sensitive -or \("backend" -in \$changedServices\)/);
   assert.match(deploy, /Test-PDPOneScopedHealth\.ps1/);
   assert.match(deploy, /Write-PDPOneReleaseManifest/);
@@ -73,6 +77,8 @@ test("scope-aware health has fast component profiles and a stronger full-health 
   assert.match(health, /manage\.py check --database default/);
   assert.match(health, /mcp\/" \+ \$pathToken \+ "\/healthz/);
   assert.match(health, /pdp-build\.json/);
+  assert.match(health, /ExpectedWebBuildId/);
+  assert.match(health, /Exact web build verification failed/);
   assert.match(health, /Test-PDPOnePublicHealth/);
   assert.match(health, /Scoped health did not pass; running stronger full-health fallback/);
   assert.match(health, /-SkipChatGPTToolCheck/);

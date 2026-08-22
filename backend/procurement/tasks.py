@@ -20,6 +20,28 @@ from procurement.models_extraction import (
 )
 
 
+HEZAREH_CONNECTOR_KEYS = frozenset({"hezareh_tenders", "hezareh_inquiries"})
+PARSNAMAD_INQUIRY_CONNECTOR_KEY = "parsnamad_inquiries"
+HEZAREH_PRESERVED_DETAIL_FIELDS = (
+    "description",
+    "conditions",
+    "employer",
+    "document_deadline_raw",
+    "opening_date_raw",
+    "announcement_round",
+    "notice_number",
+    "source_label",
+    "phone",
+    "fax",
+    "email",
+    "website",
+    "address",
+)
+PARSNAMAD_LIST_OWNED_DETAIL_FIELDS = frozenset(
+    {"title", "province", "published_raw", "detail_url", "source_record_id"}
+)
+
+
 def _record_error(
     run,
     connector,
@@ -50,11 +72,77 @@ def _safe_int(value, default=0):
         return default
 
 
+def _is_hezareh(connector: ProcurementConnector) -> bool:
+    return connector.key in HEZAREH_CONNECTOR_KEYS
+
+
+def _is_parsnamad_inquiry(connector: ProcurementConnector) -> bool:
+    return connector.key == PARSNAMAD_INQUIRY_CONNECTOR_KEY
+
+
+def _preserved_hezareh_detail(parsed, source_notice: SourceNotice | None) -> dict | None:
+    """Reuse prior enrichment without allowing stale detail to override fresh list fields."""
+    if source_notice is None:
+        return None
+    raw_payload = source_notice.raw_payload or {}
+    if not isinstance(raw_payload, dict):
+        return None
+    previous_detail = raw_payload.get("detail") or {}
+    if not isinstance(previous_detail, dict):
+        return None
+
+    preserved = {
+        key: previous_detail[key]
+        for key in HEZAREH_PRESERVED_DETAIL_FIELDS
+        if previous_detail.get(key) not in (None, "")
+    }
+    for key in ("title", "province", "published_raw", "deadline_raw"):
+        if not getattr(parsed, key, "") and previous_detail.get(key) not in (None, ""):
+            preserved[key] = previous_detail[key]
+    if previous_detail.get("detail_status"):
+        preserved["detail_status"] = previous_detail["detail_status"]
+    return preserved or None
+
+
+def _successful_parsnamad_detail(detail: dict | None) -> dict | None:
+    """Keep successful rich detail while making fresh list identity fields authoritative."""
+    if not isinstance(detail, dict) or detail.get("detail_status") != "enriched":
+        return None
+    preserved = {
+        key: value
+        for key, value in detail.items()
+        if key not in PARSNAMAD_LIST_OWNED_DETAIL_FIELDS
+    }
+    return preserved or None
+
+
+def _preserved_parsnamad_detail(source_notice: SourceNotice | None) -> dict | None:
+    if source_notice is None:
+        return None
+    raw_payload = source_notice.raw_payload or {}
+    if not isinstance(raw_payload, dict):
+        return None
+    return _successful_parsnamad_detail(raw_payload.get("detail"))
+
+
 def _content_retry_settings(source: ProcurementSource) -> tuple[int, int]:
     configuration = source.configuration or {}
     retry_count = _safe_int(configuration.get("content_retry_count"), 2)
     retry_delay_ms = _safe_int(configuration.get("content_retry_delay_ms"), 1200)
     return max(0, min(retry_count, 3)), max(0, min(retry_delay_ms, 5000))
+
+
+def _hezareh_detail_enrichment_limit(source: ProcurementSource) -> int:
+    configured = _safe_int((source.configuration or {}).get("hezareh_detail_enrichment_limit"), 10)
+    return max(0, min(configured, 20))
+
+
+def _parsnamad_detail_enrichment_limit(source: ProcurementSource) -> int:
+    configured = _safe_int(
+        (source.configuration or {}).get("parsnamad_inquiry_detail_enrichment_limit"),
+        10,
+    )
+    return max(0, min(configured, 20))
 
 
 def _list_page_url(connector: ProcurementConnector, page_number: int) -> str:
@@ -141,7 +229,10 @@ def _fetch_and_parse_with_content_retries(
         if attempt <= retry_count:
             if retry_delay_ms:
                 time.sleep(retry_delay_ms / 1000)
-            fetcher = fetcher_for(connector, allowed_host=allowed_host)
+            # Hezareh relies on ordinary cookie/session continuity. Retrying the
+            # same list request must not create a brand-new public session.
+            if not _is_hezareh(connector):
+                fetcher = fetcher_for(connector, allowed_host=allowed_host)
 
     if last_fetch_error is not None:
         raise last_fetch_error
@@ -192,13 +283,232 @@ def _date_policy(run: ExtractionRun, connector: ProcurementConnector):
     return False, None, "incremental_known_boundary"
 
 
-def _execute_connector(run: ExtractionRun, connector: ProcurementConnector) -> dict:
+def _enrich_hezareh_details_after_list(
+    *,
+    run: ExtractionRun,
+    connector: ProcurementConnector,
+    parser,
+    allowed_host: str,
+    candidates: list[tuple[object, int]],
+    summary: dict,
+):
+    """Enrich a bounded set only after list completeness is established.
+
+    Hezareh detail pages may present an ordinary security challenge. Detail
+    enrichment therefore uses a separate public session and never controls list
+    completeness. A challenge stops the enrichment phase without rewriting the
+    already captured list record or prior enriched semantics.
+    """
+    summary["detail_candidates"] = len(candidates)
+    limit = _hezareh_detail_enrichment_limit(connector.source)
+    selected = candidates[:limit]
+    summary["detail_deferred"] += max(0, len(candidates) - len(selected))
+    if not selected:
+        return
+
+    detail_fetcher = fetcher_for(connector, allowed_host=allowed_host)
+    delay_ms = _safe_int((connector.source.configuration or {}).get("detail_delay_ms"), 500)
+    for index, (parsed, page_number) in enumerate(selected):
+        summary["detail_attempted"] += 1
+        try:
+            detail_page = detail_fetcher.fetch_detail(parsed.detail_url)
+            detail = parser.parse_detail(detail_page.text)
+        except SourceFetchError as exc:
+            summary["warnings"] += 1
+            summary["detail_failed"] += 1
+            _record_error(
+                run,
+                connector,
+                category=exc.category,
+                message="صفحه جزئیات هزاره دریافت نشد؛ رکورد فهرست و اطلاعات غنی‌شده قبلی حفظ شد.",
+                retryable=exc.retryable,
+                url=parsed.detail_url,
+                page_number=page_number,
+                details={"status_code": exc.status_code, "exception": exc.__class__.__name__},
+            )
+            continue
+        except Exception as exc:
+            summary["warnings"] += 1
+            summary["detail_failed"] += 1
+            _record_error(
+                run,
+                connector,
+                category=ExtractionError.Category.PARSE,
+                message="صفحه جزئیات هزاره پردازش نشد؛ رکورد فهرست و اطلاعات غنی‌شده قبلی حفظ شد.",
+                retryable=False,
+                url=parsed.detail_url,
+                page_number=page_number,
+                details={"exception": exc.__class__.__name__},
+            )
+            continue
+
+        if detail.get("detail_status") == "security_challenge":
+            summary["warnings"] += 1
+            summary["detail_access_limited"] += 1
+            summary["detail_deferred"] += max(0, len(selected) - index - 1)
+            _record_error(
+                run,
+                connector,
+                category=ExtractionError.Category.SECURITY_CHALLENGE,
+                message="جزئیات هزاره با کد امنیتی محدود شد؛ پیمایش فهرست کامل باقی ماند و داده قبلی بازنویسی نشد.",
+                retryable=True,
+                url=parsed.detail_url,
+                page_number=page_number,
+                details={"detail_policy": "deferred_after_list_boundary"},
+            )
+            break
+
+        if detail.get("detail_status") != "enriched":
+            summary["warnings"] += 1
+            summary["detail_failed"] += 1
+            continue
+
+        try:
+            ingest_parsed_notice(
+                connector,
+                parsed,
+                detail=detail,
+                run=None,
+                page_number=page_number,
+            )
+            summary["detail_enriched"] += 1
+        except Exception as exc:
+            summary["warnings"] += 1
+            summary["detail_failed"] += 1
+            _record_error(
+                run,
+                connector,
+                category=ExtractionError.Category.UNEXPECTED,
+                message="جزئیات هزاره دریافت شد اما به‌روزرسانی غنی‌سازی ناموفق بود؛ داده فهرست حفظ شد.",
+                retryable=True,
+                url=parsed.detail_url or "",
+                page_number=page_number,
+                details={"exception": exc.__class__.__name__, "source_record_id": parsed.source_record_id},
+            )
+
+        if delay_ms > 0:
+            time.sleep(min(delay_ms, 2000) / 1000)
+
+
+def _enrich_parsnamad_details_after_list(
+    *,
+    run: ExtractionRun,
+    connector: ProcurementConnector,
+    parser,
+    allowed_host: str,
+    candidates: list[tuple[object, int]],
+    summary: dict,
+):
+    """Bound Parsnamad inquiry detail calls to NEW/UPDATED rows after list discovery."""
+    summary["detail_candidates"] = len(candidates)
+    limit = _parsnamad_detail_enrichment_limit(connector.source)
+    selected = candidates[:limit]
+    summary["detail_deferred"] += max(0, len(candidates) - len(selected))
+    if not selected:
+        return
+
+    detail_fetcher = fetcher_for(connector, allowed_host=allowed_host)
+    delay_ms = _safe_int((connector.source.configuration or {}).get("detail_delay_ms"), 250)
+    for parsed, page_number in selected:
+        summary["detail_attempted"] += 1
+        try:
+            detail_page = detail_fetcher.fetch_detail(parsed.detail_url)
+            parsed_detail = parser.parse_detail(detail_page.text)
+        except SourceFetchError as exc:
+            summary["warnings"] += 1
+            summary["detail_failed"] += 1
+            _record_error(
+                run,
+                connector,
+                category=exc.category,
+                message="صفحه جزئیات پارس‌نماد دریافت نشد؛ داده فهرست و جزئیات موفق قبلی حفظ شد.",
+                retryable=exc.retryable,
+                url=parsed.detail_url,
+                page_number=page_number,
+                details={"status_code": exc.status_code, "exception": exc.__class__.__name__},
+            )
+            continue
+        except Exception as exc:
+            summary["warnings"] += 1
+            summary["detail_failed"] += 1
+            _record_error(
+                run,
+                connector,
+                category=ExtractionError.Category.PARSE,
+                message="صفحه جزئیات پارس‌نماد پردازش نشد؛ داده فهرست و جزئیات موفق قبلی حفظ شد.",
+                retryable=False,
+                url=parsed.detail_url,
+                page_number=page_number,
+                details={"exception": exc.__class__.__name__},
+            )
+            continue
+
+        detail = _successful_parsnamad_detail(parsed_detail)
+        if detail is None:
+            summary["warnings"] += 1
+            summary["detail_failed"] += 1
+            _record_error(
+                run,
+                connector,
+                category=ExtractionError.Category.PARSE,
+                message="جزئیات پارس‌نماد غنی‌سازی معتبر نداشت؛ داده فهرست و جزئیات موفق قبلی حفظ شد.",
+                retryable=True,
+                url=parsed.detail_url,
+                page_number=page_number,
+                details={"detail_status": parsed_detail.get("detail_status") if isinstance(parsed_detail, dict) else None},
+            )
+            continue
+
+        try:
+            ingest_parsed_notice(
+                connector,
+                parsed,
+                detail=detail,
+                run=None,
+                page_number=page_number,
+            )
+            summary["detail_enriched"] += 1
+        except Exception as exc:
+            summary["warnings"] += 1
+            summary["detail_failed"] += 1
+            _record_error(
+                run,
+                connector,
+                category=ExtractionError.Category.UNEXPECTED,
+                message="جزئیات پارس‌نماد دریافت شد اما به‌روزرسانی غنی‌سازی ناموفق بود؛ داده قبلی حفظ شد.",
+                retryable=True,
+                url=parsed.detail_url or "",
+                page_number=page_number,
+                details={"exception": exc.__class__.__name__, "source_record_id": parsed.source_record_id},
+            )
+
+        if delay_ms > 0:
+            time.sleep(min(delay_ms, 2000) / 1000)
+
+
+def _execute_connector(
+    run: ExtractionRun,
+    connector: ProcurementConnector,
+    *,
+    hezareh_detail_jobs: list[dict] | None = None,
+) -> dict:
     source = connector.source
     allowed_host = urlparse(source.base_url).hostname or ""
     parser = parser_for(connector.key, source.base_url, connector.notice_type)
     fetcher = fetcher_for(connector, allowed_host=allowed_host)
     page_cap = min(run.page_cap or connector.max_pages, connector.max_pages)
     first_run, cutoff_date, policy = _date_policy(run, connector)
+    hezareh_deferred_details = bool(
+        _is_hezareh(connector)
+        and run.include_details
+        and connector.supports_detail
+    )
+    parsnamad_deferred_details = bool(
+        _is_parsnamad_inquiry(connector)
+        and run.include_details
+        and connector.supports_detail
+    )
+    deferred_details = hezareh_deferred_details or parsnamad_deferred_details
     summary = {
         "status": "succeeded",
         "mode": run.mode,
@@ -216,6 +526,7 @@ def _execute_connector(run: ExtractionRun, connector: ProcurementConnector) -> d
         "warnings": 0,
         "requested_page_cap": page_cap,
         "reported_total_pages": None,
+        "reported_total_pages_source": "unknown",
         "last_successful_page": None,
         "stop_reason": "",
         "completeness": "unknown",
@@ -223,9 +534,18 @@ def _execute_connector(run: ExtractionRun, connector: ProcurementConnector) -> d
         "recovered_pages": [],
         "suspicious_pages": [],
         "known_boundary_pages": 0,
+        "detail_policy": "deferred_after_list_boundary" if deferred_details else "inline",
+        "detail_candidates": 0,
+        "detail_attempted": 0,
+        "detail_enriched": 0,
+        "detail_access_limited": 0,
+        "detail_failed": 0,
+        "detail_deferred": 0,
     }
     previous_record_ids: tuple[str, ...] | None = None
     consecutive_known_pages = 0
+    hezareh_detail_candidates: list[tuple[object, int]] = []
+    parsnamad_detail_candidates: list[tuple[object, int]] = []
 
     for page_number in range(1, page_cap + 1):
         page_url = _list_page_url(connector, page_number)
@@ -302,10 +622,13 @@ def _execute_connector(run: ExtractionRun, connector: ProcurementConnector) -> d
             summary["warnings"] += 1
 
         if parsed_page.reported_total_pages is not None:
-            summary["reported_total_pages"] = max(
-                summary["reported_total_pages"] or 0,
-                parsed_page.reported_total_pages,
-            )
+            total_source = str((parsed_page.diagnostics or {}).get("reported_total_pages_source") or "unknown")
+            if total_source == "source_report" or summary["reported_total_pages_source"] != "source_report":
+                summary["reported_total_pages"] = max(
+                    summary["reported_total_pages"] or 0,
+                    parsed_page.reported_total_pages,
+                )
+                summary["reported_total_pages_source"] = total_source
 
         original_notices = list(parsed_page.notices)
         record_ids = tuple(notice.source_record_id for notice in original_notices)
@@ -352,10 +675,29 @@ def _execute_connector(run: ExtractionRun, connector: ProcurementConnector) -> d
                     parse_status=ExtractionPage.ParseStatus.SUCCEEDED,
                 )
                 break
+
+            diagnostics = parsed_page.diagnostics or {}
+            security_challenge = bool(diagnostics.get("security_challenge"))
+            error_code = "security_challenge" if security_challenge else "unexpected_empty_page"
+            error_category = (
+                ExtractionError.Category.SECURITY_CHALLENGE
+                if security_challenge
+                else ExtractionError.Category.VALIDATION
+            )
+            error_message = (
+                "فهرست هزاره با کد امنیتی/صفحه میانی محدود شد؛ استخراج بدون دورزدن کنترل امنیتی ناقص متوقف شد."
+                if security_challenge
+                else "صفحه بدون رکورد بود اما پایان واقعی فهرست تأیید نشد."
+            )
+            safe_message = (
+                "فهرست هزاره با کنترل امنیتی محدود شد؛ استخراج به‌صورت fail-closed ناقص متوقف شد."
+                if security_challenge
+                else "صفحه خالی غیرمنتظره دریافت شد و کامل‌بودن استخراج قابل تأیید نیست."
+            )
             summary["warnings"] += 1
             summary["status"] = "partial"
             summary["completeness"] = "incomplete"
-            summary["stop_reason"] = "unexpected_empty_page"
+            summary["stop_reason"] = error_code
             summary["suspicious_pages"].append(page_number)
             _create_page_record(
                 run=run,
@@ -364,18 +706,18 @@ def _execute_connector(run: ExtractionRun, connector: ProcurementConnector) -> d
                 fetched=fetched,
                 parsed_page=parsed_page,
                 parse_status=ExtractionPage.ParseStatus.WARNING,
-                error_code="unexpected_empty_page",
-                error_message="صفحه بدون رکورد بود اما پایان واقعی فهرست تأیید نشد.",
+                error_code=error_code,
+                error_message=error_message,
             )
             _record_error(
                 run,
                 connector,
-                category=ExtractionError.Category.VALIDATION,
-                message="صفحه خالی غیرمنتظره دریافت شد و کامل‌بودن استخراج قابل تأیید نیست.",
+                category=error_category,
+                message=safe_message,
                 retryable=True,
                 url=fetched.url,
                 page_number=page_number,
-                details={"attempts": attempts, "parser_diagnostics": parsed_page.diagnostics},
+                details={"attempts": attempts, "parser_diagnostics": diagnostics},
             )
             break
 
@@ -431,10 +773,21 @@ def _execute_connector(run: ExtractionRun, connector: ProcurementConnector) -> d
         summary["seen"] += len(selected_notices)
         summary["warnings"] += len(parsed_page.warnings)
 
+        existing_by_record_id = {
+            item.source_record_id: item
+            for item in SourceNotice.objects.filter(
+                connector=connector,
+                source_record_id__in=[parsed.source_record_id for parsed in selected_notices],
+            )
+        }
         page_counts = {"new": 0, "updated": 0, "duplicate": 0, "failed": 0}
         for parsed in selected_notices:
             detail = None
-            if run.include_details and connector.supports_detail and parsed.detail_url:
+            if hezareh_deferred_details:
+                detail = _preserved_hezareh_detail(parsed, existing_by_record_id.get(parsed.source_record_id))
+            elif parsnamad_deferred_details:
+                detail = _preserved_parsnamad_detail(existing_by_record_id.get(parsed.source_record_id))
+            elif run.include_details and connector.supports_detail and parsed.detail_url:
                 try:
                     detail_page = fetcher.fetch_detail(parsed.detail_url)
                     detail = parser.parse_detail(detail_page.text)
@@ -471,7 +824,7 @@ def _execute_connector(run: ExtractionRun, connector: ProcurementConnector) -> d
                     )
 
             try:
-                _, _, item_status = ingest_parsed_notice(
+                source_notice, _, item_status = ingest_parsed_notice(
                     connector,
                     parsed,
                     detail=detail,
@@ -480,6 +833,18 @@ def _execute_connector(run: ExtractionRun, connector: ProcurementConnector) -> d
                 )
                 summary[item_status] += 1
                 page_counts[item_status] += 1
+                if (
+                    hezareh_deferred_details
+                    and parsed.detail_url
+                    and item_status in {ExtractionRunItem.Status.NEW, ExtractionRunItem.Status.UPDATED}
+                ):
+                    hezareh_detail_candidates.append((parsed, page_number))
+                if (
+                    parsnamad_deferred_details
+                    and parsed.detail_url
+                    and item_status in {ExtractionRunItem.Status.NEW, ExtractionRunItem.Status.UPDATED}
+                ):
+                    parsnamad_detail_candidates.append((parsed, page_number))
             except Exception as exc:
                 summary["failed"] += 1
                 page_counts["failed"] += 1
@@ -514,7 +879,9 @@ def _execute_connector(run: ExtractionRun, connector: ProcurementConnector) -> d
                 summary["known_boundary_pages"] = consecutive_known_pages
             else:
                 consecutive_known_pages = 0
-            if consecutive_known_pages >= 2:
+            if consecutive_known_pages >= 2 and (
+                connector.key != "hezareh_inquiries" or page_number >= 3
+            ):
                 summary["completeness"] = "complete"
                 summary["stop_reason"] = "known_data_boundary_reached"
                 break
@@ -525,19 +892,72 @@ def _execute_connector(run: ExtractionRun, connector: ProcurementConnector) -> d
             break
     else:
         reported_total = summary["reported_total_pages"]
-        if reported_total is not None and page_cap < reported_total:
+        authoritative_total = (
+            reported_total
+            if summary["reported_total_pages_source"] == "source_report"
+            else None
+        )
+        if authoritative_total is not None and page_cap < authoritative_total:
             summary["status"] = "succeeded_with_warnings"
             summary["warnings"] += 1
             summary["completeness"] = "limited_by_page_cap"
             summary["stop_reason"] = "page_cap_before_reported_end"
-        elif reported_total is None:
+        elif authoritative_total is None:
             summary["status"] = "succeeded_with_warnings"
             summary["warnings"] += 1
             summary["completeness"] = "page_cap_reached_unverified"
-            summary["stop_reason"] = "page_cap_reached_without_total"
+            summary["stop_reason"] = "page_cap_reached_without_authoritative_total"
         else:
             summary["completeness"] = "complete"
             summary["stop_reason"] = "page_cap_reached_at_reported_end"
+
+    if (
+        hezareh_deferred_details
+        and hezareh_detail_candidates
+        and summary["completeness"] == "complete"
+        and summary["status"] not in {"failed", "partial"}
+    ):
+        if hezareh_detail_jobs is not None:
+            summary["detail_candidates"] = len(hezareh_detail_candidates)
+            hezareh_detail_jobs.append(
+                {
+                    "connector": connector,
+                    "parser": parser,
+                    "allowed_host": allowed_host,
+                    "candidates": list(hezareh_detail_candidates),
+                    "summary": summary,
+                }
+            )
+        else:
+            _enrich_hezareh_details_after_list(
+                run=run,
+                connector=connector,
+                parser=parser,
+                allowed_host=allowed_host,
+                candidates=hezareh_detail_candidates,
+                summary=summary,
+            )
+    elif hezareh_deferred_details and hezareh_detail_candidates:
+        summary["detail_candidates"] = len(hezareh_detail_candidates)
+        summary["detail_deferred"] += len(hezareh_detail_candidates)
+
+    if (
+        parsnamad_deferred_details
+        and parsnamad_detail_candidates
+        and summary["completeness"] == "complete"
+        and summary["status"] not in {"failed", "partial"}
+    ):
+        _enrich_parsnamad_details_after_list(
+            run=run,
+            connector=connector,
+            parser=parser,
+            allowed_host=allowed_host,
+            candidates=parsnamad_detail_candidates,
+            summary=summary,
+        )
+    elif parsnamad_deferred_details and parsnamad_detail_candidates:
+        summary["detail_candidates"] = len(parsnamad_detail_candidates)
+        summary["detail_deferred"] += len(parsnamad_detail_candidates)
 
     if summary["status"] == "succeeded" and summary["warnings"]:
         summary["status"] = "succeeded_with_warnings"
@@ -555,10 +975,33 @@ def run_extraction(run_id: str) -> dict:
     connectors = list(run.connectors.select_related("source").all())
     runnable = [connector for connector in connectors if connector.enabled and connector.source.enabled]
     skipped = [connector.key for connector in connectors if connector not in runnable]
+    hezareh_detail_jobs: list[dict] = []
 
     for connector in runnable:
-        summary = _execute_connector(run, connector)
+        summary = _execute_connector(
+            run,
+            connector,
+            hezareh_detail_jobs=hezareh_detail_jobs,
+        )
         summaries[connector.key] = summary
+
+    # Hezareh detail access can trigger source-side security limits. Keep list
+    # discovery globally first so no detail request can prevent a later Hezareh
+    # tender/inquiry connector from reaching its list boundary.
+    for job in hezareh_detail_jobs:
+        _enrich_hezareh_details_after_list(
+            run=run,
+            connector=job["connector"],
+            parser=job["parser"],
+            allowed_host=job["allowed_host"],
+            candidates=job["candidates"],
+            summary=job["summary"],
+        )
+        if job["summary"]["status"] == "succeeded" and job["summary"]["warnings"]:
+            job["summary"]["status"] = "succeeded_with_warnings"
+
+    for connector in runnable:
+        summary = summaries[connector.key]
         now = timezone.now()
         if summary["status"] in {"failed", "partial"}:
             connector.status = ProcurementConnector.Status.ERROR

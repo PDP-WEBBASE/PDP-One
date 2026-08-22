@@ -22,6 +22,9 @@ class DeploymentQueueTests(unittest.TestCase):
         os.environ["PDP_QUEUE_LOW_SPACE_BYTES"] = str(512 * 1024)
         import deployment_queue
         self.queue = importlib.reload(deployment_queue)
+        # This test class verifies the low-level HMAC queue itself. V3 policy
+        # routing has dedicated end-to-end tests in test_promotion_control_v3.
+        self.queue._promotion_v3 = lambda: None
 
     def tearDown(self):
         self.temp.cleanup()

@@ -64,10 +64,14 @@ test('normal operations remain bounded and sensitive identities are preserved', 
   assert.doesNotMatch(maintenance, /Test-Path\s+-LiteralPath\s+\(\[string\]\$deploymentState\.backup_path\)/);
 });
 
-test('exact-release health self-registers and acceptance-checks the fixed Agent watchdog', () => {
-  assert.match(scopedHealth, /Ensure-PDPOneDeploymentAgentWatchdogAcceptance/);
+test('exact-release health self-registers, windowless-checks and acceptance-checks the fixed Agent watchdog', () => {
+  assert.match(scopedHealth, /Ensure-PDPOneWindowlessTaskAcceptance/);
   assert.match(scopedHealth, /Register-PDPOneStartupTask\.ps1/);
+  assert.match(scopedHealth, /PDP One Local Deployment Agent/);
   assert.match(scopedHealth, /PDP One Deployment Agent Watchdog/);
+  assert.match(scopedHealth, /Assert-PDPOneScheduledTaskWindowless/);
+  assert.match(scopedHealth, /Test-PDPOneScheduledTaskWindowless/);
+  assert.match(scopedHealth, /New-PDPOneHiddenPowerShellAction/);
   assert.match(scopedHealth, /Start-ScheduledTask -TaskName \$watchdogTaskName/);
   assert.match(scopedHealth, /deployment-agent-watchdog\.json/);
   assert.match(scopedHealth, /pdp-one\.deployment-agent-watchdog\.v1/);
@@ -75,6 +79,7 @@ test('exact-release health self-registers and acceptance-checks the fixed Agent 
   assert.match(scopedHealth, /PDP One Deployment Agent Watchdog Self Test/);
   assert.match(scopedHealth, /Register-ScheduledTask -TaskName \$selfTestTaskName/);
   assert.match(scopedHealth, /deployment-agent-watchdog-selftest-v1\.accepted/);
+  assert.doesNotMatch(scopedHealth, /New-ScheduledTaskAction\s+-Execute\s+"powershell\.exe"/i);
   assert.doesNotMatch(scopedHealth, /Invoke-Expression|\biex\b|cmd\.exe\s+\/c/i);
 });
 
@@ -93,18 +98,18 @@ test('watchdog self-test is bounded, lane-aware and fails safe', () => {
   assert.doesNotMatch(watchdogSelfTest, /docker\s+(?:volume|system)\s+prune|tailscale\s+logout|Remove-Item[^\n]+\.env/i);
 });
 
-test('steady-state compatibility protects the autonomous deployment agent', () => {
+test('steady-state compatibility protects all nine bootstrap files', () => {
   assert.equal(contract.schema, 'pdp-one.deployment-agent-compatibility.v1');
   assert.equal(contract.protocol_version, 1);
   assert.equal(Object.hasOwn(contract, 'migration_stage'), false);
   assert.equal(Object.hasOwn(contract, 'migration_note'), false);
-  const files = contract.bootstrap_files.map((entry) => entry.agent_file);
-  assert.equal(files.includes('Deployment-Agent.Standard.ps1'), true);
-  assert.deepEqual(files.sort(), [
+  const files = contract.bootstrap_files.map((entry) => entry.agent_file).sort();
+  assert.deepEqual(files, [
     'Deployment-Agent.Standard.ps1',
     'Invoke-PDPOneDeployment.ps1',
     'Invoke-PDPOneManagedFastDeployment.ps1',
     'Invoke-PDPOneScopedRegistryDeployment.ps1',
+    'Invoke-PDPOneExactAgentReconciliation.ps1',
     'PDPOne.Common.ps1',
     'PDPOne.OperationLock.ps1',
     'PDPOne.ReleaseManifest.ps1',
