@@ -1,6 +1,6 @@
 from datetime import timedelta
 
-from django.db.models import Count
+from django.db.models import Count, Q
 from django.utils import timezone
 from rest_framework import mixins, status
 from rest_framework.decorators import action
@@ -63,7 +63,7 @@ class DirectOpportunityViewSet(
     ]
     filterset_fields = [
         "opportunity_type", "stage", "responsible", "province", "probability",
-        "importance", "confidentiality",
+        "confidentiality",
     ]
     ordering_fields = [
         "next_action_due", "last_activity_at", "created_at", "updated_at",
@@ -94,11 +94,19 @@ class DirectOpportunityViewSet(
         elif workflow_view == "active":
             queryset = queryset.filter(stage__in=DIRECT_ACTIVE_STAGES)
 
-        queryset = _filter_deadline_urgency(
-            queryset,
-            "next_action_due",
-            params.get("urgency", "").strip(),
-        )
+        importance = [value for raw in params.getlist("importance") for value in raw.split(",") if value]
+        if importance:
+            queryset = queryset.filter(importance__in=importance)
+
+        urgencies = [value for raw in params.getlist("urgency") for value in raw.split(",") if value]
+        if len(urgencies) == 1:
+            queryset = _filter_deadline_urgency(queryset, "next_action_due", urgencies[0].strip())
+        elif urgencies:
+            urgency_query = Q()
+            for urgency in urgencies:
+                urgency_ids = _filter_deadline_urgency(queryset, "next_action_due", urgency.strip()).values("pk")
+                urgency_query |= Q(pk__in=urgency_ids)
+            queryset = queryset.filter(urgency_query)
         return queryset
 
     def get_serializer_class(self):

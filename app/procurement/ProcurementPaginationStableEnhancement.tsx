@@ -38,6 +38,13 @@ type PaginationWindow = Window & {
   __pdpStableListCache?: Map<string, CachedPage>;
   __pdpCompactDeadlineStatus?: string;
   __pdpCompactPublishedOn?: string;
+  __pdpV9Sources?: string[];
+  __pdpV9Importance?: string[];
+  __pdpV9Urgency?: string[];
+  __pdpV9DeadlineStatuses?: string[];
+  __pdpV9PublishedFrom?: string;
+  __pdpV9PublishedTo?: string;
+  __pdpV9OpportunityTypes?: string[];
 };
 
 const API_PREFIX = "/api/v1/procurement/";
@@ -87,13 +94,16 @@ function currentFilters() {
   const guarded = window as PaginationWindow;
   return {
     search: fieldValue("جست‌وجو"),
-    source: fieldValue("منبع"),
+    sources: guarded.__pdpV9Sources || (fieldValue("منبع") ? [fieldValue("منبع")] : []),
     province: fieldValue("استان"),
-    importance: fieldValue("اهمیت"),
-    urgency: fieldValue("فوریت"),
+    importance: guarded.__pdpV9Importance || (fieldValue("اهمیت") ? [fieldValue("اهمیت")] : []),
+    urgency: guarded.__pdpV9Urgency || (fieldValue("فوریت") ? [fieldValue("فوریت")] : []),
     directType: fieldValue("نوع ارجاع"),
-    deadlineStatus: guarded.__pdpCompactDeadlineStatus || "",
+    deadlineStatuses: guarded.__pdpV9DeadlineStatuses || (guarded.__pdpCompactDeadlineStatus ? [guarded.__pdpCompactDeadlineStatus] : []),
     publishedOn: guarded.__pdpCompactPublishedOn || "",
+    publishedFrom: guarded.__pdpV9PublishedFrom || "",
+    publishedTo: guarded.__pdpV9PublishedTo || "",
+    opportunityTypes: guarded.__pdpV9OpportunityTypes || [],
   };
 }
 
@@ -170,12 +180,15 @@ function workflowCode(workflow: ProcurementStableViewState["workflow"]) {
 
 function addFilters(params: URLSearchParams, filters: ReturnType<typeof currentFilters>) {
   if (filters.search) params.set("search", filters.search);
-  if (filters.source) params.set("source_name", filters.source);
+  filters.sources.forEach((value) => params.append("source_name", value));
   if (filters.province) params.set("province", filters.province);
-  if (filters.importance) params.set("importance", filters.importance);
-  if (filters.urgency) params.set("urgency", filters.urgency);
-  if (filters.deadlineStatus) params.set("deadline_status", filters.deadlineStatus);
-  if (filters.publishedOn) params.set("published_on", filters.publishedOn);
+  filters.importance.forEach((value) => params.append("importance", value));
+  filters.urgency.forEach((value) => params.append("urgency", value));
+  filters.deadlineStatuses.forEach((value) => params.append("deadline_status", value));
+  if (filters.publishedOn && !filters.publishedFrom && !filters.publishedTo) params.set("published_on", filters.publishedOn);
+  if (filters.publishedFrom) params.set("published_from", filters.publishedFrom);
+  if (filters.publishedTo) params.set("published_to", filters.publishedTo);
+  filters.opportunityTypes.forEach((value) => params.append("business_opportunity_type", value));
 }
 
 function normalizeCompactPayload(payload: PaginatedPayload, state: ProcurementStableViewState) {
@@ -285,8 +298,8 @@ function installPaginationFetchGuard() {
       else if (state.workflow === "results") nextUrl.searchParams.set("workflow_view", "results");
       if (filters.search) nextUrl.searchParams.set("search", filters.search);
       if (filters.province) nextUrl.searchParams.set("province", filters.province);
-      if (filters.importance) nextUrl.searchParams.set("importance", filters.importance);
-      if (filters.urgency) nextUrl.searchParams.set("urgency", filters.urgency);
+      filters.importance.forEach((value) => nextUrl.searchParams.append("importance", value));
+      filters.urgency.forEach((value) => nextUrl.searchParams.append("urgency", value));
       if (filters.directType) nextUrl.searchParams.set("opportunity_type", filters.directType);
       nextUrl.searchParams.set("page", String(pageState.page));
       nextUrl.searchParams.set("page_size", String(pageState.pageSize));

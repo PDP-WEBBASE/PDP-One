@@ -41,6 +41,7 @@ const ROW_TOGGLE_EVENT = "pdp-procurement-v2-row-toggle";
 const BULK_HOST_ID = "pdp-procurement-v2-bulk-host";
 const OLD_BULK_HOST_ID = "pdp-procurement-ux-bulk-host";
 const FILTER_HOST_ID = "pdp-procurement-compact-filter-host";
+const V9_BULK_SLOT_ID = "pdp-procurement-v9-bulk-slot";
 const ACTION_ATTRIBUTE = "data-pdp-stable-workflow-action";
 const SUPPORTED_WORKFLOWS = new Set(["recent", "recommended", "selected", "submitted", "results"]);
 const fa = new Intl.NumberFormat("fa-IR");
@@ -63,6 +64,10 @@ function currentSection(state: ProcurementStableViewState) {
 }
 
 function findArticle(section: HTMLElement, item: NoticeRow) {
+  const identified = Array.from(section.querySelectorAll<HTMLElement>("article[data-pdp-notice-id]")).find(
+    (article) => article.dataset.pdpNoticeId === item.id,
+  );
+  if (identified) return identified;
   const title = normalize(item.title);
   const employer = normalize(item.employer_name);
   return Array.from(section.querySelectorAll<HTMLElement>("article")).find((article) => {
@@ -217,19 +222,17 @@ function syncFilterLayout(section: HTMLElement, bulkEnabled: boolean) {
   if (clearGroup) {
     clearGroup.classList.add("pdp-v2-clear-group");
     const count = clearGroup.querySelector<HTMLElement>("b");
-    if (count) {
-      const raw = normalize(count.textContent).replace(/^تعداد ردیف:\s*/, "");
-      count.textContent = raw ? `تعداد ردیف: ${raw}` : "تعداد ردیف: ۰";
-      count.classList.add("pdp-v2-row-count");
-    }
+    if (count) count.classList.add("pdp-v2-row-count");
   }
 
-  let host = filterBar.querySelector<HTMLElement>(`#${BULK_HOST_ID}`);
+  const v9Slot = section.querySelector<HTMLElement>(`#${V9_BULK_SLOT_ID}`);
+  let host = section.querySelector<HTMLElement>(`#${BULK_HOST_ID}`);
   if (!host) {
     host = document.createElement("div");
     host.id = BULK_HOST_ID;
-    filterBar.appendChild(host);
   }
+  const target = v9Slot || filterBar;
+  if (host.parentElement !== target) target.appendChild(host);
   host.style.display = bulkEnabled ? "block" : "none";
 
   const oldHost = section.querySelector<HTMLElement>(`#${OLD_BULK_HOST_ID}`) || document.getElementById(OLD_BULK_HOST_ID);
@@ -278,7 +281,6 @@ function BulkBar({
   const allSelected = pageIds.length > 0 && pageIds.every((id) => selectedIds.has(id));
   return <div className="pdp-v2-bulk-bar" dir="ltr">
     <label className="pdp-v2-select-all" dir="rtl"><input type="checkbox" checked={allSelected} disabled={!pageIds.length || busy} onChange={(event) => onTogglePage(event.target.checked)} />انتخاب همه این صفحه</label>
-    <span className="pdp-v2-selected-count" dir="rtl">{selectedIds.size ? `${fa.format(selectedIds.size)} مورد انتخاب شده` : "موردی انتخاب نشده"}</span>
     <button type="button" className="pdp-v2-bulk-remove" dir="rtl" disabled={!selectedIds.size || busy} onClick={onRemove}>{busy ? "در حال حذف..." : bulkButtonLabel(workflow)}</button>
     {message && <small className="pdp-v2-bulk-message" dir="rtl">{message}</small>}
   </div>;
