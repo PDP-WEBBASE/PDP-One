@@ -15,6 +15,20 @@ test("approved V9 enhancement mounts last over the preserved stable identity lay
   assert.doesNotMatch(ui, /MutationObserver|setInterval\s*\(/);
 });
 
+test("V9 wins the bounded UI sync race and re-homes bulk controls in the approved workflow row", () => {
+  assert.match(ui, /frame1\s*=\s*requestAnimationFrame[\s\S]*frame2\s*=\s*requestAnimationFrame\(sync\)/);
+  assert.match(ui, /BULK_HOST_ID\s*=\s*"pdp-procurement-v2-bulk-host"/);
+  assert.match(ui, /slot\.appendChild\(bulkHost\)/);
+  assert.match(ui, /align-items:flex-end!important;justify-content:space-between!important;gap:14px!important/);
+});
+
+test("V9 uses the approved exact filter and badge geometry instead of the earlier overlay dimensions", () => {
+  assert.match(ui, /grid-template-columns:minmax\(230px,1\.55fr\) repeat\(5,minmax\(108px,\.72fr\)\) minmax\(225px,1\.18fr\) auto!important/);
+  assert.match(ui, /min-height:34px!important;padding:5px 7px!important;font-size:11\.5px!important/);
+  assert.match(ui, /min-height:22px!important;padding:2px 8px!important;border-radius:999px!important/);
+  for (const tone of ["neutral", "danger", "high", "medium", "safe"]) assert.match(ui, new RegExp(`pdp-v9-${tone}`));
+});
+
 test("V9 exposes the approved opportunity labels without title-keyword inference", () => {
   for (const label of ["مشاوره", "EPC", "احداث", "نوع فرصت"]) assert.match(ui, new RegExp(label));
   assert.match(ui, /\["consulting", "epc"\]/);
