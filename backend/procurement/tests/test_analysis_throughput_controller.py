@@ -81,16 +81,19 @@ class AnalysisThroughputControllerTests(TestCase):
             created_by_label="test",
         )
 
-    def test_policy_targets_10k_at_40k_and_20k_at_50k(self):
+    def test_policy_caps_high_backlog_at_eight_lanes_times_1000_per_hour(self):
         at_40k = adaptive_throughput_policy(41404)
         at_50k = adaptive_throughput_policy(51000)
 
-        self.assertEqual(at_40k["target_per_hour"], 10000)
-        self.assertEqual(at_40k["desired_lanes"], 8)
-        self.assertEqual(at_40k["package_size"], 50)
-        self.assertEqual(at_40k["max_packages_per_lane"], 25)
-        self.assertEqual(at_50k["target_per_hour"], 20000)
-        self.assertEqual(at_50k["max_packages_per_lane"], 50)
+        for policy in (at_40k, at_50k):
+            self.assertEqual(policy["target_per_hour"], 8000)
+            self.assertEqual(policy["desired_lanes"], 8)
+            self.assertEqual(policy["package_size"], 50)
+            self.assertEqual(policy["micro_batch_size"], 50)
+            self.assertEqual(policy["claim_window_target_per_lane"], 1000)
+            self.assertEqual(policy["per_lane_hourly_ceiling"], 1000)
+            self.assertEqual(policy["max_packages_per_lane"], 20)
+            self.assertEqual(policy["planned_capacity_per_hour"], 8000)
 
     def test_backpressure_reduces_package_cycles_when_recent_leases_expire(self):
         policy = adaptive_throughput_policy(
@@ -100,7 +103,7 @@ class AnalysisThroughputControllerTests(TestCase):
         )
 
         self.assertEqual(policy["backpressure"], "degraded")
-        self.assertLess(policy["max_packages_per_lane"], 25)
+        self.assertLess(policy["max_packages_per_lane"], 20)
         self.assertEqual(policy["package_size"], 50)
 
     def test_exact_current_draft_skips_redundant_explicit_reanalysis_before_claim(self):
