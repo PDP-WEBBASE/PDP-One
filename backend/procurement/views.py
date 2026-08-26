@@ -3,8 +3,8 @@ from datetime import date, datetime, time, timedelta
 from django.db.models import Count, DateField, Q, Value
 from django.db.models.functions import Coalesce
 from django.utils import timezone
-from rest_framework import mixins, viewsets
-from rest_framework.decorators import api_view
+from rest_framework import mixins, status, viewsets
+from rest_framework.decorators import action, api_view
 from rest_framework.response import Response
 from rest_framework.viewsets import GenericViewSet
 
@@ -13,6 +13,11 @@ from core.models import AuditEvent
 from .models import ProcurementCase, ProcurementConnector, ProcurementNotice, ProcurementSource
 from .models_direct import DirectOpportunity
 from .models_extraction import ExtractionRun
+from .opportunity_types import (
+    HUMAN_SOURCE,
+    normalize_business_opportunity_type,
+    normalize_requested_business_opportunity_types,
+)
 from .permissions import IsSystemAdministratorOrReadOnly
 from .serializers import (
     ProcurementCaseSerializer,
@@ -143,12 +148,60 @@ class ProcurementNoticeViewSet(viewsets.ReadOnlyModelViewSet):
             "submission_deadline",
             params.get("urgency", "").strip(),
         )
+        requested_business_types = [
+            value.strip()
+            for raw in params.getlist("business_opportunity_type")
+            for value in str(raw).split(",")
+            if value.strip()
+        ]
+        if requested_business_types:
+            business_types, invalid_business_type = normalize_requested_business_opportunity_types(
+                requested_business_types
+            )
+            if invalid_business_type or not business_types:
+                queryset = queryset.none()
+            else:
+                queryset = queryset.filter(business_opportunity_type__in=business_types)
         return queryset
 
     def get_serializer_class(self):
         if self.action == "retrieve":
             return ProcurementNoticeDetailSerializer
         return ProcurementNoticeListSerializer
+
+    @action(detail=True, methods=["post"], url_path="business-opportunity-type")
+    def set_business_opportunity_type(self, request, pk=None):
+        notice = self.get_object()
+        raw_value = str(request.data.get("business_opportunity_type", "")).strip()
+        normalized_values, invalid = normalize_requested_business_opportunity_types([raw_value])
+        if invalid or len(normalized_values) != 1:
+            return Response(
+                {"business_opportunity_type": ["نوع فرصت معتبر نیست."]},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        before = notice.business_opportunity_type
+        notice.business_opportunity_type = normalize_business_opportunity_type(raw_value)
+        notice.business_opportunity_type_source = HUMAN_SOURCE
+        notice.business_opportunity_type_confidence = None
+        notice.business_opportunity_type_reason = str(
+            request.data.get("reason") or "نوع فرصت توسط کاربر تعیین شده است."
+        ).strip()[:1000]
+        notice.save(update_fields=[
+            "business_opportunity_type", "business_opportunity_type_source",
+            "business_opportunity_type_confidence", "business_opportunity_type_reason", "updated_at",
+        ])
+        AuditEvent.objects.create(
+            actor=request.user.username,
+            action="procurement.business_opportunity_type.set_human",
+            target_type="procurement_notice",
+            target_id=str(notice.id),
+            payload={
+                "before": before,
+                "after": notice.business_opportunity_type,
+                "source": HUMAN_SOURCE,
+            },
+        )
+        return Response(ProcurementNoticeDetailSerializer(notice, context={"request": request}).data)
 
 
 class TenderViewSet(ProcurementNoticeViewSet):

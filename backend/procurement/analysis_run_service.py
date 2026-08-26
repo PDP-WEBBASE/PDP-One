@@ -30,6 +30,16 @@ from .models_analysis_runs import (
     ProcurementAnalysisRun,
     ProcurementAnalysisRunItem,
 )
+from .opportunity_types import (
+    AI_DRAFT_SOURCE,
+    CONSULTING,
+    CONSTRUCTION,
+    EPC,
+    HUMAN_SOURCE,
+    UNASSIGNED_SOURCE,
+    UNCLASSIFIED,
+    classify_business_opportunity_type,
+)
 
 TERMINAL_ITEM_STATUSES = {
     ProcurementAnalysisRunItem.Status.COMPLETED,
@@ -394,6 +404,24 @@ def claim_run_items(run_id: str, *, worker_id: str, limit: int = 500, lease_seco
 
 
 COMPACT_CLAIM_SCHEMA = {
+    "business_opportunity_type_contract": {
+        "allowed": [CONSULTING, EPC, CONSTRUCTION, UNCLASSIFIED],
+        "labels": {
+            CONSULTING: "مشاوره",
+            EPC: "EPC",
+            CONSTRUCTION: "احداث",
+            UNCLASSIFIED: "نیازمند بررسی",
+        },
+        "required_result_fields": ["ot", "otr", "otc"],
+        "rules": [
+            "hot is an explicit human decision and must be preserved.",
+            "Use consulting for study, design, supervision, or management consulting scope.",
+            "Use epc only for combined engineering, procurement, and construction scope.",
+            "Use construction for execution or construction-only scope.",
+            "Use unclassified when evidence is missing, invalid, or ambiguous.",
+            "All classifications and recommendations remain AI Draft pending human review.",
+        ],
+    },
     "item": {
         "i": "run_item_id",
         "k": "claim_token",
@@ -421,6 +449,7 @@ COMPACT_CLAIM_SCHEMA = {
         "q": "qualification_text",
         "gg": "goods_group",
         "sg": "service_group",
+        "hot": "human_business_opportunity_type",
     },
     "result": {
         "i": "run_item_id",
@@ -445,6 +474,9 @@ COMPACT_CLAIM_SCHEMA = {
         "u": "urgency",
         "cd": "create_draft",
         "md": "model_label",
+        "ot": "business_opportunity_type",
+        "otr": "business_opportunity_type_reason",
+        "otc": "business_opportunity_type_confidence",
     },
 }
 
@@ -483,6 +515,11 @@ def _compact_basis(notice: ProcurementNotice) -> dict[str, Any]:
         "q": notice.qualification_text,
         "gg": goods_group,
         "sg": service_group,
+        "hot": (
+            notice.business_opportunity_type
+            if notice.business_opportunity_type_source == HUMAN_SOURCE
+            else None
+        ),
     }
     return {key: value for key, value in mapped.items() if value not in (None, "", [], {})}
 
@@ -548,6 +585,9 @@ _RESULT_KEY_MAP = {
     "u": "urgency",
     "cd": "create_draft",
     "md": "model_label",
+    "ot": "business_opportunity_type",
+    "otr": "business_opportunity_type_reason",
+    "otc": "business_opportunity_type_confidence",
     "rm": "result_metadata",
 }
 
@@ -564,8 +604,19 @@ def _should_create_draft(result: dict[str, Any]) -> bool:
     priority = str(result.get("priority") or "").strip().lower()
     screening_reason = str(result.get("screening_reason") or "").strip().lower()
     score = max(0, min(int(result.get("score", 0)), 100))
+    classification = classify_business_opportunity_type(
+        explicit=result.get("business_opportunity_type") or result.get("opportunity_type"),
+        explicit_confidence=result.get("business_opportunity_type_confidence"),
+        explicit_reason=result.get("business_opportunity_type_reason"),
+        evidence_values=(
+            result.get("category"), result.get("fit_for_pdp"), result.get("reason"),
+            result.get("recommended_action"), result.get("screening_reason"),
+        ),
+    )
+    explicit_type_contract = "business_opportunity_type" in result or "opportunity_type" in result
     material = bool(
         result.get("is_recommended")
+        or (explicit_type_contract and classification.value == UNCLASSIFIED)
         or result.get("missing_information")
         or priority in {"high", "urgent", "critical"}
         or screening_reason in {"ambiguous", "borderline", "needs_information", "needs_review"}
@@ -575,12 +626,35 @@ def _should_create_draft(result: dict[str, Any]) -> bool:
 
 
 def _draft_payload(result: dict[str, Any]) -> dict[str, Any]:
+    classification = classify_business_opportunity_type(
+        explicit=result.get("business_opportunity_type") or result.get("opportunity_type"),
+        explicit_confidence=result.get("business_opportunity_type_confidence"),
+        explicit_reason=result.get("business_opportunity_type_reason"),
+        evidence_values=(
+            result.get("category"),
+            result.get("fit_for_pdp"),
+            result.get("reason"),
+            result.get("recommended_action"),
+            result.get("screening_reason"),
+        ),
+    )
+    recommended = bool(result.get("is_recommended", False))
+    score = max(0, min(int(result.get("score", 0)), 100))
+    explicit_type_contract = "business_opportunity_type" in result or "opportunity_type" in result
+    if explicit_type_contract and classification.value == UNCLASSIFIED and recommended:
+        # A recommendation without a reviewable type cannot enter the recommended
+        # feed. It remains an AI Draft for human completion instead.
+        recommended = False
+        score = min(score, 59)
     return {
-        "is_recommended": bool(result.get("is_recommended", False)),
-        "score": max(0, min(int(result.get("score", 0)), 100)),
+        "is_recommended": recommended,
+        "score": score,
         "priority": str(result.get("priority", "medium")),
         "fit_for_pdp": str(result.get("fit_for_pdp", ""))[:5000],
         "category": str(result.get("category", ""))[:200],
+        "business_opportunity_type": classification.value,
+        "business_opportunity_type_confidence": classification.confidence,
+        "business_opportunity_type_reason": classification.reason[:1000],
         "reason": str(result.get("reason", ""))[:10000],
         "recommended_action": str(result.get("recommended_action", ""))[:5000],
         "matched_experience": list(result.get("matched_experience") or []),
@@ -713,11 +787,22 @@ def import_result_records(
                 "score": fields["score"],
                 "priority": fields["priority"],
                 "category": fields["category"],
+                "business_opportunity_type": fields["business_opportunity_type"],
+                "business_opportunity_type_confidence": (
+                    float(fields["business_opportunity_type_confidence"])
+                    if fields["business_opportunity_type_confidence"] is not None
+                    else None
+                ),
+                "business_opportunity_type_reason": fields["business_opportunity_type_reason"],
                 "fit_for_pdp": fields["fit_for_pdp"],
                 "reason": fields["reason"],
                 "recommended_action": fields["recommended_action"],
                 "confidence": fields["confidence"],
-                "screening_reason": result.get("screening_reason", ""),
+                "screening_reason": (
+                    "needs_review"
+                    if fields["business_opportunity_type"] == UNCLASSIFIED
+                    else result.get("screening_reason", "")
+                ),
                 "urgency": result.get("urgency", ""),
                 "analysis_mode": result.get("analysis_mode", "bulk_direct"),
                 "matched_qualifications": result.get("matched_qualifications") or [],
@@ -752,6 +837,19 @@ def import_result_records(
             item.updated_at = now
             pending_item_updates[str(item.id)] = item
             item.notice.processing_status = ProcurementNotice.ProcessingStatus.ANALYZED
+            if item.notice.business_opportunity_type_source != HUMAN_SOURCE:
+                item.notice.business_opportunity_type = fields["business_opportunity_type"]
+                item.notice.business_opportunity_type_source = (
+                    AI_DRAFT_SOURCE
+                    if fields["business_opportunity_type"] != UNCLASSIFIED
+                    else UNASSIGNED_SOURCE
+                )
+                item.notice.business_opportunity_type_confidence = fields[
+                    "business_opportunity_type_confidence"
+                ]
+                item.notice.business_opportunity_type_reason = fields[
+                    "business_opportunity_type_reason"
+                ]
             item.notice.updated_at = now
             pending_notice_updates[str(item.notice_id)] = item.notice
             counts["imported"] += 1
@@ -771,7 +869,11 @@ def import_result_records(
     if not dry_run and pending_notice_updates:
         ProcurementNotice.objects.bulk_update(
             list(pending_notice_updates.values()),
-            ["processing_status", "updated_at"],
+            [
+                "processing_status", "business_opportunity_type",
+                "business_opportunity_type_source", "business_opportunity_type_confidence",
+                "business_opportunity_type_reason", "updated_at",
+            ],
             batch_size=500,
         )
 

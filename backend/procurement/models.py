@@ -4,6 +4,13 @@ from django.conf import settings
 from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models
 
+from .opportunity_types import (
+    BUSINESS_OPPORTUNITY_TYPE_CHOICES,
+    BUSINESS_OPPORTUNITY_TYPE_SOURCE_CHOICES,
+    UNASSIGNED_SOURCE,
+    UNCLASSIFIED,
+)
+
 
 class TimestampedModel(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
@@ -186,6 +193,25 @@ class ProcurementNotice(TimestampedModel):
         default=ProcessingStatus.CAPTURED,
     )
     importance = models.CharField(max_length=16, choices=Importance.choices, default=Importance.MEDIUM)
+    business_opportunity_type = models.CharField(
+        max_length=20,
+        choices=BUSINESS_OPPORTUNITY_TYPE_CHOICES,
+        default=UNCLASSIFIED,
+        db_index=True,
+    )
+    business_opportunity_type_source = models.CharField(
+        max_length=24,
+        choices=BUSINESS_OPPORTUNITY_TYPE_SOURCE_CHOICES,
+        default=UNASSIGNED_SOURCE,
+    )
+    business_opportunity_type_confidence = models.DecimalField(
+        max_digits=5,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        validators=[MinValueValidator(0), MaxValueValidator(100)],
+    )
+    business_opportunity_type_reason = models.TextField(blank=True)
     is_recommended = models.BooleanField(default=False)
     is_hidden = models.BooleanField(default=False)
     retention_protected = models.BooleanField(default=False)

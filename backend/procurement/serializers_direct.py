@@ -6,6 +6,12 @@ from .models_direct import (
     OpportunityFollowUp,
     OpportunityResult,
 )
+from .opportunity_types import (
+    AUTOMATED_DRAFT_SOURCE,
+    HUMAN_SOURCE,
+    UNCLASSIFIED,
+    classify_business_opportunity_type,
+)
 
 
 class OpportunityContactSerializer(serializers.ModelSerializer):
@@ -61,6 +67,12 @@ class OpportunityResultSerializer(serializers.ModelSerializer):
 class DirectOpportunityListSerializer(serializers.ModelSerializer):
     reference_code = serializers.SerializerMethodField()
     opportunity_type_label = serializers.CharField(source="get_opportunity_type_display", read_only=True)
+    business_opportunity_type_label = serializers.CharField(
+        source="get_business_opportunity_type_display", read_only=True
+    )
+    business_opportunity_type_source_label = serializers.CharField(
+        source="get_business_opportunity_type_source_display", read_only=True
+    )
     stage_label = serializers.CharField(source="get_stage_display", read_only=True)
     probability_label = serializers.CharField(source="get_probability_display", read_only=True)
     importance_label = serializers.CharField(source="get_importance_display", read_only=True)
@@ -71,13 +83,19 @@ class DirectOpportunityListSerializer(serializers.ModelSerializer):
         model = DirectOpportunity
         fields = [
             "id", "reference_code", "title", "employer_name", "opportunity_type",
-            "opportunity_type_label", "stage", "stage_label", "responsible",
+            "opportunity_type_label", "business_opportunity_type",
+            "business_opportunity_type_label", "business_opportunity_type_source",
+            "business_opportunity_type_source_label", "business_opportunity_type_confidence",
+            "business_opportunity_type_reason", "stage", "stage_label", "responsible",
             "responsible_username", "next_action", "next_action_due", "domain", "province",
             "probability", "probability_label", "probability_percent", "importance",
             "importance_label", "last_activity_at", "follow_up_count", "created_at", "updated_at",
         ]
         read_only_fields = [
-            "id", "reference_code", "last_activity_at", "follow_up_count", "created_at", "updated_at",
+            "id", "reference_code", "business_opportunity_type_source",
+            "business_opportunity_type_source_label", "business_opportunity_type_confidence",
+            "business_opportunity_type_reason", "last_activity_at", "follow_up_count",
+            "created_at", "updated_at",
         ]
         extra_kwargs = {
             "title": {"required": False, "allow_blank": True, "default": ""},
@@ -103,6 +121,31 @@ class DirectOpportunityListSerializer(serializers.ModelSerializer):
         if value in terminal_stages:
             raise serializers.ValidationError("نتیجه نهایی باید از بخش ثبت نتیجه وارد شود.")
         return value
+
+    def _classify_business_type(self, validated_data):
+        if "business_opportunity_type" in self.initial_data:
+            validated_data["business_opportunity_type_source"] = HUMAN_SOURCE
+            validated_data["business_opportunity_type_confidence"] = None
+            validated_data["business_opportunity_type_reason"] = "نوع فرصت توسط کاربر تعیین شده است."
+            return validated_data
+
+        current = getattr(self.instance, "business_opportunity_type", UNCLASSIFIED)
+        if current != UNCLASSIFIED:
+            return validated_data
+        classification = classify_business_opportunity_type(
+            evidence_values=(
+                validated_data.get("title", getattr(self.instance, "title", "")),
+                validated_data.get("description", getattr(self.instance, "description", "")),
+                validated_data.get("domain", getattr(self.instance, "domain", "")),
+                validated_data.get("next_action", getattr(self.instance, "next_action", "")),
+            )
+        )
+        if classification.value != UNCLASSIFIED:
+            validated_data["business_opportunity_type"] = classification.value
+            validated_data["business_opportunity_type_source"] = AUTOMATED_DRAFT_SOURCE
+            validated_data["business_opportunity_type_confidence"] = classification.confidence
+            validated_data["business_opportunity_type_reason"] = classification.reason
+        return validated_data
 
 
 class DirectOpportunityDetailSerializer(DirectOpportunityListSerializer):
@@ -145,6 +188,7 @@ class DirectOpportunityDetailSerializer(DirectOpportunityListSerializer):
         return attrs
 
     def create(self, validated_data):
+        validated_data = self._classify_business_type(validated_data)
         contacts = validated_data.pop("contacts", [])
         opportunity = DirectOpportunity.objects.create(**validated_data)
         if contacts:
@@ -152,6 +196,7 @@ class DirectOpportunityDetailSerializer(DirectOpportunityListSerializer):
         return opportunity
 
     def update(self, instance, validated_data):
+        validated_data = self._classify_business_type(validated_data)
         contacts = validated_data.pop("contacts", None)
         instance = super().update(instance, validated_data)
         if contacts is not None:

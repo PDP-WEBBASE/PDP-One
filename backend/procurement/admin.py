@@ -9,6 +9,7 @@ from .models import (
     SourceNotice,
     SourceNoticeRevision,
 )
+from .opportunity_types import HUMAN_SOURCE
 
 
 @admin.register(ProcurementSource)
@@ -45,10 +46,17 @@ class SourceNoticeRevisionAdmin(admin.ModelAdmin):
 
 @admin.register(ProcurementNotice)
 class ProcurementNoticeAdmin(admin.ModelAdmin):
-    list_display = ("title", "resolved_notice_type", "employer_name", "submission_deadline", "processing_status", "is_recommended")
-    list_filter = ("resolved_notice_type", "type_resolution_status", "processing_status", "is_recommended", "retention_protected")
+    list_display = ("title", "resolved_notice_type", "business_opportunity_type", "employer_name", "submission_deadline", "processing_status", "is_recommended")
+    list_filter = ("resolved_notice_type", "business_opportunity_type", "business_opportunity_type_source", "type_resolution_status", "processing_status", "is_recommended", "retention_protected")
     search_fields = ("title", "normalized_title", "employer_name", "notice_number", "province")
     readonly_fields = ("id", "created_at", "updated_at", "first_seen_at", "last_seen_at")
+
+    def save_model(self, request, obj, form, change):
+        if "business_opportunity_type" in form.changed_data:
+            obj.business_opportunity_type_source = HUMAN_SOURCE
+            obj.business_opportunity_type_confidence = None
+            obj.business_opportunity_type_reason = "نوع فرصت توسط مدیر سامانه تعیین شده است."
+        super().save_model(request, obj, form, change)
 
 
 @admin.register(NoticeSourceLink)

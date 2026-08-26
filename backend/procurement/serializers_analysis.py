@@ -15,6 +15,13 @@ from .models_analysis import (
     NoticeAnalysisDraft,
 )
 from .models_extraction import ExtractionRun
+from .opportunity_types import (
+    AI_DRAFT_SOURCE,
+    HUMAN_SOURCE,
+    UNASSIGNED_SOURCE,
+    UNCLASSIFIED,
+    classify_business_opportunity_type,
+)
 
 
 class AnalysisContextAttachmentSerializer(serializers.ModelSerializer):
@@ -270,6 +277,9 @@ class NoticeAnalysisDraftSerializer(serializers.ModelSerializer):
     review_status_label = serializers.CharField(source="get_review_status_display", read_only=True)
     notice_title = serializers.CharField(source="notice.title", read_only=True)
     context_version = serializers.IntegerField(source="context_snapshot.version", read_only=True)
+    business_opportunity_type_label = serializers.CharField(
+        source="get_business_opportunity_type_display", read_only=True
+    )
 
     class Meta:
         model = NoticeAnalysisDraft
@@ -287,6 +297,10 @@ class NoticeAnalysisDraftSerializer(serializers.ModelSerializer):
             "priority_label",
             "fit_for_pdp",
             "category",
+            "business_opportunity_type",
+            "business_opportunity_type_label",
+            "business_opportunity_type_confidence",
+            "business_opportunity_type_reason",
             "reason",
             "recommended_action",
             "matched_experience",
@@ -326,6 +340,28 @@ class NoticeAnalysisDraftSerializer(serializers.ModelSerializer):
     def create(self, validated_data):
         notice = validated_data["notice"]
         batch = validated_data["batch"]
+        classification = classify_business_opportunity_type(
+            explicit=validated_data.get("business_opportunity_type"),
+            explicit_confidence=validated_data.get("business_opportunity_type_confidence"),
+            explicit_reason=validated_data.get("business_opportunity_type_reason"),
+            evidence_values=(
+                validated_data.get("category"),
+                validated_data.get("fit_for_pdp"),
+                validated_data.get("reason"),
+                validated_data.get("recommended_action"),
+                notice.title,
+                notice.summary,
+                notice.description,
+                notice.conditions,
+            ),
+        )
+        validated_data["business_opportunity_type"] = classification.value
+        validated_data["business_opportunity_type_confidence"] = classification.confidence
+        validated_data["business_opportunity_type_reason"] = classification.reason
+        explicit_type_contract = "business_opportunity_type" in self.initial_data
+        if explicit_type_contract and classification.value == UNCLASSIFIED and validated_data.get("is_recommended"):
+            validated_data["is_recommended"] = False
+            validated_data["score"] = min(int(validated_data.get("score", 0)), 59)
         basis_hash = notice_basis_hash(notice)
         existing = NoticeAnalysisDraft.objects.filter(
             notice=notice,
@@ -344,5 +380,17 @@ class NoticeAnalysisDraftSerializer(serializers.ModelSerializer):
         )
         notice.is_recommended = draft.is_recommended
         notice.processing_status = ProcurementNotice.ProcessingStatus.ANALYZED
-        notice.save(update_fields=["is_recommended", "processing_status", "updated_at"])
+        update_fields = ["is_recommended", "processing_status", "updated_at"]
+        if notice.business_opportunity_type_source != HUMAN_SOURCE:
+            notice.business_opportunity_type = classification.value
+            notice.business_opportunity_type_source = (
+                AI_DRAFT_SOURCE if classification.value != UNCLASSIFIED else UNASSIGNED_SOURCE
+            )
+            notice.business_opportunity_type_confidence = classification.confidence
+            notice.business_opportunity_type_reason = classification.reason
+            update_fields.extend([
+                "business_opportunity_type", "business_opportunity_type_source",
+                "business_opportunity_type_confidence", "business_opportunity_type_reason",
+            ])
+        notice.save(update_fields=update_fields)
         return draft

@@ -13,6 +13,7 @@ from procurement.analysis_run_service import (
 from procurement.models import ProcurementNotice
 from procurement.models_analysis import AnalysisContextSnapshot, NoticeAnalysisDraft
 from procurement.models_analysis_runs import ProcurementAnalysisRun
+from procurement.opportunity_types import CONSTRUCTION, HUMAN_SOURCE
 
 
 class ProcurementAnalysisImportApiTests(APITransactionTestCase):
@@ -73,6 +74,9 @@ class ProcurementAnalysisImportApiTests(APITransactionTestCase):
             "urgency": "high",
             "fit_for_pdp": "متناسب با خدمات مشاوره",
             "category": "مطالعات و طراحی",
+            "business_opportunity_type": "consulting",
+            "business_opportunity_type_confidence": 94,
+            "business_opportunity_type_reason": "دامنه اصلی خدمات مشاوره است.",
             "reason": "تناسب موضوع با صلاحیت شرکت",
             "recommended_action": "بازبینی انسانی اسناد",
             "matched_qualifications": ["معماری"],
@@ -111,5 +115,47 @@ class ProcurementAnalysisImportApiTests(APITransactionTestCase):
         self.assertEqual(draft.review_status, NoticeAnalysisDraft.ReviewStatus.AI_DRAFT)
         self.assertTrue(draft.raw_output["decision_is_draft"])
         self.assertTrue(draft.raw_output["requires_human_review"])
+        self.assertEqual(draft.business_opportunity_type, "consulting")
+        self.assertEqual(draft.raw_output["business_opportunity_type"], "consulting")
+        self.notice.refresh_from_db()
+        self.assertEqual(self.notice.business_opportunity_type, "consulting")
+        self.assertEqual(self.notice.business_opportunity_type_source, "ai_draft")
         self.assertEqual(Contract.objects.count(), contracts_before)
         self.assertEqual(Receivable.objects.count(), receivables_before)
+
+    def test_human_type_change_invalidates_claim_and_is_not_overwritten(self):
+        self.notice.business_opportunity_type = CONSTRUCTION
+        self.notice.business_opportunity_type_source = HUMAN_SOURCE
+        self.notice.business_opportunity_type_reason = "تأیید انسانی پیش از تحلیل"
+        self.notice.save(update_fields=[
+            "business_opportunity_type", "business_opportunity_type_source",
+            "business_opportunity_type_reason", "updated_at",
+        ])
+
+        response = self.client.post(
+            self.url,
+            {"results": [self.result_payload()], "dry_run": False},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 201, response.data)
+        self.assertFalse(NoticeAnalysisDraft.objects.filter(notice=self.notice).exists())
+        self.notice.refresh_from_db()
+        self.assertEqual(self.notice.business_opportunity_type, CONSTRUCTION)
+        self.assertEqual(self.notice.business_opportunity_type_source, HUMAN_SOURCE)
+        self.assertEqual(self.notice.business_opportunity_type_reason, "تأیید انسانی پیش از تحلیل")
+
+    def test_invalid_explicit_type_cannot_enter_recommended_feed(self):
+        payload = self.result_payload()
+        payload["business_opportunity_type"] = "invalid-type"
+        response = self.client.post(
+            self.url,
+            {"results": [payload], "dry_run": False},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 201, response.data)
+        draft = NoticeAnalysisDraft.objects.get(notice=self.notice)
+        self.assertEqual(draft.business_opportunity_type, "unclassified")
+        self.assertFalse(draft.is_recommended)
+        self.assertLessEqual(draft.score, 59)
+        self.notice.refresh_from_db()
+        self.assertFalse(self.notice.is_recommended)
