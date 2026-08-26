@@ -278,8 +278,8 @@ export default function ProcurementCompactWorkspaceStableEnhancement() {
   const [sourceNames, setSourceNames] = useState<string[]>([]);
   const [filterHost, setFilterHost] = useState<HTMLElement | null>(null);
   const [dashboardHost, setDashboardHost] = useState<HTMLElement | null>(null);
-  const [deadlineStatus, setDeadlineStatus] = useState(guarded.__pdpCompactDeadlineStatus || "");
-  const [publishedOn, setPublishedOn] = useState(guarded.__pdpCompactPublishedOn || "");
+  const [deadlineStatus] = useState(guarded.__pdpCompactDeadlineStatus || "");
+  const [publishedOn] = useState(guarded.__pdpCompactPublishedOn || "");
   const [bulkScope, setBulkScope] = useState<"page" | "all">("page");
   const [bulkBusy, setBulkBusy] = useState(false);
   const [message, setMessage] = useState("");
@@ -353,15 +353,6 @@ export default function ProcurementCompactWorkspaceStableEnhancement() {
     return () => window.cancelAnimationFrame(frame);
   }, [noticePayload, dashboard]);
 
-  const triggerFilterRefresh = useCallback((nextDeadline: string, nextDate: string) => {
-    const target = window as CompactWindow;
-    target.__pdpCompactDeadlineStatus = nextDeadline;
-    target.__pdpCompactPublishedOn = nextDate;
-    target.__pdpPaginationPage = 1;
-    target.__pdpStableListCache?.clear();
-    emitProcurementUiSync({ source: "compact-workspace", bulkWorkspace: true });
-  }, []);
-
   const bulkDismiss = useCallback(async () => {
     const top = activeTopTab();
     if (top !== "مناقصات" && top !== "استعلامات") return;
@@ -399,8 +390,6 @@ export default function ProcurementCompactWorkspaceStableEnhancement() {
   const top = activeTopTab();
   const showBulk = (top === "مناقصات" || top === "استعلامات") && activeWorkflow() === "پیشنهادی";
   const filterPortal = filterHost ? createPortal(<>
-    <label className="pdp-compact-filter-label">وضعیت مهلت<select value={deadlineStatus} onChange={(event) => { const value = event.target.value; setDeadlineStatus(value); triggerFilterRefresh(value, publishedOn); }}><option value="">همه وضعیت‌ها</option><option value="expired">منقضی شده</option><option value="expiring">در حال انقضا (تا ۳ روز)</option><option value="available">فرصت دارد</option><option value="unknown">مهلت نامشخص</option></select></label>
-    <label className="pdp-compact-filter-label">تاریخ انتشار<input type="date" value={publishedOn} onChange={(event) => { const value = event.target.value; setPublishedOn(value); triggerFilterRefresh(deadlineStatus, value); }}/></label>
     {showBulk && <div className="pdp-compact-bulk-control"><select value={bulkScope} onChange={(event) => setBulkScope(event.target.value as "page" | "all")}><option value="page">همین صفحه</option><option value="all">همه نتایج فیلترشده</option></select><button type="button" disabled={bulkBusy || !noticePayload?.count} onClick={() => void bulkDismiss()}>{bulkBusy ? "در حال حذف..." : "حذف گروهی پیشنهادها"}</button></div>}
     {message && <small className="pdp-compact-message">{message}</small>}
   </>, filterHost) : null;
