@@ -38,11 +38,11 @@ test("keeps bulk recommendation dismissal limited to tender inquiry recommended 
   assert.doesNotMatch(backend, /ProcurementNotice\.objects\.filter\([^\n]+\)\.delete/);
 });
 
-test("adds deadline state and publication-date filters and removes redundant processing presentation", async () => {
+test("keeps compact workspace free of duplicate deadline and publication filters while preserving server filtering", async () => {
   const frontend = await readFile(overlayPath, "utf8");
   const backend = await readFile(backendPath, "utf8");
-  assert.match(frontend, /وضعیت مهلت/);
-  assert.match(frontend, /تاریخ انتشار/);
+  assert.doesNotMatch(frontend, /وضعیت مهلت/);
+  assert.doesNotMatch(frontend, /تاریخ انتشار/);
   assert.match(frontend, /پردازش:/);
   assert.match(frontend, /style\.display = "none"/);
   assert.match(backend, /deadline_status/);
