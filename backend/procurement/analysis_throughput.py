@@ -14,8 +14,18 @@ from .models_analysis import NoticeAnalysisDraft
 from .models_analysis_runs import ProcurementAnalysisRun, ProcurementAnalysisRunItem
 
 
+# Hyper Turbo V2 deliberately separates the semantic micro-batch from the
+# per-lane hourly work window. ChatGPT still receives bounded 50-item claims,
+# while the runtime authorizes repeated claims up to an aggressive hourly budget.
+# This avoids one giant 1000-item reservation/context while preserving the
+# requested 1000 analyses/hour/lane ceiling.
 SAFE_PACKAGE_SIZE = 50
-MAX_PACKAGES_PER_LANE = 50
+MAX_PACKAGES_PER_LANE = 20
+MAX_ANALYSIS_LANES = 8
+PER_LANE_HOURLY_CEILING = 1000
+MIN_OPERATIONAL_SLA_PER_HOUR = 2000
+PREFERRED_SUSTAINED_MIN_PER_HOUR = 4000
+PREFERRED_SUSTAINED_MAX_PER_HOUR = 6000
 
 OPEN_ITEM_STATUSES = [
     ProcurementAnalysisRunItem.Status.PENDING,
@@ -241,41 +251,74 @@ def recent_throughput_snapshot(
     }
 
 
+def _aggressive_claim_window(effective_remaining: int) -> int:
+    """Return the V2 per-lane hourly work window.
+
+    This is intentionally more aggressive than V1 even at medium/low backlog.
+    It is a work budget, not one giant semantic prompt/claim. The worker consumes
+    the window through SAFE_PACKAGE_SIZE micro-batches with import/checkpoint
+    between packages, so interruption recovery remains bounded.
+    """
+
+    remaining = max(0, int(effective_remaining))
+    if remaining >= 10000:
+        return 1000
+    if remaining >= 5000:
+        return 750
+    if remaining >= 2000:
+        return 500
+    if remaining >= 500:
+        return 500
+    if remaining > 0:
+        return min(250, remaining)
+    return 0
+
+
+def _desired_lanes(effective_remaining: int) -> int:
+    """Keep all eight lanes admitted until the queue is genuinely near empty."""
+
+    remaining = max(0, int(effective_remaining))
+    if remaining >= 500:
+        return MAX_ANALYSIS_LANES
+    if remaining > 0:
+        return min(MAX_ANALYSIS_LANES, max(1, ceil(remaining / SAFE_PACKAGE_SIZE)))
+    return 0
+
+
 def adaptive_throughput_policy(
     effective_remaining: int,
     *,
     recent_completed: int = 0,
     recent_lease_expired: int = 0,
 ) -> dict[str, Any]:
-    """Return a throughput target while keeping each in-flight package bounded.
+    """Return the Hyper Turbo V2 closed-loop throughput policy.
 
-    Capacity is created by repeated Claim -> semantic analysis -> Import cycles,
-    not by reserving a giant claim. This keeps the existing one-active-package per
-    worker and global in-flight guardrails useful even in catch-up mode.
+    Capacity is created by repeated bounded Claim -> semantic analysis -> Import
+    cycles. Each lane may consume up to 1000 records/hour at high backlog, while
+    semantic quality and recovery remain protected by 50-item micro-batches.
     """
 
     remaining = max(0, int(effective_remaining))
-    if remaining >= 50000:
-        mode, desired_lanes, target_per_hour = "emergency_catchup", 8, 20000
-    elif remaining >= 40000:
-        mode, desired_lanes, target_per_hour = "emergency_catchup", 8, 10000
-    elif remaining >= 20000:
-        mode, desired_lanes, target_per_hour = "hyper_turbo", 8, 7500
-    elif remaining >= 10000:
-        mode, desired_lanes, target_per_hour = "turbo", 6, 4000
-    elif remaining >= 5000:
-        mode, desired_lanes, target_per_hour = "fast", 4, 2000
-    elif remaining >= 1000:
-        mode, desired_lanes, target_per_hour = "normal", 2, 1000
-    elif remaining > 0:
-        mode, desired_lanes, target_per_hour = "maintenance", 1, 400
-    else:
-        mode, desired_lanes, target_per_hour = "idle", 0, 0
+    desired_lanes = _desired_lanes(remaining)
+    claim_window = _aggressive_claim_window(remaining)
 
-    if desired_lanes:
+    if remaining >= 10000:
+        mode, target_per_hour = "hyper_turbo_v2", 8000
+    elif remaining >= 5000:
+        mode, target_per_hour = "turbo_v2", 6000
+    elif remaining >= 2000:
+        mode, target_per_hour = "fast_v2", 4000
+    elif remaining >= 500:
+        mode, target_per_hour = "catchup_v2", 2000
+    elif remaining > 0:
+        mode, target_per_hour = "drain_v2", remaining
+    else:
+        mode, target_per_hour = "idle", 0
+
+    if desired_lanes and claim_window:
         base_packages = min(
             MAX_PACKAGES_PER_LANE,
-            max(1, ceil(target_per_hour / (desired_lanes * SAFE_PACKAGE_SIZE))),
+            max(1, ceil(min(PER_LANE_HOURLY_CEILING, claim_window) / SAFE_PACKAGE_SIZE)),
         )
     else:
         base_packages = 0
@@ -300,18 +343,38 @@ def adaptive_throughput_policy(
     )
     planned_capacity = desired_lanes * SAFE_PACKAGE_SIZE * packages_per_lane
 
+    if target_per_hour >= PREFERRED_SUSTAINED_MAX_PER_HOUR:
+        sla_state = "preferred_or_better"
+    elif target_per_hour >= MIN_OPERATIONAL_SLA_PER_HOUR:
+        sla_state = "minimum_sla_or_better"
+    elif target_per_hour > 0:
+        sla_state = "draining_small_backlog"
+    else:
+        sla_state = "idle"
+
     return {
         "mode": mode,
         "effective_remaining": remaining,
         "desired_lanes": desired_lanes,
         "package_size": SAFE_PACKAGE_SIZE,
+        "micro_batch_size": SAFE_PACKAGE_SIZE,
+        "claim_window_target_per_lane": claim_window,
+        "per_lane_hourly_ceiling": PER_LANE_HOURLY_CEILING,
         "target_per_hour": target_per_hour,
+        "minimum_operational_sla_per_hour": MIN_OPERATIONAL_SLA_PER_HOUR,
+        "preferred_sustained_per_hour": {
+            "min": PREFERRED_SUSTAINED_MIN_PER_HOUR,
+            "max": PREFERRED_SUSTAINED_MAX_PER_HOUR,
+        },
         "max_packages_per_lane": packages_per_lane,
         "planned_capacity_per_hour": planned_capacity,
+        "sla_state": sla_state,
         "backpressure": backpressure,
         "recent_lease_expiry_ratio": round(lease_expiry_ratio, 4),
-        "claim_contract": "one active package per worker; import successfully before next claim",
-        "analysis_strategy": "semantic_fast_pass_with_deep_candidates",
+        "claim_contract": "one active micro-batch per worker; import/checkpoint successfully before the next micro-batch",
+        "window_contract": "runtime-authorized per-lane hourly work window; never one giant semantic prompt",
+        "analysis_strategy": "semantic_micro_batches_with_continuous_import_checkpoint",
+        "scheduler_expectation": "keep all eight lanes admitted while effective_remaining >= 500",
         "target_is_acceptance_goal_not_guarantee": True,
     }
 
