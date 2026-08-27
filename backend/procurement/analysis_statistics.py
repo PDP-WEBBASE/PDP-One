@@ -96,9 +96,13 @@ def procurement_analysis_statistics(run: ProcurementAnalysisRun | None = None) -
         "throughput": None,
         "claim_policy": {
             "priority_policy": "newest_first",
+            "safe_claim_limit": SEMANTIC_SLICE_SIZE,
             "claim_reservation_limit": SAFE_CLAIM_LIMIT,
             "semantic_slice_size": SEMANTIC_SLICE_SIZE,
             "global_active_claim_cap": GLOBAL_ACTIVE_CLAIM_CAP,
+            "one_active_package_per_worker": True,
+            "sequential_packages_after_successful_import": True,
+            "capacity_scales_by_package_cycles_not_claim_size": True,
             "one_active_reservation_per_worker": True,
             "continue_existing_reservation_after_successful_import": True,
             "checkpoint_after_each_semantic_slice": True,
