@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from datetime import timedelta
 
 from django.db import connection, transaction
@@ -13,7 +12,6 @@ from core.models import AuditEvent
 from .analysis_run_service import (
     _analysis_reason,
     _candidate_queryset,
-    _compact_basis,
     _deadline_priority,
     finalize_run_if_exhausted,
 )
@@ -24,8 +22,12 @@ from .models_analysis_runs import ProcurementAnalysisRun, ProcurementAnalysisRun
 
 ADMISSION_OVERLAP = timedelta(minutes=10)
 REANALYSIS_RECONCILE_INTERVAL = timedelta(minutes=10)
-SAFE_CLAIM_LIMIT = 50
-GLOBAL_ACTIVE_CLAIM_CAP = 400
+# A worker reserves a larger operational window, but ChatGPT only receives one
+# bounded semantic slice at a time. This reduces claim/scheduler overhead without
+# turning 500 records into one model prompt.
+SAFE_CLAIM_LIMIT = 500
+SEMANTIC_SLICE_SIZE = 50
+GLOBAL_ACTIVE_CLAIM_CAP = 4000
 
 
 def _admission_since(run: ProcurementAnalysisRun):
@@ -58,12 +60,7 @@ def _maybe_reconcile_reanalysis(run: ProcurementAnalysisRun, now) -> int:
 
 @transaction.atomic
 def admit_newest_pending_items(run_id: str, *, actor: str = "adaptive-analysis") -> dict:
-    """Admit notices that arrived after a persistent run started.
-
-    Persistent runs used to be a frozen snapshot. That allowed a large backlog to
-    block newly extracted notices for days. This admission step keeps the active
-    run open to fresh notices while preserving all completed draft results.
-    """
+    """Admit notices that arrived after a persistent run started."""
 
     run = ProcurementAnalysisRun.objects.select_for_update().select_related("context_snapshot").get(pk=run_id)
     if run.status in {
@@ -176,12 +173,7 @@ def renew_worker_claim(
     lease_seconds: int = 3600,
     actor: str = "adaptive-analysis",
 ) -> dict:
-    """Extend only the caller worker's still-active claim package.
-
-    Expired claims are never resurrected. The worker identity must match the
-    active claim owner, and the extension remains bounded to the same maximum
-    lease duration used by normal claims.
-    """
+    """Extend only the caller worker's still-active reserved claim window."""
 
     run = ProcurementAnalysisRun.objects.select_for_update().get(pk=run_id)
     now = timezone.now()
@@ -219,6 +211,22 @@ def renew_worker_claim(
     }
 
 
+def _active_worker_slice(run: ProcurementAnalysisRun, worker_key: str, now) -> list[ProcurementAnalysisRunItem]:
+    """Return the next bounded semantic slice from an existing reservation."""
+
+    queryset = (
+        run.items.select_related("notice")
+        .prefetch_related("notice__source_links__source_notice")
+        .filter(
+            status=ProcurementAnalysisRunItem.Status.CLAIMED,
+            claimed_by=worker_key,
+            claim_expires_at__gte=now,
+        )
+        .order_by("claimed_at", "sequence")
+    )
+    return list(queryset[:SEMANTIC_SLICE_SIZE])
+
+
 @transaction.atomic
 def claim_newest_run_items(
     run_id: str,
@@ -227,13 +235,13 @@ def claim_newest_run_items(
     limit: int = SAFE_CLAIM_LIMIT,
     lease_seconds: int = 3600,
 ) -> list[ProcurementAnalysisRunItem]:
-    """Claim the freshest safe package while allowing sequential packages.
+    """Reserve up to 500 items, returning only the next 50-item semantic slice.
 
-    One worker may own only one in-flight package and the run retains a bounded
-    global in-flight pool. After the package is successfully imported, the same
-    worker can immediately request the next package. Throughput therefore scales
-    through repeated Claim -> semantic analysis -> Import cycles instead of one
-    oversized reservation that is likely to expire.
+    The first call for an idle worker reserves an operational window of up to
+    SAFE_CLAIM_LIMIT items. Only SEMANTIC_SLICE_SIZE items are returned to ChatGPT.
+    After those results are imported/checkpointed, the next call returns the next
+    still-claimed slice from the same reservation. This preserves semantic quality
+    while reducing repeated claim-allocation overhead.
     """
 
     run = ProcurementAnalysisRun.objects.select_for_update().select_related("context_snapshot").get(pk=run_id)
@@ -259,19 +267,12 @@ def claim_newest_run_items(
     reconciled = _maybe_reconcile_reanalysis(run, now)
     if reconciled:
         run = finalize_run_if_exhausted(run, actor="adaptive-analysis")
-        if run.status in {
-            ProcurementAnalysisRun.Status.COMPLETED,
-            ProcurementAnalysisRun.Status.NO_CHANGES,
-        }:
+        if run.status in {ProcurementAnalysisRun.Status.COMPLETED, ProcurementAnalysisRun.Status.NO_CHANGES}:
             return []
 
-    worker_has_active_claim = run.items.filter(
-        status=ProcurementAnalysisRunItem.Status.CLAIMED,
-        claimed_by=worker_key,
-        claim_expires_at__gte=now,
-    ).exists()
-    if worker_has_active_claim:
-        return []
+    existing_slice = _active_worker_slice(run, worker_key, now)
+    if existing_slice:
+        return existing_slice
 
     active_claims = run.items.filter(
         status=ProcurementAnalysisRunItem.Status.CLAIMED,
@@ -298,33 +299,9 @@ def claim_newest_run_items(
     else:
         queryset = queryset.select_for_update()
 
-    candidates = list(queryset[:requested_limit])
-    selected: list[ProcurementAnalysisRunItem] = []
-    estimated_payload_chars = 2
-    max_payload_chars = 120_000
-    for candidate in candidates:
-        estimate = len(
-            json.dumps(
-                {
-                    "i": str(candidate.id),
-                    "n": str(candidate.notice_id),
-                    "c": candidate.notice_content_hash,
-                    "ar": candidate.analysis_reason,
-                    "dp": candidate.deadline_priority,
-                    "b": _compact_basis(candidate.notice),
-                },
-                ensure_ascii=False,
-                sort_keys=True,
-                separators=(",", ":"),
-            )
-        ) + 48
-        if selected and estimated_payload_chars + estimate > max_payload_chars:
-            break
-        selected.append(candidate)
-        estimated_payload_chars += estimate
-
+    reserved = list(queryset[:requested_limit])
     expires = now + timedelta(seconds=max(60, min(int(lease_seconds), 3600)))
-    for item in selected:
+    for item in reserved:
         item.new_claim_token()
         item.status = ProcurementAnalysisRunItem.Status.CLAIMED
         item.claimed_by = worker_key
@@ -333,9 +310,10 @@ def claim_newest_run_items(
         item.attempts += 1
         item.last_error = ""
         item.updated_at = now
-    if selected:
+
+    if reserved:
         ProcurementAnalysisRunItem.objects.bulk_update(
-            selected,
+            reserved,
             [
                 "claim_token",
                 "status",
@@ -353,8 +331,11 @@ def claim_newest_run_items(
         run.metadata = {
             **(run.metadata or {}),
             "throughput_controller": "adaptive-packages-v2",
-            "safe_package_size": SAFE_CLAIM_LIMIT,
+            "safe_package_size": SEMANTIC_SLICE_SIZE,
+            "claim_reservation_size": SAFE_CLAIM_LIMIT,
+            "semantic_micro_batch_size": SEMANTIC_SLICE_SIZE,
             "global_active_claim_cap": GLOBAL_ACTIVE_CLAIM_CAP,
         }
         run.save(update_fields=["status", "heartbeat_at", "metadata", "updated_at"])
-    return selected
+
+    return _active_worker_slice(run, worker_key, now)
