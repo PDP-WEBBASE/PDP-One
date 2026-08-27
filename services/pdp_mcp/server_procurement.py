@@ -1,4 +1,5 @@
 import promotion_control_v3_hardening  # noqa: F401 - applies bounded V3 runtime hardening before tool registration
+import promotion_control_v3_short_lane  # noqa: F401 - applies DEC-051 short critical lane semantics
 
 from automation_tools import register_automation_tools
 from health_tools import register_health_route
