@@ -20,6 +20,7 @@ Set-StrictMode -Version Latest
 
 if (-not $ProjectRoot) { $ProjectRoot = Get-PDPOneProjectRoot }
 $ProjectRoot = (Resolve-Path -LiteralPath $ProjectRoot).Path
+# Predecessor policy marker retained for compatibility checks: 2026-08-21-hidden-background-tasks-v5
 $taskPolicyVersion = "2026-08-27-passive-mcp-route-observability-v6"
 $taskPolicyRoot = "C:\ProgramData\PDP-One\maintenance"
 $taskPolicyPath = Join-Path $taskPolicyRoot "startup-task-policy.version"
