@@ -11,6 +11,7 @@ import ProcurementWorkflowActionsStableEnhancement from "./ProcurementWorkflowAc
 import ProcurementManagementToolsStableEnhancement from "./ProcurementManagementToolsStableEnhancement";
 import ProcurementListUxRefinement from "./ProcurementListUxRefinement";
 import ProcurementCardLayoutBulkRemoveV2 from "./ProcurementCardLayoutBulkRemoveV2";
+import ProcurementInitialRenderBoundary from "./ProcurementInitialRenderBoundary";
 import ProcurementWorkspaceV22 from "./ProcurementWorkspaceV22";
 
 const ProcurementCompactWorkspaceStableEnhancement = dynamic(
@@ -24,7 +25,7 @@ const ProcurementWebPreviewV9Enhancement = dynamic(
 );
 
 export default function ProcurementWorkspaceV23() {
-  return <>
+  return <ProcurementInitialRenderBoundary>
     <ProcurementStartupSessionResilience />
     <ProcurementPaginationStableEnhancement />
     <ProcurementManagementPerformanceEnhancement />
@@ -38,5 +39,5 @@ export default function ProcurementWorkspaceV23() {
     <ProcurementListUxRefinement />
     <ProcurementCardLayoutBulkRemoveV2 />
     <ProcurementWebPreviewV9Enhancement />
-  </>;
+  </ProcurementInitialRenderBoundary>;
 }
