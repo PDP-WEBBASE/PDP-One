@@ -84,13 +84,13 @@ def register_procurement_analysis_tools(mcp, api: ApiCall) -> None:
         return await api("POST", f"procurement/analysis/runs/{run_id}/cancel/", json={})
 
     @mcp.tool(
-        description="Atomically claim the next backend-governed safe procurement analysis package for one worker. The backend enforces the current package and in-flight caps and returns integrity fields for safe import.",
+        description="Reserve up to 500 backend-governed procurement items for one worker while returning only the next bounded semantic slice. Repeated calls after successful import continue the same reservation until it is exhausted.",
         annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, openWorldHint=False, idempotentHint=False),
     )
     async def claim_procurement_analysis_work(
         run_id: str,
         worker_id: str = "chatgpt-connected-app",
-        limit: int = 50,
+        limit: int = 500,
         lease_seconds: int = 3600,
     ) -> dict:
         return await api(
