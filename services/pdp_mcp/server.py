@@ -40,7 +40,7 @@ return enqueue(
 redeploy_previous_commit_from_github
 """
 
-from server_core import mcp
+from server_core import api, mcp
 from route_diagnostics_tools import register_route_diagnostics_tools
 
 register_route_diagnostics_tools(mcp)
