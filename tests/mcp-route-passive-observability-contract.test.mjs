@@ -6,6 +6,7 @@ const observer = fs.readFileSync('scripts/windows/Observe-PDPOneMcpRoute.ps1', '
 const taskPolicy = fs.readFileSync('scripts/windows/Register-PDPOneStartupTask.ps1', 'utf8');
 const diagnosticsTools = fs.readFileSync('services/pdp_mcp/route_diagnostics_tools.py', 'utf8');
 const server = fs.readFileSync('services/pdp_mcp/server.py', 'utf8');
+const serverProcurement = fs.readFileSync('services/pdp_mcp/server_procurement.py', 'utf8');
 const mcpDockerfile = fs.readFileSync('services/pdp_mcp/Dockerfile', 'utf8');
 
 test('route observer is passive and checkpoint based', () => {
@@ -52,4 +53,9 @@ test('MCP runtime image packages every observability module imported at startup'
   assert.match(mcpDockerfile, /COPY[^\n]*server_core\.py/);
   assert.match(mcpDockerfile, /COPY[^\n]*route_diagnostics_tools\.py/);
   assert.match(mcpDockerfile, /CMD \["python", "server_procurement\.py"\]/);
+});
+
+test('MCP compatibility wrapper re-exports the api required by server_procurement startup', () => {
+  assert.match(serverProcurement, /from server import api, mcp/);
+  assert.match(server, /from server_core import api, mcp/);
 });
