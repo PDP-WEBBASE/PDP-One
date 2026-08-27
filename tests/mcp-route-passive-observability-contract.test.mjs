@@ -11,8 +11,13 @@ test('route observer is passive and checkpoint based', () => {
   for (const id of ['CP-01', 'CP-02', 'CP-03', 'CP-04', 'CP-05', 'CP-06', 'CP-07', 'CP-08', 'CP-09', 'CP-10', 'CP-11', 'CP-12', 'CP-13', 'CP-14']) {
     assert.match(observer, new RegExp(id));
   }
+  assert.match(observer, /Set-Location \$ProjectRoot/);
   assert.match(observer, /passive_only\s*=\s*\$true/);
   assert.match(observer, /repair_actions\s*=\s*0/);
+  assert.match(observer, /active_incident_started_at/);
+  assert.match(observer, /root_cause_classification/);
+  assert.match(observer, /pre_incident_minutes=15/);
+  assert.match(observer, /post_recovery_minutes=10/);
   assert.doesNotMatch(observer, /funnel\s+reset/i);
   assert.doesNotMatch(observer, /--force-recreate/i);
   assert.doesNotMatch(observer, /docker\s+(?:compose\s+)?restart/i);
@@ -31,10 +36,13 @@ test('scheduled task runs passive observer once per minute', () => {
   assert.match(taskPolicy, /RepetitionInterval \(New-TimeSpan -Minutes 1\)/);
 });
 
-test('MCP exposes read-only route evidence tools', () => {
+test('MCP exposes bounded read-only route evidence tools', () => {
   assert.match(diagnosticsTools, /get_mcp_route_diagnostics/);
   assert.match(diagnosticsTools, /get_mcp_incident_report/);
   assert.match(diagnosticsTools, /readOnlyHint=True/);
   assert.match(diagnosticsTools, /destructiveHint=False/);
+  assert.match(diagnosticsTools, /timedelta\(minutes=15\)/);
+  assert.match(diagnosticsTools, /timedelta\(minutes=10\)/);
+  assert.match(diagnosticsTools, /max_samples_returned/);
   assert.match(server, /register_route_diagnostics_tools/);
 });
