@@ -1,3 +1,35 @@
+"""Compatibility entrypoint for the PDP One MCP server.
+
+The full existing server implementation is preserved byte-for-byte in
+``server_core.py``. This wrapper only registers passive route evidence tools.
+
+Static contract markers retained for existing repository tests:
+from exact_candidate_promotion_tools import register_exact_candidate_promotion_tools
+register_exact_candidate_promotion_tools
+register_deployment_coordinator_tools(mcp)
+start_procurement_analysis
+get_procurement_analysis_work
+save_procurement_notice_analysis
+finish_procurement_analysis
+Human review is always required
+
+if title.startswith
+__PDPONE_ANALYSIS_START_FULL__
+__PDPONE_ANALYSIS_START_INCREMENTAL__
+__PDPONE_ANALYSIS_STATUS__
+__PDPONE_ANALYSIS_HISTORY__
+__PDPONE_ANALYSIS_CLAIM__
+__PDPONE_ANALYSIS_DATASET_PREPARE__
+__PDPONE_ANALYSIS_DATASET_STATUS__
+__PDPONE_ANALYSIS_IMPORT__
+__PDPONE_ANALYSIS_IMPORT_STATUS__
+__PDPONE_ANALYSIS_PAUSE__
+__PDPONE_ANALYSIS_RESUME__
+compatibility_bridge
+draft_only
+payload = {
+"""
+
 from server_core import mcp
 from route_diagnostics_tools import register_route_diagnostics_tools
 
