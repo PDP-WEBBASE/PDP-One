@@ -16,6 +16,7 @@ Set-StrictMode -Version Latest
 
 if (-not $ProjectRoot) { $ProjectRoot = Get-PDPOneProjectRoot }
 $ProjectRoot = (Resolve-Path -LiteralPath $ProjectRoot).Path
+Set-Location $ProjectRoot
 $envPath = Assert-PDPOneConfiguration -ProjectRoot $ProjectRoot
 $agentRoot = [string](Get-PDPOneEnvValue -Path $envPath -Name "PDP_DEPLOYMENT_AGENT_ROOT")
 if ([string]::IsNullOrWhiteSpace($agentRoot)) { $agentRoot = "C:\ProgramData\PDP-One\deployment-agent" }
@@ -55,11 +56,19 @@ function Test-UrlPassive {
 }
 
 function Read-State {
-    $default = [ordered]@{ consecutive_failures=0; consecutive_successes=0; active_incident=$null; last_incident=$null; incident_sequence=0; first_failed_checkpoint=$null }
+    $default = [ordered]@{
+        consecutive_failures=0
+        consecutive_successes=0
+        active_incident=$null
+        active_incident_started_at=$null
+        last_incident=$null
+        incident_sequence=0
+        first_failed_checkpoint=$null
+    }
     if (-not (Test-Path -LiteralPath $statePath)) { return $default }
     try {
         $raw = Get-Content -LiteralPath $statePath -Raw -Encoding UTF8 | ConvertFrom-Json
-        foreach ($key in @('consecutive_failures','consecutive_successes','active_incident','last_incident','incident_sequence','first_failed_checkpoint')) {
+        foreach ($key in @('consecutive_failures','consecutive_successes','active_incident','active_incident_started_at','last_incident','incident_sequence','first_failed_checkpoint')) {
             if ($null -ne $raw.PSObject.Properties[$key]) { $default[$key] = $raw.$key }
         }
     } catch { }
@@ -71,6 +80,25 @@ function Write-JsonSafe {
     $tmp = "$Path.tmp"
     [IO.File]::WriteAllText($tmp, ($Value | ConvertTo-Json -Depth 10), [Text.UTF8Encoding]::new($false))
     Move-Item -LiteralPath $tmp -Destination $Path -Force
+}
+
+function Get-RootCauseClassification {
+    param([string]$CheckpointId)
+    switch ($CheckpointId) {
+        'CP-01' { return [pscustomobject]@{ Class='HOST_NETWORK'; Confidence='high'; ExternalCorrelation=$false } }
+        'CP-02' { return [pscustomobject]@{ Class='DOCKER_RUNTIME'; Confidence='high'; ExternalCorrelation=$false } }
+        'CP-03' { return [pscustomobject]@{ Class='MCP_PROCESS'; Confidence='high'; ExternalCorrelation=$false } }
+        'CP-04' { return [pscustomobject]@{ Class='NGINX_LOCAL_ROUTE'; Confidence='high'; ExternalCorrelation=$false } }
+        'CP-05' { return [pscustomobject]@{ Class='LOCAL_MCP_ROUTE'; Confidence='high'; ExternalCorrelation=$false } }
+        'CP-06' { return [pscustomobject]@{ Class='TAILSCALE_DAEMON'; Confidence='high'; ExternalCorrelation=$false } }
+        'CP-07' { return [pscustomobject]@{ Class='TAILSCALE_FUNNEL'; Confidence='high'; ExternalCorrelation=$false } }
+        'CP-08' { return [pscustomobject]@{ Class='DNS_PUBLIC_EDGE'; Confidence='medium'; ExternalCorrelation=$true } }
+        'CP-09' { return [pscustomobject]@{ Class='EXTERNAL_PUBLIC_PATH'; Confidence='medium'; ExternalCorrelation=$true } }
+        'CP-10' { return [pscustomobject]@{ Class='TOKEN_BOUND_ROUTE'; Confidence='medium'; ExternalCorrelation=$true } }
+        'CP-12' { return [pscustomobject]@{ Class='PDP_BACKEND'; Confidence='high'; ExternalCorrelation=$false } }
+        'CP-13' { return [pscustomobject]@{ Class='POSTGRESQL'; Confidence='high'; ExternalCorrelation=$false } }
+        default { return [pscustomobject]@{ Class='UNKNOWN_WITH_EVIDENCE'; Confidence='pending_correlation'; ExternalCorrelation=$true } }
+    }
 }
 
 $token = [string](Get-PDPOneEnvValue -Path $envPath -Name "PDP_MCP_PATH_TOKEN")
@@ -136,6 +164,7 @@ $overall = $(if ($failed.Count -eq 0) { 'healthy' } else { 'degraded' })
 $firstFailed = $(if ($failed.Count -gt 0) { [string]$failed[0].id } else { $null })
 $now = (Get-Date).ToUniversalTime()
 $state = Read-State
+$recoveredIncident = $null
 
 if ($failed.Count -gt 0) {
     $state.consecutive_failures = [int]$state.consecutive_failures + 1
@@ -144,17 +173,22 @@ if ($failed.Count -gt 0) {
     if (-not $state.active_incident -and [int]$state.consecutive_failures -ge [Math]::Max(1,$IncidentFailureThreshold)) {
         $state.incident_sequence = [int]$state.incident_sequence + 1
         $state.active_incident = "MCP-INC-$($now.ToString('yyyyMMdd'))-$(([int]$state.incident_sequence).ToString('0000'))"
+        $state.active_incident_started_at = $now.ToString('o')
     }
 } else {
     $state.consecutive_successes = [int]$state.consecutive_successes + 1
     $state.consecutive_failures = 0
     if ($state.active_incident -and [int]$state.consecutive_successes -ge [Math]::Max(1,$RecoverySuccessThreshold)) {
+        $recoveredIncident = [pscustomobject]@{ Id=[string]$state.active_incident; StartedAt=[string]$state.active_incident_started_at }
         $state.last_incident = $state.active_incident
         $state.active_incident = $null
+        $state.active_incident_started_at = $null
         $state.first_failed_checkpoint = $null
     }
 }
 
+$classificationCheckpoint = $(if ($state.first_failed_checkpoint) { [string]$state.first_failed_checkpoint } else { $firstFailed })
+$classification = Get-RootCauseClassification -CheckpointId $classificationCheckpoint
 $sample = [ordered]@{
     schema = 'pdp-one.mcp-route-observability.v2'
     observed_at = $now.ToString('o')
@@ -166,6 +200,9 @@ $sample = [ordered]@{
     consecutive_failures = [int]$state.consecutive_failures
     consecutive_successes = [int]$state.consecutive_successes
     first_failed_checkpoint = $state.first_failed_checkpoint
+    root_cause_classification = $classification.Class
+    root_cause_confidence = $classification.Confidence
+    external_correlation_required = [bool]$classification.ExternalCorrelation
     checkpoints = @($checks)
     passive_only = $true
     repair_actions = 0
@@ -179,29 +216,43 @@ Write-JsonSafe -Path $statePath -Value $state
 
 if ($state.active_incident) {
     $incidentPath = Join-Path $incidentRoot ($state.active_incident + '.json')
+    $existing = $null
+    if (Test-Path -LiteralPath $incidentPath) {
+        try { $existing = Get-Content -LiteralPath $incidentPath -Raw -Encoding UTF8 | ConvertFrom-Json } catch { $existing = $null }
+    }
+    $startedAt = $(if ($existing -and $existing.started_at) { [string]$existing.started_at } else { [string]$state.active_incident_started_at })
     $incident = [ordered]@{
         schema='pdp-one.mcp-route-incident.v2'
         incident_id=$state.active_incident
+        started_at=$startedAt
         last_observed_at=$now.ToString('o')
+        recovered_at=$null
         status='active'
         first_failed_checkpoint=$state.first_failed_checkpoint
         latest_checkpoints=@($checks)
         evidence_source='local_passive_observer'
-        root_cause_classification='UNKNOWN_WITH_EVIDENCE'
-        confidence='pending_correlation'
+        root_cause_classification=$classification.Class
+        confidence=$classification.Confidence
+        external_correlation_required=[bool]$classification.ExternalCorrelation
+        evidence_window=[ordered]@{ pre_incident_minutes=15; post_recovery_minutes=10; sample_store='samples/YYYY-MM-DD.jsonl' }
         passive_only=$true
         repair_actions=0
         secrets_included=$false
     }
     Write-JsonSafe -Path $incidentPath -Value $incident
-} elseif ($state.last_incident) {
-    $incidentPath = Join-Path $incidentRoot ($state.last_incident + '.json')
+}
+
+if ($recoveredIncident) {
+    $incidentPath = Join-Path $incidentRoot ($recoveredIncident.Id + '.json')
     if (Test-Path -LiteralPath $incidentPath) {
         try {
             $incident = Get-Content -LiteralPath $incidentPath -Raw -Encoding UTF8 | ConvertFrom-Json
-            $incident.status = 'recovered'
-            $incident.recovered_at = $now.ToString('o')
-            Write-JsonSafe -Path $incidentPath -Value $incident
+            if ([string]$incident.status -ne 'recovered') {
+                $incident.status = 'recovered'
+                $incident.recovered_at = $now.ToString('o')
+                $incident.last_observed_at = $now.ToString('o')
+                Write-JsonSafe -Path $incidentPath -Value $incident
+            }
         } catch { }
     }
 }
