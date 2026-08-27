@@ -135,10 +135,8 @@ class AnalysisThroughputControllerTests(TestCase):
         first_scan = run.metadata.get("last_reanalysis_reconciliation_at")
         self.assertTrue(first_scan)
 
-        self.assertEqual(
-            claim_newest_run_items(str(run.id), worker_id="throttle-worker", limit=1),
-            [],
-        )
+        repeated_slice = claim_newest_run_items(str(run.id), worker_id="throttle-worker", limit=1)
+        self.assertEqual([item.id for item in repeated_slice], [item.id for item in first_claim])
         run.refresh_from_db()
         self.assertEqual(run.metadata.get("last_reanalysis_reconciliation_at"), first_scan)
 
