@@ -28,6 +28,14 @@ __PDPONE_ANALYSIS_RESUME__
 compatibility_bridge
 draft_only
 payload = {
+
+async def deploy_approved_release(commit_sha: str, deployment_id: str, preview_id: str)
+"code_snapshot_required": not fast
+"restore_verification_required": not fast
+"automatic_rollback_enabled": not fast
+"approval_required": not fast
+"heavy_preview_gate_required": not fast
+redeploy_previous_commit_from_github
 """
 
 from server_core import mcp
