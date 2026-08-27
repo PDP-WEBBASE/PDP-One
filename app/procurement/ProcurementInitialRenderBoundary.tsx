@@ -44,7 +44,8 @@ export default function ProcurementInitialRenderBoundary({ children }: { childre
 
     const checkReady = () => {
       const finalDashboard = root.querySelector(".pdp-compact-dashboard-box");
-      if (!finalDashboard) return false;
+      const managementToolsStable = root.querySelector('[data-pdp-management-tools-stable-ready="1"]');
+      if (!finalDashboard || !managementToolsStable) return false;
       setReady(true);
       return true;
     };
@@ -53,7 +54,7 @@ export default function ProcurementInitialRenderBoundary({ children }: { childre
     const observer = new MutationObserver(() => {
       if (checkReady()) observer.disconnect();
     });
-    observer.observe(root, { childList: true, subtree: true });
+    observer.observe(root, { childList: true, subtree: true, attributes: true, attributeFilter: ["data-pdp-management-tools-stable-ready"] });
     return () => observer.disconnect();
   }, []);
 
