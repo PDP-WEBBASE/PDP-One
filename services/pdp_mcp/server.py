@@ -30,6 +30,8 @@ draft_only
 payload = {
 
 async def deploy_approved_release(commit_sha: str, deployment_id: str, preview_id: str)
+return enqueue(
+    "deploy_approved_release"
 "code_snapshot_required": not fast
 "restore_verification_required": not fast
 "automatic_rollback_enabled": not fast
