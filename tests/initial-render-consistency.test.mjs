@@ -40,18 +40,31 @@ test("workspace-level client-only presentation has an explicit initial-render bo
   }
 });
 
-test("procurement first paint hides the legacy workspace until the approved dashboard is ready", () => {
+test("procurement first paint waits for both approved dashboard and stable management shell", () => {
   const workspace = fs.readFileSync(path.join(appRoot, "procurement", "ProcurementWorkspaceV23.tsx"), "utf8");
   const boundary = fs.readFileSync(path.join(appRoot, "procurement", "ProcurementInitialRenderBoundary.tsx"), "utf8");
+  const management = fs.readFileSync(path.join(appRoot, "procurement", "ProcurementManagementToolsStableEnhancement.tsx"), "utf8");
 
   assert.match(workspace, /import ProcurementInitialRenderBoundary/);
   assert.match(workspace, /<ProcurementInitialRenderBoundary>[\s\S]*?<ProcurementWorkspaceV22 \/>[\s\S]*?<\/ProcurementInitialRenderBoundary>/);
   assert.match(boundary, /data-pdp-initial-render-ready/);
   assert.match(boundary, /\.pdp-compact-dashboard-box/);
+  assert.match(boundary, /data-pdp-management-tools-stable-ready/);
+  assert.match(boundary, /!finalDashboard\s*\|\|\s*!managementToolsStable/);
+  assert.match(boundary, /attributes:\s*true/);
+  assert.match(boundary, /attributeFilter:\s*\["data-pdp-management-tools-stable-ready"\]/);
   assert.match(boundary, /visibility:\s*ready\s*\?\s*"visible"\s*:\s*"hidden"/);
   assert.match(boundary, /new MutationObserver/);
   assert.match(boundary, /observer\.observe\(root,/);
   assert.doesNotMatch(boundary, /observer\.observe\(document\.body/);
+
+  assert.match(management, /STABLE_READY_ATTRIBUTE\s*=\s*"data-pdp-management-tools-stable-ready"/);
+  assert.match(management, /LEGACY_FLOATING_LABELS/);
+  assert.match(management, /getComputedStyle\(button\)\.position\s*===\s*"fixed"/);
+  assert.match(management, /root\.setAttribute\(STABLE_READY_ATTRIBUTE,\s*"1"\)/);
+  assert.match(management, /TOOLS_TAB_LABEL/);
+  assert.match(management, /EXTRACTION_TAB_LABEL/);
+
   assert.match(boundary, /شاخص‌های مدیریتی/);
   assert.match(boundary, /ابزارهای استخراج و تحلیل/);
 });
