@@ -6,6 +6,7 @@ const observer = fs.readFileSync('scripts/windows/Observe-PDPOneMcpRoute.ps1', '
 const taskPolicy = fs.readFileSync('scripts/windows/Register-PDPOneStartupTask.ps1', 'utf8');
 const diagnosticsTools = fs.readFileSync('services/pdp_mcp/route_diagnostics_tools.py', 'utf8');
 const server = fs.readFileSync('services/pdp_mcp/server.py', 'utf8');
+const mcpDockerfile = fs.readFileSync('services/pdp_mcp/Dockerfile', 'utf8');
 
 test('route observer is passive and checkpoint based', () => {
   for (const id of ['CP-01', 'CP-02', 'CP-03', 'CP-04', 'CP-05', 'CP-06', 'CP-07', 'CP-08', 'CP-09', 'CP-10', 'CP-11', 'CP-12', 'CP-13', 'CP-14']) {
@@ -45,4 +46,10 @@ test('MCP exposes bounded read-only route evidence tools', () => {
   assert.match(diagnosticsTools, /timedelta\(minutes=10\)/);
   assert.match(diagnosticsTools, /max_samples_returned/);
   assert.match(server, /register_route_diagnostics_tools/);
+});
+
+test('MCP runtime image packages every observability module imported at startup', () => {
+  assert.match(mcpDockerfile, /COPY[^\n]*server_core\.py/);
+  assert.match(mcpDockerfile, /COPY[^\n]*route_diagnostics_tools\.py/);
+  assert.match(mcpDockerfile, /CMD \["python", "server_procurement\.py"\]/);
 });
