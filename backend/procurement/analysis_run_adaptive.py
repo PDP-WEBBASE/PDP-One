@@ -338,4 +338,4 @@ def claim_newest_run_items(
         }
         run.save(update_fields=["status", "heartbeat_at", "metadata", "updated_at"])
 
-    return reserved[:SEMANTIC_SLICE_SIZE]
+    return _active_worker_slice(run, worker_key, now)
