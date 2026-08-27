@@ -7,6 +7,7 @@ param(
     [string]$NetworkRecoveryTaskName = "PDP One Network Recovery",
     [string]$OpenWebTaskName = "PDP One Open Local Web",
     [string]$McpWatchdogTaskName = "PDP One MCP Self Heal",
+    [string]$McpObservabilityTaskName = "PDP One MCP Route Observability",
     [string]$DeploymentAgentWatchdogTaskName = "PDP One Deployment Agent Watchdog",
     [string]$DiskGuardTaskName = "PDP One Disk Guard",
     [switch]$ApplyIfNeeded
@@ -19,7 +20,7 @@ Set-StrictMode -Version Latest
 
 if (-not $ProjectRoot) { $ProjectRoot = Get-PDPOneProjectRoot }
 $ProjectRoot = (Resolve-Path -LiteralPath $ProjectRoot).Path
-$taskPolicyVersion = "2026-08-21-hidden-background-tasks-v5"
+$taskPolicyVersion = "2026-08-27-passive-mcp-route-observability-v6"
 $taskPolicyRoot = "C:\ProgramData\PDP-One\maintenance"
 $taskPolicyPath = Join-Path $taskPolicyRoot "startup-task-policy.version"
 if ($ApplyIfNeeded -and (Test-Path -LiteralPath $taskPolicyPath)) {
@@ -34,10 +35,11 @@ $startScript = Join-Path $ProjectRoot "scripts\windows\Start-PDPOne.ps1"
 $rancherStartupScript = Join-Path $ProjectRoot "scripts\windows\Start-PDPOneRancherResilient.ps1"
 $openScript = Join-Path $ProjectRoot "scripts\windows\Open-PDPOneLocal.ps1"
 $mcpWatchdogScript = Join-Path $ProjectRoot "scripts\windows\Ensure-PDPOneMcpHealthy.ps1"
+$mcpObservabilityScript = Join-Path $ProjectRoot "scripts\windows\Observe-PDPOneMcpRoute.ps1"
 $deploymentAgentWatchdogScript = Join-Path $ProjectRoot "scripts\windows\Ensure-PDPOneDeploymentAgentHealthy.ps1"
 $diskGuardScript = Join-Path $ProjectRoot "scripts\windows\Invoke-PDPOneDiskGuard.ps1"
 $hiddenRunner = Get-PDPOneHiddenRunnerPath -BaseDirectory $PSScriptRoot
-foreach ($required in @($startScript, $rancherStartupScript, $openScript, $mcpWatchdogScript, $deploymentAgentWatchdogScript, $diskGuardScript, $hiddenRunner)) {
+foreach ($required in @($startScript, $rancherStartupScript, $openScript, $mcpWatchdogScript, $mcpObservabilityScript, $deploymentAgentWatchdogScript, $diskGuardScript, $hiddenRunner)) {
     if (-not (Test-Path -LiteralPath $required)) { throw "Required Scheduled Task source was not found: $(Split-Path $required -Leaf)" }
 }
 
@@ -70,6 +72,12 @@ $mcpPeriodicTrigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(2
 $mcpSettings = New-ScheduledTaskSettingsSet -RestartCount 6 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit (New-TimeSpan -Minutes 6) -MultipleInstances IgnoreNew -StartWhenAvailable
 Register-ScheduledTask -TaskName $McpWatchdogTaskName -Action $mcpAction -Trigger @($mcpLogonTrigger, $mcpPeriodicTrigger) -Principal $principal -Settings $mcpSettings -Description "Checks the PDP One MCP container every five minutes. If it is missing or restarting, it repairs only MCP, preserves tokens and never touches Docker volumes or PostgreSQL data." -Force | Out-Null
 
+$mcpObservabilityAction = New-PDPOneHiddenPowerShellAction -ScriptPath $mcpObservabilityScript -ScriptArguments @("-ProjectRoot", $ProjectRoot) -HiddenRunnerPath $hiddenRunner
+$mcpObservabilityLogonTrigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
+$mcpObservabilityPeriodicTrigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) -RepetitionInterval (New-TimeSpan -Minutes 1) -RepetitionDuration (New-TimeSpan -Days 3650)
+$mcpObservabilitySettings = New-ScheduledTaskSettingsSet -RestartCount 1 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit (New-TimeSpan -Seconds 45) -MultipleInstances IgnoreNew -StartWhenAvailable
+Register-ScheduledTask -TaskName $McpObservabilityTaskName -Action $mcpObservabilityAction -Trigger @($mcpObservabilityLogonTrigger, $mcpObservabilityPeriodicTrigger) -Principal $principal -Settings $mcpObservabilitySettings -Description "Records passive MCP route checkpoints once per minute for later root-cause analysis. It never restarts services, repairs routes, rotates tokens, changes Docker volumes, or queries business data." -Force | Out-Null
+
 $agentRoot = "C:\ProgramData\PDP-One\deployment-agent"
 try {
     $envPath = Assert-PDPOneConfiguration -ProjectRoot $ProjectRoot
@@ -87,7 +95,7 @@ $diskGuardDailyTrigger = New-ScheduledTaskTrigger -Daily -At 3:15am
 $diskGuardSettings = New-ScheduledTaskSettingsSet -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 5) -ExecutionTimeLimit (New-TimeSpan -Minutes 45) -MultipleInstances IgnoreNew -StartWhenAvailable
 Register-ScheduledTask -TaskName $DiskGuardTaskName -Action $diskGuardAction -Trigger $diskGuardDailyTrigger -Principal $principal -Settings $diskGuardSettings -Description "Maintains safe C drive capacity for PDP One. It prunes only unused build cache, images, stopped containers and networks, archives old restore-verified backups, compacts Rancher WSL VHDX only when needed, and never prunes Docker volumes." -Force | Out-Null
 
-foreach ($taskName in @($StartupTaskName, $NetworkRecoveryTaskName, $OpenWebTaskName, $McpWatchdogTaskName, $DeploymentAgentWatchdogTaskName, $DiskGuardTaskName)) {
+foreach ($taskName in @($StartupTaskName, $NetworkRecoveryTaskName, $OpenWebTaskName, $McpWatchdogTaskName, $McpObservabilityTaskName, $DeploymentAgentWatchdogTaskName, $DiskGuardTaskName)) {
     Assert-PDPOneScheduledTaskWindowless -TaskName $taskName -HiddenRunnerPath $hiddenRunner | Out-Null
 }
 
