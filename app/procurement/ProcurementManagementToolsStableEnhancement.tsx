@@ -17,6 +17,7 @@ import { PROCUREMENT_STABLE_VIEW_STATE_EVENT } from "./procurementStableViewStat
 type ToolKey = "workflow" | "review" | "followup" | "contract" | "dashboard" | "automation" | "analysis" | "analysisSettings" | "engine" | "internetUsage";
 
 const TOOLS_TAB_ATTRIBUTE = "data-pdp-management-tools-tab";
+const STABLE_READY_ATTRIBUTE = "data-pdp-management-tools-stable-ready";
 const HOST_ID = "pdp-procurement-management-toolbar-stable";
 const TOOLS_TAB_LABEL = "ابزارهای مدیریتی زیرسامانه";
 const EXTRACTION_TAB_LABEL = "ابزارهای استخراج و تحلیل";
@@ -71,9 +72,13 @@ export default function ProcurementManagementToolsStableEnhancement() {
     const root = document.querySelector<HTMLElement>('main[dir="rtl"]');
     const nav = root?.querySelector("nav");
     if (!root || !nav) return;
+
     document.querySelectorAll<HTMLButtonElement>("button").forEach((button) => {
-      if (LEGACY_FLOATING_LABELS.has(normalize(button.textContent)) && button.style.position === "fixed") button.style.display = "none";
+      const isLegacyFloatingAction = LEGACY_FLOATING_LABELS.has(normalize(button.textContent))
+        && (button.style.position === "fixed" || window.getComputedStyle(button).position === "fixed");
+      if (isLegacyFloatingAction) button.style.display = "none";
     });
+
     const nativeButtons = Array.from(nav.querySelectorAll<HTMLButtonElement>("button")).filter((button) => !button.hasAttribute(TOOLS_TAB_ATTRIBUTE));
     const managementButton = nativeButtons.find((button) => ["مدیریت زیرسامانه", EXTRACTION_TAB_LABEL].includes(normalize(button.textContent)));
     if (managementButton) managementButton.textContent = EXTRACTION_TAB_LABEL;
@@ -97,6 +102,11 @@ export default function ProcurementManagementToolsStableEnhancement() {
       (section as HTMLElement).style.display = toolsActive ? "none" : "";
     });
     setHost((current) => current === nextHost ? current : nextHost);
+
+    // InitialRenderBoundary must not reveal the underlying workspace until this
+    // exact presentation cleanup has completed. This prevents the legacy fixed
+    // action launchers and pre-stable nav shape from becoming a visible frame.
+    root.setAttribute(STABLE_READY_ATTRIBUTE, "1");
   }, [toolsActive]);
 
   useEffect(() => {
@@ -118,6 +128,7 @@ export default function ProcurementManagementToolsStableEnhancement() {
       window.cancelAnimationFrame(frame1);
       document.querySelector(`button[${TOOLS_TAB_ATTRIBUTE}]`)?.remove();
       document.getElementById(HOST_ID)?.remove();
+      document.querySelector<HTMLElement>(`[${STABLE_READY_ATTRIBUTE}="1"]`)?.removeAttribute(STABLE_READY_ATTRIBUTE);
     };
   }, [syncShell]);
 
