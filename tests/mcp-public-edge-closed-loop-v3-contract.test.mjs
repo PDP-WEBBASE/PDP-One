@@ -10,6 +10,8 @@ const watchdog = fs.readFileSync(path.join(root, 'scripts', 'windows', 'Ensure-P
 const observer = fs.readFileSync(path.join(root, 'scripts', 'windows', 'Observe-PDPOneMcpRoute.ps1'), 'utf8');
 const register = fs.readFileSync(path.join(root, 'scripts', 'windows', 'Register-PDPOneStartupTask.ps1'), 'utf8');
 const managedDeploy = fs.readFileSync(path.join(root, 'scripts', 'windows', 'Invoke-PDPOneManagedFastDeployment.ps1'), 'utf8');
+const agentWatchdog = fs.readFileSync(path.join(root, 'scripts', 'windows', 'Ensure-PDPOneDeploymentAgentHealthy.ps1'), 'utf8');
+const agentInstall = fs.readFileSync(path.join(root, 'scripts', 'windows', 'Install-PDPOneDeploymentAgent.ps1'), 'utf8');
 const statusExtension = fs.readFileSync(path.join(root, 'services', 'pdp_mcp', 'public_edge_status.py'), 'utf8');
 const server = fs.readFileSync(path.join(root, 'services', 'pdp_mcp', 'server.py'), 'utf8');
 const dockerfile = fs.readFileSync(path.join(root, 'services', 'pdp_mcp', 'Dockerfile'), 'utf8');
@@ -81,6 +83,16 @@ test('host policy runs passive observer and public edge watchdog every minute', 
   assert.match(edgeBlock, /RepetitionInterval \(New-TimeSpan -Minutes 1\)/);
   assert.match(edgeBlock, /MultipleInstances IgnoreNew/);
   assert.match(register, /Assert-PDPOneScheduledTaskWindowless/);
+});
+
+test('deployment agent keeps processing signed requests while host is on battery', () => {
+  for (const source of [agentWatchdog, agentInstall]) {
+    assert.match(source, /AllowStartIfOnBatteries/);
+    assert.match(source, /DontStopIfGoingOnBatteries/);
+  }
+  assert.match(agentWatchdog, /task_battery_policy_repaired/);
+  assert.match(agentWatchdog, /DisallowStartIfOnBatteries/);
+  assert.match(agentWatchdog, /StopIfGoingOnBatteries/);
 });
 
 test('exact deployment reconciles current Windows task policy before acceptance', () => {
