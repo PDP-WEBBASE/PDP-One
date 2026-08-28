@@ -13,6 +13,7 @@ const managedDeploy = fs.readFileSync(path.join(root, 'scripts', 'windows', 'Inv
 const statusExtension = fs.readFileSync(path.join(root, 'services', 'pdp_mcp', 'public_edge_status.py'), 'utf8');
 const server = fs.readFileSync(path.join(root, 'services', 'pdp_mcp', 'server.py'), 'utf8');
 const dockerfile = fs.readFileSync(path.join(root, 'services', 'pdp_mcp', 'Dockerfile'), 'utf8');
+const imageWorkflow = fs.readFileSync(path.join(root, '.github', 'workflows', 'build-images.yml'), 'utf8');
 
 test('public edge watchdog is evidence-gated by the passive observer incident', () => {
   assert.match(watchdog, /mcp-route-observability/);
@@ -106,6 +107,14 @@ test('stable get_deployment_status gains additive sanitized observer and watchdo
   assert.match(server, /wrap_get_queue_status/);
   assert.match(server, /server_core\.get_queue_status\s*=\s*wrap_get_queue_status/);
   assert.match(dockerfile, /public_edge_status\.py/);
+});
+
+test('MCP immutable image carries component identity and CI verifies it when Dockerfile changes', () => {
+  assert.match(dockerfile, /LABEL\s+io\.pdpone\.component="mcp"/);
+  assert.match(imageWorkflow, /services\/pdp_mcp\/Dockerfile/);
+  assert.match(imageWorkflow, /io\.pdpone\.component/);
+  assert.match(imageWorkflow, /component label mismatch for \{component\}/);
+  assert.match(imageWorkflow, /io\.pdpone\.component\.fingerprint/);
 });
 
 test('healthy one-minute watchdog refreshes the pre-existing stable connectivity surface', () => {
