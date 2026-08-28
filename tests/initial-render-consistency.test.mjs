@@ -40,7 +40,7 @@ test("workspace-level client-only presentation has an explicit initial-render bo
   }
 });
 
-test("procurement first paint waits for both approved dashboard and stable management shell", () => {
+test("procurement first paint waits for stable management shell without startup deadlock", () => {
   const workspace = fs.readFileSync(path.join(appRoot, "procurement", "ProcurementWorkspaceV23.tsx"), "utf8");
   const boundary = fs.readFileSync(path.join(appRoot, "procurement", "ProcurementInitialRenderBoundary.tsx"), "utf8");
   const management = fs.readFileSync(path.join(appRoot, "procurement", "ProcurementManagementToolsStableEnhancement.tsx"), "utf8");
@@ -50,18 +50,27 @@ test("procurement first paint waits for both approved dashboard and stable manag
   assert.match(boundary, /data-pdp-initial-render-ready/);
   assert.match(boundary, /\.pdp-compact-dashboard-box/);
   assert.match(boundary, /data-pdp-management-tools-stable-ready/);
-  assert.match(boundary, /!finalDashboard\s*\|\|\s*!managementToolsStable/);
-  assert.match(boundary, /attributes:\s*true/);
-  assert.match(boundary, /attributeFilter:\s*\["data-pdp-management-tools-stable-ready"\]/);
+  assert.match(boundary, /if \(!finalDashboard\) return false/);
+  assert.match(boundary, /if \(!managementToolsStable\)/);
+  assert.match(boundary, /emitProcurementUiSync\(\{ source: "initial-render-boundary", dashboard: true, management: true \}\)/);
   assert.match(boundary, /visibility:\s*ready\s*\?\s*"visible"\s*:\s*"hidden"/);
-  assert.match(boundary, /new MutationObserver/);
-  assert.match(boundary, /observer\.observe\(root,/);
-  assert.doesNotMatch(boundary, /observer\.observe\(document\.body/);
 
   assert.match(management, /STABLE_READY_ATTRIBUTE\s*=\s*"data-pdp-management-tools-stable-ready"/);
+  assert.match(management, /if \(!root \|\| !nav\) return false/);
+  assert.match(management, /root\.setAttribute\(STABLE_READY_ATTRIBUTE,\s*"1"\)/);
+  assert.match(management, /return true/);
+  assert.match(management, /PROCUREMENT_UI_SYNC_EVENT/);
+  assert.match(management, /window\.addEventListener\(PROCUREMENT_UI_SYNC_EVENT,\s*onUiSync\)/);
+  assert.match(management, /const onUiSync = \(\) => scheduleSync\(\)/);
+  assert.match(management, /window\.requestAnimationFrame/);
+  assert.match(management, /window\.cancelAnimationFrame\(frame1\)/);
+  assert.match(management, /window\.cancelAnimationFrame\(frame2\)/);
+  assert.doesNotMatch(management, /MutationObserver/);
+  assert.doesNotMatch(management, /setTimeout\s*\(/);
+  assert.doesNotMatch(management, /setInterval\s*\(/);
+
   assert.match(management, /LEGACY_FLOATING_LABELS/);
   assert.match(management, /getComputedStyle\(button\)\.position\s*===\s*"fixed"/);
-  assert.match(management, /root\.setAttribute\(STABLE_READY_ATTRIBUTE,\s*"1"\)/);
   assert.match(management, /TOOLS_TAB_LABEL/);
   assert.match(management, /EXTRACTION_TAB_LABEL/);
 
