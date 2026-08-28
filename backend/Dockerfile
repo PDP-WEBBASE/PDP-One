@@ -2,6 +2,8 @@
 ARG PDP_DOCKER_REGISTRY=docker.arvancloud.ir/library
 FROM ${PDP_DOCKER_REGISTRY}/python:3.13-slim
 
+LABEL io.pdpone.component="backend"
+
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
