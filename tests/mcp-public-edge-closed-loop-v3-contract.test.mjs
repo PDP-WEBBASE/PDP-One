@@ -8,6 +8,7 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, '..');
 const watchdog = fs.readFileSync(path.join(root, 'scripts', 'windows', 'Ensure-PDPOnePublicEdgeHealthy.ps1'), 'utf8');
 const observer = fs.readFileSync(path.join(root, 'scripts', 'windows', 'Observe-PDPOneMcpRoute.ps1'), 'utf8');
+const routeTools = fs.readFileSync(path.join(root, 'services', 'pdp_mcp', 'route_diagnostics_tools.py'), 'utf8');
 const register = fs.readFileSync(path.join(root, 'scripts', 'windows', 'Register-PDPOneStartupTask.ps1'), 'utf8');
 const managedDeploy = fs.readFileSync(path.join(root, 'scripts', 'windows', 'Invoke-PDPOneManagedFastDeployment.ps1'), 'utf8');
 const agentWatchdog = fs.readFileSync(path.join(root, 'scripts', 'windows', 'Ensure-PDPOneDeploymentAgentHealthy.ps1'), 'utf8');
@@ -37,8 +38,7 @@ test('closed-loop repair escalates from soft reconcile to at most one bounded ed
   const bounded = watchdog.indexOf('-RepairAttempts 2 -AgentRoot');
   assert.ok(soft >= 0, 'soft reconcile must be present');
   assert.ok(bounded > soft, 'bounded edge recreate must happen only after soft reconcile and classification');
-  assert.match(watchdog, /recovered_after_soft_reconcile/);
-  assert.match(watchdog, /recovered_after_bounded_edge_recreate/);
+  assert.match(watchdog, /host_path_recovered_pending_external_confirmation/);
   assert.match(watchdog, /RepairCooldownSeconds\s*=\s*900/);
   assert.match(watchdog, /Global\\PDP-One-Public-Edge-V3/);
   assert.match(watchdog, /repair_suppressed_deployment/);
@@ -49,13 +49,43 @@ test('confirmed external Funnel edge failures stop internal recreate loops', () 
   assert.match(watchdog, /Test-LocalFunnelToNginx/);
   assert.match(watchdog, /wget -q -O- http:\/\/127\.0\.0\.1:80\/healthz/);
   assert.match(watchdog, /PDP One ready/);
-  assert.match(watchdog, /TAILSCALE_PUBLIC_EDGE_FAILURE/);
+  assert.match(watchdog, /TAILSCALE_PUBLIC_EDGE_EXTERNAL_REACHABILITY/);
   assert.match(watchdog, /tailscale_public_edge_failure/);
   assert.match(watchdog, /public_edge_observe_only/);
   assert.match(watchdog, /public_edge_externalized\s*=\s*\$true/);
-  const classification = watchdog.indexOf('TAILSCALE_PUBLIC_EDGE_FAILURE');
+  const classification = watchdog.indexOf('TAILSCALE_PUBLIC_EDGE_EXTERNAL_REACHABILITY');
   const bounded = watchdog.indexOf('$report.repair_stage = "bounded_edge_recreate"');
   assert.ok(classification >= 0 && bounded > classification, 'external edge classification must be checked before bounded recreate');
+});
+
+test('V4 separates immutable incident origin from the current failure classification', () => {
+  assert.match(observer, /incident_origin_checkpoint/);
+  assert.match(observer, /current_failed_checkpoint/);
+  assert.match(observer, /incident_origin_root_cause_classification/);
+  assert.match(observer, /current_root_cause_classification/);
+  assert.match(observer, /Get-RootCauseClassification -CheckpointId \$currentFailed/);
+  assert.match(watchdog, /current_root_cause_classification/);
+  assert.match(watchdog, /incident_origin_root_cause_classification/);
+});
+
+test('V4 external correlation records only sanitized evidence and gates end-to-end recovery', () => {
+  assert.match(routeTools, /pdp-one\.mcp-external-observer\.v1/);
+  assert.match(routeTools, /connected_mcp_diagnostic_call/);
+  assert.match(routeTools, /secrets_included.*False/);
+  assert.doesNotMatch(routeTools, /PDP_MCP_PATH_TOKEN|PDP_PUBLIC_BASE_URL|authorization/i);
+  assert.match(observer, /external-observer\.json/);
+  assert.match(observer, /host_recovered_pending_external_confirmation/);
+  assert.match(observer, /externalConfirmsRecovery/);
+  assert.match(observer, /external_correlation_status/);
+  assert.match(watchdog, /host_recovered_pending_external_confirmation/);
+});
+
+test('cooldown suppresses repair but not current external-edge observation', () => {
+  const classification = watchdog.indexOf('TAILSCALE_PUBLIC_EDGE_EXTERNAL_REACHABILITY');
+  const cooldown = watchdog.indexOf('$cooldown = Get-CooldownRemaining');
+  assert.ok(classification >= 0 && cooldown > classification, 'current edge classification must occur before cooldown suppression');
+  assert.match(watchdog, /tailscale_public_edge_failure_in_cooldown/);
+  assert.match(watchdog, /cooldown_observe_only/);
 });
 
 test('public edge recovery preserves credentials, identity and data boundaries', () => {
