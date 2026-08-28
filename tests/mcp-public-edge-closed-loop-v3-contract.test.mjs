@@ -29,17 +29,30 @@ test('public edge watchdog is evidence-gated by the passive observer incident', 
   assert.match(observer, /repair_actions\s*=\s*0/);
 });
 
-test('closed-loop repair escalates from soft reconcile to one bounded edge recreate', () => {
+test('closed-loop repair escalates from soft reconcile to at most one bounded edge recreate', () => {
   const soft = watchdog.indexOf('-RepairAttempts 1 -AllowPersistentMcpEscalation');
   const bounded = watchdog.indexOf('-RepairAttempts 2 -AgentRoot');
   assert.ok(soft >= 0, 'soft reconcile must be present');
-  assert.ok(bounded > soft, 'bounded edge recreate must happen only after soft reconcile');
+  assert.ok(bounded > soft, 'bounded edge recreate must happen only after soft reconcile and classification');
   assert.match(watchdog, /recovered_after_soft_reconcile/);
   assert.match(watchdog, /recovered_after_bounded_edge_recreate/);
   assert.match(watchdog, /RepairCooldownSeconds\s*=\s*900/);
   assert.match(watchdog, /Global\\PDP-One-Public-Edge-V3/);
   assert.match(watchdog, /repair_suppressed_deployment/);
   assert.match(watchdog, /incident_in_cooldown/);
+});
+
+test('confirmed external Funnel edge failures stop internal recreate loops', () => {
+  assert.match(watchdog, /Test-LocalFunnelToNginx/);
+  assert.match(watchdog, /wget -q -O- http:\/\/127\.0\.0\.1:80\/healthz/);
+  assert.match(watchdog, /PDP One ready/);
+  assert.match(watchdog, /TAILSCALE_PUBLIC_EDGE_FAILURE/);
+  assert.match(watchdog, /tailscale_public_edge_failure/);
+  assert.match(watchdog, /public_edge_observe_only/);
+  assert.match(watchdog, /public_edge_externalized\s*=\s*\$true/);
+  const classification = watchdog.indexOf('TAILSCALE_PUBLIC_EDGE_FAILURE');
+  const bounded = watchdog.indexOf('$report.repair_stage = "bounded_edge_recreate"');
+  assert.ok(classification >= 0 && bounded > classification, 'external edge classification must be checked before bounded recreate');
 });
 
 test('public edge recovery preserves credentials, identity and data boundaries', () => {
