@@ -16,6 +16,7 @@ const agentInstall = fs.readFileSync(path.join(root, 'scripts', 'windows', 'Inst
 const statusExtension = fs.readFileSync(path.join(root, 'services', 'pdp_mcp', 'public_edge_status.py'), 'utf8');
 const server = fs.readFileSync(path.join(root, 'services', 'pdp_mcp', 'server.py'), 'utf8');
 const dockerfile = fs.readFileSync(path.join(root, 'services', 'pdp_mcp', 'Dockerfile'), 'utf8');
+const webDockerfile = fs.readFileSync(path.join(root, 'infra', 'docker', 'web.Dockerfile'), 'utf8');
 const imageWorkflow = fs.readFileSync(path.join(root, '.github', 'workflows', 'build-images.yml'), 'utf8');
 
 test('public edge watchdog is evidence-gated by the passive observer incident', () => {
@@ -151,8 +152,9 @@ test('stable get_deployment_status gains additive sanitized observer and watchdo
   assert.match(dockerfile, /public_edge_status\.py/);
 });
 
-test('MCP immutable image carries component identity and CI verifies it when Dockerfile changes', () => {
+test('immutable MCP and Web images carry explicit component identity metadata', () => {
   assert.match(dockerfile, /LABEL\s+io\.pdpone\.component="mcp"/);
+  assert.match(webDockerfile, /LABEL\s+io\.pdpone\.component="web"/);
   assert.match(imageWorkflow, /services\/pdp_mcp\/Dockerfile/);
   assert.match(imageWorkflow, /io\.pdpone\.component/);
   assert.match(imageWorkflow, /component label mismatch for \{component\}/);
