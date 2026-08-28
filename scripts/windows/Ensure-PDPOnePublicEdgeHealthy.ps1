@@ -25,6 +25,7 @@ $observerRoot = Join-Path $AgentRoot "reports\mcp-route-observability"
 $latestPath = Join-Path $observerRoot "latest.json"
 $watchdogReportPath = Join-Path $AgentRoot "reports\public-edge-watchdog.json"
 $watchdogStatePath = Join-Path $AgentRoot "state\public-edge-watchdog.json"
+$connectivityPath = Join-Path $AgentRoot "reports\public-mcp-connectivity.json"
 $repairScript = Join-Path $PSScriptRoot "Repair-PDPOneConnectivity.ps1"
 $observerScript = Join-Path $PSScriptRoot "Observe-PDPOneMcpRoute.ps1"
 New-Item -ItemType Directory -Force -Path (Split-Path $watchdogReportPath -Parent), (Split-Path $watchdogStatePath -Parent) | Out-Null
@@ -54,6 +55,7 @@ function New-WatchdogReport {
         repair_suppressed_deployment = $false
         cooldown_seconds_remaining = 0
         final_public_mcp = "unknown"
+        stable_status_refreshed = $false
         secrets_included = $false
         token_rotated = $false
         tailscale_identity_reset = $false
@@ -89,6 +91,52 @@ function Get-CheckpointStatus {
     $match = @($Sample.checkpoints | Where-Object { [string]$_.id -eq $Id } | Select-Object -First 1)
     if ($match.Count -eq 0) { return "missing" }
     return [string]$match[0].status
+}
+
+function Update-StableHealthyConnectivityStatus {
+    param($Sample)
+    if ((Get-CheckpointStatus -Sample $Sample -Id 'CP-05') -ne 'pass') { return $false }
+    if ((Get-CheckpointStatus -Sample $Sample -Id 'CP-08') -ne 'pass') { return $false }
+    if ((Get-CheckpointStatus -Sample $Sample -Id 'CP-09') -ne 'pass') { return $false }
+    if ((Get-CheckpointStatus -Sample $Sample -Id 'CP-10') -ne 'pass') { return $false }
+
+    $publicBase = [string](Get-PDPOneEnvValue -Path $envPath -Name "PDP_PUBLIC_BASE_URL")
+    if ([string]::IsNullOrWhiteSpace($publicBase)) { return $false }
+    try {
+        $api = Invoke-WebRequest -UseBasicParsing -Uri ($publicBase.TrimEnd('/') + '/api/v1/auth/session/') -TimeoutSec 8
+        if ($api.StatusCode -ne 200 -or [string]$api.Content -notmatch '"authenticated"') { return $false }
+    } catch { return $false }
+
+    $previous = $null
+    if (Test-Path -LiteralPath $connectivityPath) {
+        try { $previous = Get-Content -LiteralPath $connectivityPath -Raw -Encoding UTF8 | ConvertFrom-Json } catch { $previous = $null }
+    }
+    $lastRepairAt = $null
+    $lastRepairResult = "never"
+    $cooldown = 0
+    if ($previous) {
+        if ($null -ne $previous.PSObject.Properties['last_funnel_repair_at']) { $lastRepairAt = $previous.last_funnel_repair_at }
+        if ($null -ne $previous.PSObject.Properties['last_funnel_repair_result']) { $lastRepairResult = [string]$previous.last_funnel_repair_result }
+        if ($null -ne $previous.PSObject.Properties['cooldown_seconds_remaining']) { $cooldown = [Math]::Max(0,[int]$previous.cooldown_seconds_remaining) }
+    }
+    $connectivity = [ordered]@{
+        schema = 'pdp-one.public-mcp-connectivity.v1'
+        checked_at = [DateTime]::UtcNow.ToString('o')
+        status = 'healthy'
+        local_mcp = 'healthy'
+        public_web = 'healthy'
+        public_api = 'healthy'
+        public_mcp = 'healthy'
+        dns_state = 'published'
+        consecutive_mcp_only_failures = 0
+        last_funnel_repair_at = $lastRepairAt
+        last_funnel_repair_result = $lastRepairResult
+        cooldown_seconds_remaining = $cooldown
+        repair_suppressed_deployment = $false
+        confirmation_count = 1
+    }
+    Write-JsonAtomic -Path $connectivityPath -Value $connectivity
+    return $true
 }
 
 $report = New-WatchdogReport
@@ -143,6 +191,10 @@ try {
         Write-JsonAtomic -Path $watchdogReportPath -Value $report
         Write-Output $watchdogReportPath
         exit 0
+    }
+
+    if (-not $publicFailed) {
+        $report.stable_status_refreshed = [bool](Update-StableHealthyConnectivityStatus -Sample $sample)
     }
 
     if (-not $publicFailed -or [string]::IsNullOrWhiteSpace([string]$sample.active_incident) -or [int]$sample.consecutive_failures -lt [Math]::Max(1,$IncidentFailureThreshold)) {
