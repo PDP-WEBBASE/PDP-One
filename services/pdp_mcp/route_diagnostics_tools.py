@@ -50,8 +50,8 @@ def _parse_timestamp(value: Any) -> datetime | None:
 def _record_external_reachability() -> dict[str, Any]:
     """Persist only proof that an external MCP diagnostic call reached this process.
 
-    This is observability telemetry, not a recovery or runtime-control mutation.  It
-    contains no token, URL, request content, user identity, or authorization data.
+    This is observability telemetry, not a recovery or runtime-control mutation. It
+    contains no token, URL, request content, user identity, or auth material.
     """
 
     observed_at = datetime.now(timezone.utc).isoformat()
