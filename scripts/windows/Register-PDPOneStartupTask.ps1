@@ -24,7 +24,8 @@ $ProjectRoot = (Resolve-Path -LiteralPath $ProjectRoot).Path
 # Predecessor policy markers retained for compatibility checks:
 # 2026-08-21-hidden-background-tasks-v5
 # 2026-08-27-passive-mcp-route-observability-v6
-$taskPolicyVersion = "2026-08-28-public-edge-closed-loop-v7"
+# 2026-08-28-public-edge-closed-loop-v7
+$taskPolicyVersion = "2026-08-28-battery-resilient-recurring-tasks-v8"
 $taskPolicyRoot = "C:\ProgramData\PDP-One\maintenance"
 $taskPolicyPath = Join-Path $taskPolicyRoot "startup-task-policy.version"
 if ($ApplyIfNeeded -and (Test-Path -LiteralPath $taskPolicyPath)) {
@@ -56,7 +57,7 @@ $principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interac
 $startupAction = New-PDPOneHiddenPowerShellAction -ScriptPath $startScript -HiddenRunnerPath $hiddenRunner
 $logonTrigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
 $watchdogTrigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) -RepetitionInterval (New-TimeSpan -Minutes 10) -RepetitionDuration (New-TimeSpan -Days 3650)
-$settings = New-ScheduledTaskSettingsSet -RestartCount 1 -RestartInterval (New-TimeSpan -Minutes 5) -ExecutionTimeLimit (New-TimeSpan -Minutes 30) -MultipleInstances IgnoreNew -StartWhenAvailable
+$settings = New-ScheduledTaskSettingsSet -RestartCount 1 -RestartInterval (New-TimeSpan -Minutes 5) -ExecutionTimeLimit (New-TimeSpan -Minutes 30) -MultipleInstances IgnoreNew -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
 Register-ScheduledTask -TaskName $StartupTaskName -Action $startupAction -Trigger @($logonTrigger, $watchdogTrigger) -Principal $principal -Settings $settings -Description "Starts PDP One after Windows logon and rechecks it every ten minutes. It tolerates slow Rancher startup, performs one bounded non-destructive Rancher recovery, preserves data and tokens, repairs Tailscale Funnel, and writes safe diagnostics on failure." -Force | Out-Null
 
 $networkRunner = ConvertTo-PDPOneScheduledTaskArgument $hiddenRunner
@@ -68,25 +69,25 @@ if ($LASTEXITCODE -ne 0) { throw "The PDP One network-recovery Scheduled Task co
 
 $openAction = New-PDPOneHiddenPowerShellAction -ScriptPath $openScript -ScriptArguments @("-TimeoutSeconds", "300") -HiddenRunnerPath $hiddenRunner
 $openTrigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
-$openSettings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Minutes 8) -MultipleInstances IgnoreNew -StartWhenAvailable
+$openSettings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Minutes 8) -MultipleInstances IgnoreNew -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
 Register-ScheduledTask -TaskName $OpenWebTaskName -Action $openAction -Trigger $openTrigger -Principal $principal -Settings $openSettings -Description "Begins polling PDP One local health immediately after logon and opens localhost on the first healthy response without changing Windows DNS." -Force | Out-Null
 
 $mcpAction = New-PDPOneHiddenPowerShellAction -ScriptPath $mcpWatchdogScript -ScriptArguments @("-ProjectRoot", $ProjectRoot) -HiddenRunnerPath $hiddenRunner
 $mcpLogonTrigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
 $mcpPeriodicTrigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(2) -RepetitionInterval (New-TimeSpan -Minutes 5) -RepetitionDuration (New-TimeSpan -Days 3650)
-$mcpSettings = New-ScheduledTaskSettingsSet -RestartCount 6 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit (New-TimeSpan -Minutes 6) -MultipleInstances IgnoreNew -StartWhenAvailable
+$mcpSettings = New-ScheduledTaskSettingsSet -RestartCount 6 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit (New-TimeSpan -Minutes 6) -MultipleInstances IgnoreNew -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
 Register-ScheduledTask -TaskName $McpWatchdogTaskName -Action $mcpAction -Trigger @($mcpLogonTrigger, $mcpPeriodicTrigger) -Principal $principal -Settings $mcpSettings -Description "Checks the PDP One MCP container every five minutes. If it is missing or restarting, it repairs only MCP, preserves tokens and never touches Docker volumes or PostgreSQL data." -Force | Out-Null
 
 $mcpObservabilityAction = New-PDPOneHiddenPowerShellAction -ScriptPath $mcpObservabilityScript -ScriptArguments @("-ProjectRoot", $ProjectRoot) -HiddenRunnerPath $hiddenRunner
 $mcpObservabilityLogonTrigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
 $mcpObservabilityPeriodicTrigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) -RepetitionInterval (New-TimeSpan -Minutes 1) -RepetitionDuration (New-TimeSpan -Days 3650)
-$mcpObservabilitySettings = New-ScheduledTaskSettingsSet -RestartCount 1 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit (New-TimeSpan -Seconds 45) -MultipleInstances IgnoreNew -StartWhenAvailable
+$mcpObservabilitySettings = New-ScheduledTaskSettingsSet -RestartCount 1 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit (New-TimeSpan -Seconds 45) -MultipleInstances IgnoreNew -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
 Register-ScheduledTask -TaskName $McpObservabilityTaskName -Action $mcpObservabilityAction -Trigger @($mcpObservabilityLogonTrigger, $mcpObservabilityPeriodicTrigger) -Principal $principal -Settings $mcpObservabilitySettings -Description "Records passive MCP route checkpoints once per minute for later root-cause analysis. It never restarts services, repairs routes, rotates tokens, changes Docker volumes, or queries business data." -Force | Out-Null
 
 $publicEdgeWatchdogAction = New-PDPOneHiddenPowerShellAction -ScriptPath $publicEdgeWatchdogScript -ScriptArguments @("-ProjectRoot", $ProjectRoot) -HiddenRunnerPath $hiddenRunner
 $publicEdgeWatchdogLogonTrigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
 $publicEdgeWatchdogPeriodicTrigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(2) -RepetitionInterval (New-TimeSpan -Minutes 1) -RepetitionDuration (New-TimeSpan -Days 3650)
-$publicEdgeWatchdogSettings = New-ScheduledTaskSettingsSet -RestartCount 1 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit (New-TimeSpan -Minutes 4) -MultipleInstances IgnoreNew -StartWhenAvailable
+$publicEdgeWatchdogSettings = New-ScheduledTaskSettingsSet -RestartCount 1 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit (New-TimeSpan -Minutes 4) -MultipleInstances IgnoreNew -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
 Register-ScheduledTask -TaskName $PublicEdgeWatchdogTaskName -Action $publicEdgeWatchdogAction -Trigger @($publicEdgeWatchdogLogonTrigger, $publicEdgeWatchdogPeriodicTrigger) -Principal $principal -Settings $publicEdgeWatchdogSettings -Description "Uses only confirmed passive MCP route incidents to run bounded Public Edge recovery. It preserves tokens, Tailscale identity, PostgreSQL and Docker volumes, and never repairs on the first transient failure." -Force | Out-Null
 
 $agentRoot = "C:\ProgramData\PDP-One\deployment-agent"
@@ -98,12 +99,12 @@ try {
 $deploymentAgentWatchdogAction = New-PDPOneHiddenPowerShellAction -ScriptPath $deploymentAgentWatchdogScript -ScriptArguments @("-AgentRoot", $agentRoot, "-AgentTaskName", "PDP One Local Deployment Agent") -HiddenRunnerPath $hiddenRunner
 $deploymentAgentWatchdogLogonTrigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
 $deploymentAgentWatchdogPeriodicTrigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) -RepetitionInterval (New-TimeSpan -Minutes 1) -RepetitionDuration (New-TimeSpan -Days 3650)
-$deploymentAgentWatchdogSettings = New-ScheduledTaskSettingsSet -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit (New-TimeSpan -Minutes 2) -MultipleInstances IgnoreNew -StartWhenAvailable
+$deploymentAgentWatchdogSettings = New-ScheduledTaskSettingsSet -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit (New-TimeSpan -Minutes 2) -MultipleInstances IgnoreNew -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
 Register-ScheduledTask -TaskName $DeploymentAgentWatchdogTaskName -Action $deploymentAgentWatchdogAction -Trigger @($deploymentAgentWatchdogLogonTrigger, $deploymentAgentWatchdogPeriodicTrigger) -Principal $principal -Settings $deploymentAgentWatchdogSettings -Description "Keeps only the fixed PDP One Local Deployment Agent Scheduled Task running. It never executes arbitrary commands and never interrupts a Running Agent." -Force | Out-Null
 
 $diskGuardAction = New-PDPOneHiddenPowerShellAction -ScriptPath $diskGuardScript -ScriptArguments @("-Mode", "scheduled", "-ProjectRoot", $ProjectRoot) -HiddenRunnerPath $hiddenRunner
 $diskGuardDailyTrigger = New-ScheduledTaskTrigger -Daily -At 3:15am
-$diskGuardSettings = New-ScheduledTaskSettingsSet -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 5) -ExecutionTimeLimit (New-TimeSpan -Minutes 45) -MultipleInstances IgnoreNew -StartWhenAvailable
+$diskGuardSettings = New-ScheduledTaskSettingsSet -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 5) -ExecutionTimeLimit (New-TimeSpan -Minutes 45) -MultipleInstances IgnoreNew -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
 Register-ScheduledTask -TaskName $DiskGuardTaskName -Action $diskGuardAction -Trigger $diskGuardDailyTrigger -Principal $principal -Settings $diskGuardSettings -Description "Maintains safe C drive capacity for PDP One. It prunes only unused build cache, images, stopped containers and networks, archives old restore-verified backups, compacts Rancher WSL VHDX only when needed, and never prunes Docker volumes." -Force | Out-Null
 
 foreach ($taskName in @($StartupTaskName, $NetworkRecoveryTaskName, $OpenWebTaskName, $McpWatchdogTaskName, $McpObservabilityTaskName, $PublicEdgeWatchdogTaskName, $DeploymentAgentWatchdogTaskName, $DiskGuardTaskName)) {
@@ -112,4 +113,4 @@ foreach ($taskName in @($StartupTaskName, $NetworkRecoveryTaskName, $OpenWebTask
 
 New-Item -ItemType Directory -Force -Path $taskPolicyRoot | Out-Null
 [IO.File]::WriteAllText($taskPolicyPath, $taskPolicyVersion, [Text.UTF8Encoding]::new($false))
-Write-Host "PDP One recurring Windows Scheduled Tasks are installed with the windowless launcher." -ForegroundColor Green
+Write-Host "PDP One recurring Windows Scheduled Tasks are installed with the windowless launcher and battery-resilient execution policy." -ForegroundColor Green
