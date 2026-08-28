@@ -34,11 +34,11 @@ test("adds result registration for submitted tenders inquiries and direct opport
   assert.match(source, /نتیجه ثبت شد و مورد به بخش «نتایج» منتقل شد/);
 });
 
-test("removes the proposed tab from direct referrals but keeps human selection from the complete list", async () => {
+test("uses direct recent as the candidate list while preserving legacy proposed-state recovery", async () => {
   const source = await readFile(overlayPath, "utf8");
   assert.match(source, /state\.top === "direct" && state\.workflow === "recommended"/);
-  assert.match(source, /کل ارجاعات مستقیم/);
-  assert.match(source, /state\.workflow === "recent"/);
+  assert.match(source, /ارجاعات مستقیم اخیر/);
+  assert.match(source, /state\.workflow === "all"/);
   assert.match(source, /updateDirectStage\(item, "selected"\)/);
 });
 
