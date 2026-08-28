@@ -13,6 +13,7 @@ import ManagementDashboardPanel from "./ManagementDashboardPanel";
 import OpportunityWorkflowPanel from "./OpportunityWorkflowPanel";
 import ProcurementAnalysisCenterPanel from "./ProcurementAnalysisCenterPanel";
 import { PROCUREMENT_STABLE_VIEW_STATE_EVENT } from "./procurementStableViewState";
+import { PROCUREMENT_UI_SYNC_EVENT } from "./procurementUiSync";
 
 type ToolKey = "workflow" | "review" | "followup" | "contract" | "dashboard" | "automation" | "analysis" | "analysisSettings" | "engine" | "internetUsage";
 
@@ -102,7 +103,6 @@ export default function ProcurementManagementToolsStableEnhancement() {
       (section as HTMLElement).style.display = toolsActive ? "none" : "";
     });
     setHost((current) => current === nextHost ? current : nextHost);
-
     root.setAttribute(STABLE_READY_ATTRIBUTE, "1");
     return true;
   }, [toolsActive]);
@@ -110,53 +110,40 @@ export default function ProcurementManagementToolsStableEnhancement() {
   useEffect(() => {
     let frame1 = 0;
     let frame2 = 0;
-    let observer: MutationObserver | null = null;
     let disposed = false;
-
-    const stopObserver = () => {
-      observer?.disconnect();
-      observer = null;
-    };
 
     const scheduleSync = () => {
       window.cancelAnimationFrame(frame1);
       window.cancelAnimationFrame(frame2);
       frame1 = window.requestAnimationFrame(() => {
         frame2 = window.requestAnimationFrame(() => {
-          if (!disposed && syncShell()) stopObserver();
+          if (!disposed) syncShell();
         });
       });
     };
 
-    const ensureReadinessObserver = () => {
-      if (observer || disposed) return;
-      observer = new MutationObserver(() => {
-        if (syncShell()) stopObserver();
-      });
-      observer.observe(document.documentElement, { childList: true, subtree: true });
-    };
-
-    ensureReadinessObserver();
     scheduleSync();
 
     const onState = () => {
       setToolsActive(false);
-      ensureReadinessObserver();
       scheduleSync();
     };
+    const onUiSync = () => scheduleSync();
     const onClick = (event: MouseEvent) => {
       const button = event.target instanceof Element ? event.target.closest<HTMLButtonElement>("nav button") : null;
       if (button && !button.hasAttribute(TOOLS_TAB_ATTRIBUTE)) setToolsActive(false);
     };
+
     window.addEventListener(PROCUREMENT_STABLE_VIEW_STATE_EVENT, onState);
+    window.addEventListener(PROCUREMENT_UI_SYNC_EVENT, onUiSync);
     document.addEventListener("click", onClick);
     return () => {
       disposed = true;
       window.removeEventListener(PROCUREMENT_STABLE_VIEW_STATE_EVENT, onState);
+      window.removeEventListener(PROCUREMENT_UI_SYNC_EVENT, onUiSync);
       document.removeEventListener("click", onClick);
       window.cancelAnimationFrame(frame1);
       window.cancelAnimationFrame(frame2);
-      stopObserver();
       document.querySelector(`button[${TOOLS_TAB_ATTRIBUTE}]`)?.remove();
       document.getElementById(HOST_ID)?.remove();
       document.querySelector<HTMLElement>(`[${STABLE_READY_ATTRIBUTE}="1"]`)?.removeAttribute(STABLE_READY_ATTRIBUTE);
