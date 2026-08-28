@@ -10,6 +10,9 @@ const watchdog = fs.readFileSync(path.join(root, 'scripts', 'windows', 'Ensure-P
 const observer = fs.readFileSync(path.join(root, 'scripts', 'windows', 'Observe-PDPOneMcpRoute.ps1'), 'utf8');
 const register = fs.readFileSync(path.join(root, 'scripts', 'windows', 'Register-PDPOneStartupTask.ps1'), 'utf8');
 const managedDeploy = fs.readFileSync(path.join(root, 'scripts', 'windows', 'Invoke-PDPOneManagedFastDeployment.ps1'), 'utf8');
+const statusExtension = fs.readFileSync(path.join(root, 'services', 'pdp_mcp', 'public_edge_status.py'), 'utf8');
+const server = fs.readFileSync(path.join(root, 'services', 'pdp_mcp', 'server.py'), 'utf8');
+const dockerfile = fs.readFileSync(path.join(root, 'services', 'pdp_mcp', 'Dockerfile'), 'utf8');
 
 test('public edge watchdog is evidence-gated by the passive observer incident', () => {
   assert.match(watchdog, /mcp-route-observability/);
@@ -74,4 +77,27 @@ test('exact deployment reconciles current Windows task policy before acceptance'
   const deployment = managedDeploy.indexOf('deploying-exact-commit');
   const reconciliation = managedDeploy.indexOf('reconciling-startup-task-policy');
   assert.ok(deployment >= 0 && reconciliation > deployment);
+});
+
+test('stable get_deployment_status gains additive sanitized observer and watchdog summaries', () => {
+  assert.match(statusExtension, /mcp_route_observer/);
+  assert.match(statusExtension, /public_edge_watchdog/);
+  assert.match(statusExtension, /pdp-one\.mcp-route-observability\.v2/);
+  assert.match(statusExtension, /pdp-one\.public-edge-watchdog\.v1/);
+  assert.match(statusExtension, /passive_only/);
+  assert.match(statusExtension, /repair_actions/);
+  assert.match(statusExtension, /secrets_included/);
+  assert.match(statusExtension, /token_rotated/);
+  assert.match(statusExtension, /tailscale_identity_reset/);
+  assert.doesNotMatch(statusExtension, /PDP_MCP_PATH_TOKEN|PDP_PUBLIC_BASE_URL|authorization/i);
+  assert.match(server, /wrap_get_queue_status/);
+  assert.match(server, /server_core\.get_queue_status\s*=\s*wrap_get_queue_status/);
+  assert.match(dockerfile, /public_edge_status\.py/);
+});
+
+test('healthy one-minute watchdog refreshes the pre-existing stable connectivity surface', () => {
+  assert.match(watchdog, /public-mcp-connectivity\.json/);
+  assert.match(watchdog, /Update-StableHealthyConnectivityStatus/);
+  assert.match(watchdog, /pdp-one\.public-mcp-connectivity\.v1/);
+  assert.match(watchdog, /stable_status_refreshed/);
 });
