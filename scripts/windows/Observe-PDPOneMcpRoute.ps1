@@ -27,7 +27,7 @@ $incidentRoot = Join-Path $reportRoot "incidents"
 $sampleRoot = Join-Path $reportRoot "samples"
 $statePath = Join-Path $reportRoot "state.json"
 $latestPath = Join-Path $reportRoot "latest.json"
-$externalEvidencePath = Join-Path $reportRoot "external-observer.json"
+$externalEvidencePath = Join-Path $agentRoot "queue\coordinator\mcp-external-observer.json"
 New-Item -ItemType Directory -Force -Path $reportRoot, $incidentRoot, $sampleRoot | Out-Null
 
 function New-Checkpoint {
