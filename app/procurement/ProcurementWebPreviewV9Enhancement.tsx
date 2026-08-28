@@ -229,6 +229,16 @@ function browserState() {
   return typeof window === "undefined" ? null : window as V9Window;
 }
 
+function storedSelection(key: string, fallback: string[]) {
+  if (typeof window === "undefined") return fallback;
+  try {
+    const stored = JSON.parse(window.localStorage.getItem(key) || "null") as unknown;
+    return Array.isArray(stored) && stored.every((value) => typeof value === "string") ? stored : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
 export function resetProcurementV9NativeFilters() {
   if (typeof window !== "undefined") window.dispatchEvent(new Event(CLEAR_EVENT));
 }
@@ -273,17 +283,8 @@ export function ProcurementV9NativeFilters({ noticeTab }: { noticeTab: boolean }
 }
 
 export function ProcurementV9NativeToolbar() {
-  const [opportunities, setOpportunities] = useState<string[]>(() => browserState()?.__pdpV9OpportunityTypes || ["consulting", "epc"]);
-  const [domains, setDomains] = useState<string[]>(() => browserState()?.__pdpV9ActivityDomains || activityDomainOptions.map((option) => option.value));
-
-  useEffect(() => {
-    try {
-      const storedTypes = JSON.parse(localStorage.getItem(TYPE_STORAGE_KEY) || "null") as string[] | null;
-      const storedDomains = JSON.parse(localStorage.getItem(DOMAIN_STORAGE_KEY) || "null") as string[] | null;
-      if (Array.isArray(storedTypes)) setOpportunities(storedTypes);
-      if (Array.isArray(storedDomains)) setDomains(storedDomains);
-    } catch { /* Invalid legacy browser state is ignored. */ }
-  }, []);
+  const [opportunities, setOpportunities] = useState<string[]>(() => browserState()?.__pdpV9OpportunityTypes || storedSelection(TYPE_STORAGE_KEY, ["consulting", "epc"]));
+  const [domains, setDomains] = useState<string[]>(() => browserState()?.__pdpV9ActivityDomains || storedSelection(DOMAIN_STORAGE_KEY, activityDomainOptions.map((option) => option.value)));
 
   useEffect(() => {
     publish({ __pdpV9OpportunityTypes: opportunities, __pdpV9ActivityDomains: domains });
