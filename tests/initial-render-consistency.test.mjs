@@ -59,7 +59,8 @@ test("procurement first paint waits for stable management shell without startup 
   assert.match(management, /return true/);
   assert.match(management, /new MutationObserver/);
   assert.match(management, /observer\.observe\(document\.documentElement,\s*\{\s*childList:\s*true,\s*subtree:\s*true\s*\}\)/);
-  assert.match(management, /if \(!syncShell\(\)\) ensureReadinessObserver\(\)/);
+  assert.match(management, /ensureReadinessObserver\(\);[\s\S]*?scheduleSync\(\);/);
+  assert.match(management, /if \(!disposed && syncShell\(\)\) stopObserver\(\)/);
   assert.match(management, /observer\?\.disconnect\(\)/);
   assert.match(management, /window\.cancelAnimationFrame\(frame1\)/);
   assert.match(management, /window\.cancelAnimationFrame\(frame2\)/);
