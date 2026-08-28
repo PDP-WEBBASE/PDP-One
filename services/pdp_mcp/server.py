@@ -6,6 +6,7 @@ adds sanitized Public Edge diagnostics to the already-stable deployment status
 without changing the tool signature.
 
 Static contract markers retained for existing repository tests:
+from server_core import api, mcp
 from exact_candidate_promotion_tools import register_exact_candidate_promotion_tools
 register_exact_candidate_promotion_tools
 register_deployment_coordinator_tools(mcp)
