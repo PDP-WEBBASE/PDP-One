@@ -49,6 +49,8 @@ function New-WatchdogReport {
         root_cause_classification = "unknown"
         local_runtime_healthy = $false
         public_edge_failed = $false
+        local_funnel_to_nginx_healthy = $false
+        public_edge_externalized = $false
         repair_attempted = $false
         repair_stage = "none"
         repair_actions = 0
@@ -91,6 +93,21 @@ function Get-CheckpointStatus {
     $match = @($Sample.checkpoints | Where-Object { [string]$_.id -eq $Id } | Select-Object -First 1)
     if ($match.Count -eq 0) { return "missing" }
     return [string]$match[0].status
+}
+
+function Test-LocalFunnelToNginx {
+    $output = @()
+    $exitCode = -1
+    $previousPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = "Continue"
+        $output = @(& docker compose --profile tunnel exec -T tailscale sh -lc "wget -q -O- http://127.0.0.1:80/healthz" 2>&1)
+        $exitCode = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $previousPreference
+    }
+    $text = (($output | ForEach-Object { [string]$_ }) -join "`n")
+    return [bool]($exitCode -eq 0 -and $text -match 'PDP One ready')
 }
 
 function Update-StableHealthyConnectivityStatus {
@@ -255,6 +272,31 @@ try {
         Write-JsonAtomic -Path $watchdogReportPath -Value $report
         Write-Output $watchdogReportPath
         exit 0
+    }
+
+    $daemonPass = (Get-CheckpointStatus -Sample $sample -Id 'CP-06') -eq 'pass'
+    $funnelPass = (Get-CheckpointStatus -Sample $sample -Id 'CP-07') -eq 'pass'
+    $dnsPass = (Get-CheckpointStatus -Sample $sample -Id 'CP-08') -eq 'pass'
+    $publicWebFail = (Get-CheckpointStatus -Sample $sample -Id 'CP-09') -eq 'fail'
+    $publicMcpFail = (Get-CheckpointStatus -Sample $sample -Id 'CP-10') -eq 'fail'
+    if ($daemonPass -and $funnelPass -and $dnsPass -and $publicWebFail -and $publicMcpFail) {
+        $localFunnelHealthy = Test-LocalFunnelToNginx
+        $report.local_funnel_to_nginx_healthy = $localFunnelHealthy
+        if ($localFunnelHealthy) {
+            $report.status = "tailscale_public_edge_failure"
+            $report.root_cause_classification = "TAILSCALE_PUBLIC_EDGE_FAILURE"
+            $report.public_edge_externalized = $true
+            $report.repair_stage = "public_edge_observe_only"
+            $report.final_public_mcp = "failed"
+            $state.last_repair_at = [DateTime]::UtcNow.ToString("o")
+            $state.last_incident = [string]$sample.active_incident
+            $state.last_result = "tailscale_public_edge_failure_observed"
+            Write-JsonAtomic -Path $watchdogStatePath -Value $state
+            if (Test-Path -LiteralPath $observerScript) { & $observerScript -ProjectRoot $ProjectRoot | Out-Null }
+            Write-JsonAtomic -Path $watchdogReportPath -Value $report
+            Write-Output $watchdogReportPath
+            exit 0
+        }
     }
 
     $report.repair_stage = "bounded_edge_recreate"
