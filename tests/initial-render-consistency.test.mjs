@@ -57,14 +57,15 @@ test("procurement first paint waits for stable management shell without startup 
   assert.match(management, /if \(!root \|\| !nav\) return false/);
   assert.match(management, /root\.setAttribute\(STABLE_READY_ATTRIBUTE,\s*"1"\)/);
   assert.match(management, /return true/);
-  assert.match(management, /new MutationObserver/);
-  assert.match(management, /observer\.observe\(document\.documentElement,\s*\{\s*childList:\s*true,\s*subtree:\s*true\s*\}\)/);
-  assert.match(management, /ensureReadinessObserver\(\);[\s\S]*?scheduleSync\(\);/);
-  assert.match(management, /if \(!disposed && syncShell\(\)\) stopObserver\(\)/);
-  assert.match(management, /observer\?\.disconnect\(\)/);
+  assert.match(management, /PROCUREMENT_UI_SYNC_EVENT/);
+  assert.match(management, /window\.addEventListener\(PROCUREMENT_UI_SYNC_EVENT,\s*onUiSync\)/);
+  assert.match(management, /const onUiSync = \(\) => scheduleSync\(\)/);
+  assert.match(management, /window\.requestAnimationFrame/);
   assert.match(management, /window\.cancelAnimationFrame\(frame1\)/);
   assert.match(management, /window\.cancelAnimationFrame\(frame2\)/);
+  assert.doesNotMatch(management, /MutationObserver/);
   assert.doesNotMatch(management, /setTimeout\s*\(/);
+  assert.doesNotMatch(management, /setInterval\s*\(/);
 
   assert.match(management, /LEGACY_FLOATING_LABELS/);
   assert.match(management, /getComputedStyle\(button\)\.position\s*===\s*"fixed"/);
