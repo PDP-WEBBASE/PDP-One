@@ -90,7 +90,7 @@ jobs:
           required=false
           while IFS= read -r path; do
             case "$path" in
-              .github/workflows/build-images.yml|.github/workflows/component-fingerprint-parity.yml|.dockerignore|infra/docker/pdp-images-bake.hcl|release/component-contexts.json|release/component-image-mode.json|scripts/ci/component-fingerprints.mjs|scripts/ci/Test-ComponentFingerprintParity.ps1|scripts/windows/PDPOne.ReleaseManifest.ps1)
+              .github/workflows/build-images.yml|.github/workflows/component-fingerprint-parity.yml|.dockerignore|infra/docker/pdp-images-bake.hcl|release/component-contexts.json|release/component-image-mode.json|scripts/ci/component-fingerprints.mjs|scripts/ci/Test-ComponentFingerprintParity.ps1|scripts/windows/PDPOne.ReleaseManifest.ps1|services/pdp_mcp/Dockerfile)
                 required=true
                 break
                 ;;
