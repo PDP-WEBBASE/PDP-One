@@ -143,7 +143,7 @@ try {
         $task = Get-ScheduledTask -TaskName $AgentTaskName -ErrorAction Stop
     }
 
-    if ([bool]$task.Settings.DisallowStartIfOnBatteries -or -not [bool]$task.Settings.StopIfGoingOnBatteries -eq $false) {
+    if ([bool]$task.Settings.DisallowStartIfOnBatteries -or [bool]$task.Settings.StopIfGoingOnBatteries) {
         $settings = New-PDPOneAgentTaskSettings
         Set-ScheduledTask -TaskName $AgentTaskName -Settings $settings -ErrorAction Stop | Out-Null
         $report.task_battery_policy_repaired = $true
