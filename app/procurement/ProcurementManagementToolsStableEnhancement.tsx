@@ -71,7 +71,7 @@ export default function ProcurementManagementToolsStableEnhancement() {
   const syncShell = useCallback(() => {
     const root = document.querySelector<HTMLElement>('main[dir="rtl"]');
     const nav = root?.querySelector("nav");
-    if (!root || !nav) return;
+    if (!root || !nav) return false;
 
     document.querySelectorAll<HTMLButtonElement>("button").forEach((button) => {
       const isLegacyFloatingAction = LEGACY_FLOATING_LABELS.has(normalize(button.textContent))
@@ -103,18 +103,46 @@ export default function ProcurementManagementToolsStableEnhancement() {
     });
     setHost((current) => current === nextHost ? current : nextHost);
 
-    // InitialRenderBoundary must not reveal the underlying workspace until this
-    // exact presentation cleanup has completed. This prevents the legacy fixed
-    // action launchers and pre-stable nav shape from becoming a visible frame.
     root.setAttribute(STABLE_READY_ATTRIBUTE, "1");
+    return true;
   }, [toolsActive]);
 
   useEffect(() => {
-    let frame1 = window.requestAnimationFrame(() => { window.requestAnimationFrame(syncShell); });
+    let frame1 = 0;
+    let frame2 = 0;
+    let observer: MutationObserver | null = null;
+    let disposed = false;
+
+    const stopObserver = () => {
+      observer?.disconnect();
+      observer = null;
+    };
+
+    const scheduleSync = () => {
+      window.cancelAnimationFrame(frame1);
+      window.cancelAnimationFrame(frame2);
+      frame1 = window.requestAnimationFrame(() => {
+        frame2 = window.requestAnimationFrame(() => {
+          if (!disposed && syncShell()) stopObserver();
+        });
+      });
+    };
+
+    const ensureReadinessObserver = () => {
+      if (observer || disposed) return;
+      observer = new MutationObserver(() => {
+        if (syncShell()) stopObserver();
+      });
+      observer.observe(document.documentElement, { childList: true, subtree: true });
+    };
+
+    if (!syncShell()) ensureReadinessObserver();
+    scheduleSync();
+
     const onState = () => {
       setToolsActive(false);
-      window.cancelAnimationFrame(frame1);
-      frame1 = window.requestAnimationFrame(() => { window.requestAnimationFrame(syncShell); });
+      if (!syncShell()) ensureReadinessObserver();
+      scheduleSync();
     };
     const onClick = (event: MouseEvent) => {
       const button = event.target instanceof Element ? event.target.closest<HTMLButtonElement>("nav button") : null;
@@ -123,18 +151,16 @@ export default function ProcurementManagementToolsStableEnhancement() {
     window.addEventListener(PROCUREMENT_STABLE_VIEW_STATE_EVENT, onState);
     document.addEventListener("click", onClick);
     return () => {
+      disposed = true;
       window.removeEventListener(PROCUREMENT_STABLE_VIEW_STATE_EVENT, onState);
       document.removeEventListener("click", onClick);
       window.cancelAnimationFrame(frame1);
+      window.cancelAnimationFrame(frame2);
+      stopObserver();
       document.querySelector(`button[${TOOLS_TAB_ATTRIBUTE}]`)?.remove();
       document.getElementById(HOST_ID)?.remove();
       document.querySelector<HTMLElement>(`[${STABLE_READY_ATTRIBUTE}="1"]`)?.removeAttribute(STABLE_READY_ATTRIBUTE);
     };
-  }, [syncShell]);
-
-  useEffect(() => {
-    const frame = window.requestAnimationFrame(syncShell);
-    return () => window.cancelAnimationFrame(frame);
   }, [syncShell]);
 
   return <>{host && toolsActive ? createPortal(<ManagementToolbar onOpen={setActiveTool}/>, host) : null}<ActiveToolPanel tool={activeTool} onClose={() => setActiveTool(null)}/></>;
