@@ -50,7 +50,9 @@ test("procurement first paint waits for stable management shell without startup 
   assert.match(boundary, /data-pdp-initial-render-ready/);
   assert.match(boundary, /\.pdp-compact-dashboard-box/);
   assert.match(boundary, /data-pdp-management-tools-stable-ready/);
-  assert.match(boundary, /!finalDashboard\s*\|\|\s*!managementToolsStable/);
+  assert.match(boundary, /if \(!finalDashboard\) return false/);
+  assert.match(boundary, /if \(!managementToolsStable\)/);
+  assert.match(boundary, /emitProcurementUiSync\(\{ source: "initial-render-boundary", dashboard: true, management: true \}\)/);
   assert.match(boundary, /visibility:\s*ready\s*\?\s*"visible"\s*:\s*"hidden"/);
 
   assert.match(management, /STABLE_READY_ATTRIBUTE\s*=\s*"data-pdp-management-tools-stable-ready"/);
