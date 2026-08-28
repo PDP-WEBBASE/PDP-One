@@ -1,6 +1,7 @@
 "use client";
 
 import { ReactNode, useEffect, useRef, useState } from "react";
+import { emitProcurementUiSync } from "./procurementUiSync";
 
 const metricLabels = [
   "کل فراخوان‌ها",
@@ -45,7 +46,11 @@ export default function ProcurementInitialRenderBoundary({ children }: { childre
     const checkReady = () => {
       const finalDashboard = root.querySelector(".pdp-compact-dashboard-box");
       const managementToolsStable = root.querySelector('[data-pdp-management-tools-stable-ready="1"]');
-      if (!finalDashboard || !managementToolsStable) return false;
+      if (!finalDashboard) return false;
+      if (!managementToolsStable) {
+        emitProcurementUiSync({ source: "initial-render-boundary", dashboard: true, management: true });
+        return false;
+      }
       setReady(true);
       return true;
     };
