@@ -136,12 +136,12 @@ export default function ProcurementManagementToolsStableEnhancement() {
       observer.observe(document.documentElement, { childList: true, subtree: true });
     };
 
-    if (!syncShell()) ensureReadinessObserver();
+    ensureReadinessObserver();
     scheduleSync();
 
     const onState = () => {
       setToolsActive(false);
-      if (!syncShell()) ensureReadinessObserver();
+      ensureReadinessObserver();
       scheduleSync();
     };
     const onClick = (event: MouseEvent) => {
