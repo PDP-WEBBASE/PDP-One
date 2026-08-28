@@ -101,6 +101,29 @@ class DirectOpportunityApiTests(TestCase):
         self.assertEqual(response.data["count"], 2)
         self.assertEqual({row["title"] for row in response.data["results"]}, {"فوری", "عادی"})
 
+    def test_recent_direct_view_is_the_candidate_view_and_has_activity_domain(self):
+        self.client.force_authenticate(self.expert)
+        fresh = DirectOpportunity.objects.create(
+            title="طراحی ساختمان اداری",
+            domain="معماری و ساختمان",
+            stage=DirectOpportunity.Stage.NEW,
+            responsible=self.expert,
+        )
+        DirectOpportunity.objects.create(
+            title="فرصت منتخب",
+            domain="زیرساخت برق",
+            stage=DirectOpportunity.Stage.SELECTED,
+            responsible=self.expert,
+        )
+        response = self.client.get(
+            "/api/v1/procurement/direct-opportunities/?workflow_view=recommended&activity_domain=building"
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["count"], 1)
+        self.assertEqual(response.data["results"][0]["id"], str(fresh.id))
+        self.assertEqual(response.data["results"][0]["activity_domain"], "building")
+        self.assertEqual(response.data["results"][0]["activity_domain_label"], "ساختمان و معماری")
+
     def test_follow_up_updates_next_action_and_stage(self):
         opportunity = self.create_quick_opportunity()
         next_due = timezone.now() + timedelta(days=3)

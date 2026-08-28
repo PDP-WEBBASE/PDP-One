@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { emitProcurementUiSync, PROCUREMENT_UI_SYNC_EVENT } from "./procurementUiSync";
 import {
   getProcurementStableViewState,
@@ -19,6 +19,8 @@ type V9Window = Window & {
   __pdpV9PublishedFrom?: string;
   __pdpV9PublishedTo?: string;
   __pdpV9OpportunityTypes?: string[];
+  __pdpV9ActivityDomains?: string[];
+  __pdpV9Provinces?: string[];
 };
 
 const CLEAR_EVENT = "pdp-procurement-v9-clear-filters";
@@ -48,8 +50,26 @@ const deadlineOptions: Option[] = [
   { value: "available", label: "فرصت دارد" }, { value: "unknown", label: "نامشخص" },
 ];
 const opportunityOptions: Option[] = [
-  { value: "consulting", label: "مشاوره" }, { value: "epc", label: "EPC" }, { value: "construction", label: "احداث" },
+  { value: "consulting", label: "مشاوره" }, { value: "epc", label: "EPC" },
+  { value: "construction", label: "احداث" }, { value: "unclassified", label: "نامشخص / نیازمند تشخیص" },
 ];
+const activityDomainOptions: Option[] = [
+  { value: "building", label: "ساختمان و معماری" },
+  { value: "urban", label: "شهرسازی، برنامه‌ریزی و توسعه" },
+  { value: "mep", label: "تأسیسات و زیرساخت" },
+  { value: "renewable", label: "انرژی‌های تجدیدپذیر" },
+  { value: "multi", label: "ترکیبی / بین‌حوزه‌ای" },
+  { value: "undetermined", label: "نامشخص / نیازمند تشخیص" },
+];
+const provinceOptions: Option[] = [
+  "آذربایجان شرقی", "آذربایجان غربی", "اردبیل", "اصفهان", "البرز", "ایلام", "بوشهر", "تهران",
+  "چهارمحال و بختیاری", "خراسان جنوبی", "خراسان رضوی", "خراسان شمالی", "خوزستان", "زنجان", "سمنان",
+  "سیستان و بلوچستان", "فارس", "قزوین", "قم", "کردستان", "کرمان", "کرمانشاه", "کهگیلویه و بویراحمد",
+  "گلستان", "گیلان", "لرستان", "مازندران", "مرکزی", "هرمزگان", "همدان", "یزد",
+].map((label) => ({ value: label, label }));
+
+const TYPE_STORAGE_KEY = "pdp-one.procurement.opportunity-types.v1";
+const DOMAIN_STORAGE_KEY = "pdp-one.procurement.activity-domains.v1";
 
 function normalize(value: string | null | undefined) {
   return String(value || "").replace(/\s+/g, " ").trim();
@@ -127,7 +147,8 @@ function publish(next: Partial<V9Window>) {
 }
 
 function selectedLabel(values: string[], options: Option[], empty: string, namesAlways = false) {
-  if (!values.length) return empty;
+  if (values.length === options.length) return empty;
+  if (!values.length) return "هیچ‌کدام";
   const labels = values.map((value) => options.find((option) => option.value === value)?.label || value);
   if (namesAlways || labels.length === 1) return labels.join("، ");
   return `${fa.format(labels.length)} مورد انتخاب شده`;
@@ -136,7 +157,23 @@ function selectedLabel(values: string[], options: Option[], empty: string, names
 function MultiSelect({ title, values, options, empty, namesAlways, onChange }: {
   title: string; values: string[]; options: Option[]; empty: string; namesAlways?: boolean; onChange: (values: string[]) => void;
 }) {
-  return <label className="pdp-v9-field"><span>{title}</span><details className="pdp-v9-select"><summary>{selectedLabel(values, options, empty, namesAlways)}</summary><div className="pdp-v9-menu">{options.map((option) => <label key={option.value}><input type="checkbox" checked={values.includes(option.value)} onChange={(event) => onChange(event.target.checked ? [...values, option.value] : values.filter((value) => value !== option.value))} />{option.label}</label>)}</div></details></label>;
+  const detailsRef = useRef<HTMLDetailsElement>(null);
+  const allSelected = options.length > 0 && values.length === options.length;
+  const partlySelected = values.length > 0 && !allSelected;
+  useEffect(() => {
+    const closeOutside = (event: PointerEvent) => {
+      if (detailsRef.current?.open && event.target instanceof Node && !detailsRef.current.contains(event.target)) detailsRef.current.open = false;
+    };
+    document.addEventListener("pointerdown", closeOutside);
+    return () => document.removeEventListener("pointerdown", closeOutside);
+  }, []);
+  const closeOthers = () => {
+    if (!detailsRef.current?.open) return;
+    document.querySelectorAll<HTMLDetailsElement>("details.pdp-v9-select[open]").forEach((details) => {
+      if (details !== detailsRef.current) details.open = false;
+    });
+  };
+  return <label className="pdp-v9-field"><span>{title}</span><details ref={detailsRef} className="pdp-v9-select" onToggle={closeOthers}><summary>{selectedLabel(values, options, empty, namesAlways)}</summary><div className="pdp-v9-menu"><label className="pdp-v9-select-all"><input type="checkbox" checked={allSelected} ref={(node) => { if (node) node.indeterminate = partlySelected; }} onChange={(event) => onChange(event.target.checked ? options.map((option) => option.value) : [])} />همه</label>{options.map((option) => <label key={option.value}><input type="checkbox" checked={values.includes(option.value)} onChange={(event) => onChange(event.target.checked ? [...values, option.value] : values.filter((value) => value !== option.value))} />{option.label}</label>)}</div></details></label>;
 }
 
 function dateParts(date: Date) {
@@ -162,6 +199,7 @@ function daysForPersianMonth(anchor: Date) {
 }
 
 function JalaliRange({ from, to, onChange }: { from: string; to: string; onChange: (from: string, to: string) => void }) {
+  const detailsRef = useRef<HTMLDetailsElement>(null);
   const [anchor, setAnchor] = useState(() => from ? new Date(`${from}T12:00:00Z`) : new Date());
   const days = useMemo(() => daysForPersianMonth(anchor), [anchor]);
   const leading = days.length ? (days[0].getUTCDay() + 1) % 7 : 0;
@@ -171,11 +209,34 @@ function JalaliRange({ from, to, onChange }: { from: string; to: string; onChang
     else onChange(from, value);
   };
   const move = (amount: number) => setAnchor((current) => { const next = new Date(current); next.setUTCDate(next.getUTCDate() + amount); return next; });
-  return <label className="pdp-v9-field pdp-v9-date-field"><span>تاریخ انتشار</span><details className="pdp-v9-select pdp-v9-calendar"><summary>{display}</summary><div className="pdp-v9-calendar-panel"><header><button type="button" onClick={() => move(32)}>‹</button><b>{faMonth.format(anchor)}</b><button type="button" onClick={() => move(-32)}>›</button></header><div className="pdp-v9-week">{["ش", "ی", "د", "س", "چ", "پ", "ج"].map((day) => <span key={day}>{day}</span>)}</div><div className="pdp-v9-days">{Array.from({ length: leading }).map((_, index) => <i key={`blank-${index}`} />)}{days.map((day) => { const value = iso(day); const selected = value === from || value === to; const ranged = from && to && value > from && value < to; return <button type="button" key={value} className={selected ? "selected" : ranged ? "ranged" : ""} onClick={() => choose(value)}>{fa.format(dateParts(day).day)}</button>; })}</div><footer><button type="button" onClick={() => onChange("", "")}>پاک‌کردن بازه</button></footer></div></details></label>;
+  useEffect(() => {
+    const closeOutside = (event: PointerEvent) => {
+      if (detailsRef.current?.open && event.target instanceof Node && !detailsRef.current.contains(event.target)) detailsRef.current.open = false;
+    };
+    document.addEventListener("pointerdown", closeOutside);
+    return () => document.removeEventListener("pointerdown", closeOutside);
+  }, []);
+  const closeOthers = () => {
+    if (!detailsRef.current?.open) return;
+    document.querySelectorAll<HTMLDetailsElement>("details.pdp-v9-select[open]").forEach((details) => {
+      if (details !== detailsRef.current) details.open = false;
+    });
+  };
+  return <label className="pdp-v9-field pdp-v9-date-field"><span>تاریخ انتشار</span><details ref={detailsRef} className="pdp-v9-select pdp-v9-calendar" onToggle={closeOthers}><summary>{display}</summary><div className="pdp-v9-calendar-panel"><header><button type="button" onClick={() => move(32)}>‹</button><b>{faMonth.format(anchor)}</b><button type="button" onClick={() => move(-32)}>›</button></header><div className="pdp-v9-week">{["ش", "ی", "د", "س", "چ", "پ", "ج"].map((day) => <span key={day}>{day}</span>)}</div><div className="pdp-v9-days">{Array.from({ length: leading }).map((_, index) => <i key={`blank-${index}`} />)}{days.map((day) => { const value = iso(day); const selected = value === from || value === to; const ranged = from && to && value > from && value < to; return <button type="button" key={value} className={selected ? "selected" : ranged ? "ranged" : ""} onClick={() => choose(value)}>{fa.format(dateParts(day).day)}</button>; })}</div><footer><button type="button" onClick={() => onChange("", "")}>پاک‌کردن بازه</button></footer></div></details></label>;
 }
 
 function browserState() {
   return typeof window === "undefined" ? null : window as V9Window;
+}
+
+function storedSelection(key: string, fallback: string[]) {
+  if (typeof window === "undefined") return fallback;
+  try {
+    const stored = JSON.parse(window.localStorage.getItem(key) || "null") as unknown;
+    return Array.isArray(stored) && stored.every((value) => typeof value === "string") ? stored : fallback;
+  } catch {
+    return fallback;
+  }
 }
 
 export function resetProcurementV9NativeFilters() {
@@ -183,25 +244,27 @@ export function resetProcurementV9NativeFilters() {
 }
 
 export function ProcurementV9NativeFilters({ noticeTab }: { noticeTab: boolean }) {
-  const [sources, setSources] = useState<string[]>(() => browserState()?.__pdpV9Sources || []);
-  const [importance, setImportance] = useState<string[]>(() => browserState()?.__pdpV9Importance || []);
-  const [urgency, setUrgency] = useState<string[]>(() => browserState()?.__pdpV9Urgency || []);
-  const [deadlines, setDeadlines] = useState<string[]>(() => browserState()?.__pdpV9DeadlineStatuses || []);
+  const [sources, setSources] = useState<string[]>(() => browserState()?.__pdpV9Sources || sourceOptions.map((option) => option.value));
+  const [importance, setImportance] = useState<string[]>(() => browserState()?.__pdpV9Importance || importanceOptions.map((option) => option.value));
+  const [urgency, setUrgency] = useState<string[]>(() => browserState()?.__pdpV9Urgency || urgencyOptions.map((option) => option.value));
+  const [deadlines, setDeadlines] = useState<string[]>(() => browserState()?.__pdpV9DeadlineStatuses || deadlineOptions.map((option) => option.value));
   const [publishedFrom, setPublishedFrom] = useState(() => browserState()?.__pdpV9PublishedFrom || "");
   const [publishedTo, setPublishedTo] = useState(() => browserState()?.__pdpV9PublishedTo || "");
+  const [provinces, setProvinces] = useState<string[]>(() => browserState()?.__pdpV9Provinces || provinceOptions.map((option) => option.value));
 
   useEffect(() => {
-    publish({ __pdpV9Sources: sources, __pdpV9Importance: importance, __pdpV9Urgency: urgency, __pdpV9DeadlineStatuses: deadlines, __pdpV9PublishedFrom: publishedFrom, __pdpV9PublishedTo: publishedTo });
-  }, [sources, importance, urgency, deadlines, publishedFrom, publishedTo]);
+    publish({ __pdpV9Sources: sources, __pdpV9Importance: importance, __pdpV9Urgency: urgency, __pdpV9DeadlineStatuses: deadlines, __pdpV9PublishedFrom: publishedFrom, __pdpV9PublishedTo: publishedTo, __pdpV9Provinces: provinces });
+  }, [sources, importance, urgency, deadlines, publishedFrom, publishedTo, provinces]);
 
   useEffect(() => {
     const clear = () => {
-      setSources([]);
-      setImportance([]);
-      setUrgency([]);
-      setDeadlines([]);
+      setSources(sourceOptions.map((option) => option.value));
+      setImportance(importanceOptions.map((option) => option.value));
+      setUrgency(urgencyOptions.map((option) => option.value));
+      setDeadlines(deadlineOptions.map((option) => option.value));
       setPublishedFrom("");
       setPublishedTo("");
+      setProvinces(provinceOptions.map((option) => option.value));
     };
     window.addEventListener(CLEAR_EVENT, clear);
     return () => window.removeEventListener(CLEAR_EVENT, clear);
@@ -209,6 +272,7 @@ export function ProcurementV9NativeFilters({ noticeTab }: { noticeTab: boolean }
 
   return <div className="pdp-v9-filter-grid" dir="rtl">
     {noticeTab && <MultiSelect title="منبع" values={sources} options={sourceOptions} empty="همه منابع" onChange={setSources} />}
+    <MultiSelect title="استان" values={provinces} options={provinceOptions} empty="همه استان‌ها" onChange={setProvinces} />
     <MultiSelect title="اهمیت" values={importance} options={importanceOptions} empty="همه سطوح" onChange={setImportance} />
     <MultiSelect title="فوریت" values={urgency} options={urgencyOptions} empty="همه وضعیت‌ها" onChange={setUrgency} />
     {noticeTab && <>
@@ -219,20 +283,18 @@ export function ProcurementV9NativeFilters({ noticeTab }: { noticeTab: boolean }
 }
 
 export function ProcurementV9NativeToolbar() {
-  const [opportunities, setOpportunities] = useState<string[]>(() => browserState()?.__pdpV9OpportunityTypes || ["consulting", "epc"]);
+  const [opportunities, setOpportunities] = useState<string[]>(() => browserState()?.__pdpV9OpportunityTypes || storedSelection(TYPE_STORAGE_KEY, ["consulting", "epc"]));
+  const [domains, setDomains] = useState<string[]>(() => browserState()?.__pdpV9ActivityDomains || storedSelection(DOMAIN_STORAGE_KEY, activityDomainOptions.map((option) => option.value)));
 
   useEffect(() => {
-    publish({ __pdpV9OpportunityTypes: opportunities });
-  }, [opportunities]);
-
-  useEffect(() => {
-    const clear = () => setOpportunities(["consulting", "epc"]);
-    window.addEventListener(CLEAR_EVENT, clear);
-    return () => window.removeEventListener(CLEAR_EVENT, clear);
-  }, []);
+    publish({ __pdpV9OpportunityTypes: opportunities, __pdpV9ActivityDomains: domains });
+    localStorage.setItem(TYPE_STORAGE_KEY, JSON.stringify(opportunities));
+    localStorage.setItem(DOMAIN_STORAGE_KEY, JSON.stringify(domains));
+  }, [opportunities, domains]);
 
   return <div className="pdp-v9-toolbar" dir="rtl">
-    <MultiSelect title="نوع فرصت" values={opportunities} options={opportunityOptions} empty="انتخاب نوع فرصت" namesAlways onChange={setOpportunities} />
+    <MultiSelect title="حوزه فعالیت" values={domains} options={activityDomainOptions} empty="همه حوزه‌ها" namesAlways onChange={setDomains} />
+    <MultiSelect title="نوع فرصت" values={opportunities} options={opportunityOptions} empty="همه انواع" namesAlways onChange={setOpportunities} />
     <div id="pdp-procurement-v9-bulk-slot" />
   </div>;
 }
@@ -264,8 +326,8 @@ export default function ProcurementWebPreviewV9Enhancement() {
   }, []);
 
   return <><style>{`
-    .pdp-v9-native-filter{display:none!important}.pdp-v9-filter-bar{grid-template-columns:minmax(230px,1.55fr) repeat(5,minmax(108px,.72fr)) minmax(225px,1.18fr) auto!important;gap:6px!important;align-items:end!important;padding:9px!important}.pdp-v9-filter-bar>label{font-size:12px!important;line-height:1.25!important;font-weight:700!important;gap:4px!important}.pdp-v9-filter-bar>label input,.pdp-v9-filter-bar>label select{min-height:34px!important;padding:5px 7px!important;font-size:11.5px!important;line-height:1.2!important;font-weight:400!important}.pdp-v9-filter-bar .pdp-v2-clear-group button{min-height:34px!important;padding:4px 9px!important;font-size:12px!important;font-weight:700!important}.pdp-v9-filter-bar .pdp-v2-row-count{display:none!important}
-    .pdp-v9-filter-grid{display:contents}.pdp-v9-field{position:relative;display:grid;gap:4px;min-width:0;font-size:12px;line-height:1.25;font-weight:700;color:#17202a}.pdp-v9-select{position:relative;min-width:0;font-weight:400}.pdp-v9-select>summary{display:flex;align-items:center;justify-content:space-between;min-height:34px;padding:5px 8px;border:1px solid rgba(15,23,42,.16);border-radius:8px;background:#fff;color:#17202a;font-size:11.5px;cursor:pointer;list-style:none;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.pdp-v9-select>summary::-webkit-details-marker{display:none}.pdp-v9-select>summary::before{content:"⌄";color:#64748b;font-size:13px;margin-left:8px}.pdp-v9-menu{position:absolute;z-index:60;top:calc(100% + 5px);right:0;min-width:190px;padding:8px;border:1px solid #cbd5e1;border-radius:10px;background:#fff;box-shadow:0 14px 32px rgba(15,23,42,.16)}.pdp-v9-menu label{display:flex;align-items:center;gap:7px;min-height:29px;padding:4px 6px;border-radius:7px;color:#334155;font-size:11px;font-weight:400;white-space:nowrap}.pdp-v9-menu label:hover{background:#f1f5f9}.pdp-v9-menu input{width:15px;height:15px;margin:0;accent-color:#145563}
+    .pdp-v9-native-filter{display:none!important}.pdp-v9-filter-bar>label:has(>select){display:none!important}.pdp-v9-filter-bar{grid-template-columns:minmax(230px,1.55fr) repeat(6,minmax(108px,.72fr)) minmax(225px,1.18fr) auto!important;gap:6px!important;align-items:end!important;padding:9px!important}.pdp-v9-filter-bar>label{font-size:12px!important;line-height:1.25!important;font-weight:700!important;gap:4px!important}.pdp-v9-filter-bar>label input,.pdp-v9-filter-bar>label select{min-height:34px!important;padding:5px 7px!important;font-size:11.5px!important;line-height:1.2!important;font-weight:400!important}.pdp-v9-filter-bar .pdp-v2-clear-group button{min-height:34px!important;padding:4px 9px!important;font-size:12px!important;font-weight:700!important}.pdp-v9-filter-bar .pdp-v2-row-count{display:none!important}
+    .pdp-v9-filter-grid{display:contents}.pdp-v9-field{position:relative;display:grid;gap:4px;min-width:0;font-size:12px;line-height:1.25;font-weight:700;color:#17202a}.pdp-v9-select{position:relative;min-width:0;font-weight:400}.pdp-v9-select>summary{display:flex;align-items:center;justify-content:space-between;min-height:34px;padding:5px 8px;border:1px solid rgba(15,23,42,.16);border-radius:8px;background:#fff;color:#17202a;font-size:11.5px;cursor:pointer;list-style:none;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.pdp-v9-select>summary::-webkit-details-marker{display:none}.pdp-v9-select>summary::before{content:"⌄";color:#64748b;font-size:13px;margin-left:8px}.pdp-v9-menu{position:absolute;z-index:60;top:calc(100% + 5px);right:0;min-width:210px;padding:8px;border:1px solid #cbd5e1;border-radius:10px;background:#fff;box-shadow:0 14px 32px rgba(15,23,42,.16)}.pdp-v9-menu label{display:grid;grid-template-columns:18px 1fr 18px;align-items:center;gap:7px;min-height:29px;padding:4px 6px;border-radius:7px;color:#334155;font-size:11px;font-weight:400;white-space:nowrap;text-align:center}.pdp-v9-menu label::after{content:""}.pdp-v9-menu label:hover{background:#f1f5f9}.pdp-v9-menu .pdp-v9-select-all{border-bottom:1px solid #e2e8f0;border-radius:0;margin-bottom:4px;font-weight:700}.pdp-v9-menu input{width:15px;height:15px;margin:0;accent-color:#145563}
     .pdp-v9-workflow-row{display:flex!important;align-items:flex-end!important;justify-content:space-between!important;gap:14px!important;width:100%!important;margin-bottom:14px!important;overflow:visible!important}.pdp-v9-workflow-row>.pdp-v9-toolbar{margin-right:auto;flex:0 0 auto}.pdp-v9-toolbar{display:flex;align-items:flex-end;justify-content:flex-end;gap:6px;direction:rtl;overflow:visible}.pdp-v9-toolbar .pdp-v9-field{min-width:165px}.pdp-v9-toolbar .pdp-v9-select>summary{min-height:34px}.pdp-v9-toolbar #pdp-procurement-v9-bulk-slot{display:flex;align-items:flex-end}
     .pdp-v9-calendar-panel{position:absolute;z-index:70;top:calc(100% + 5px);right:0;left:auto;width:304px;padding:11px;border:1px solid #cbd5e1;border-radius:12px;background:#fff;box-shadow:0 16px 34px rgba(15,23,42,.18)}.pdp-v9-calendar-panel header{display:flex;align-items:center;justify-content:space-between;margin-bottom:9px}.pdp-v9-calendar-panel header button,.pdp-v9-calendar-panel footer button{border:1px solid #dbe3ec;border-radius:8px;background:#fff;padding:4px 9px;font:inherit;cursor:pointer}.pdp-v9-week,.pdp-v9-days{display:grid;grid-template-columns:repeat(7,1fr);gap:3px}.pdp-v9-week span{text-align:center;color:#64748b;font-size:10px}.pdp-v9-days i{min-height:31px}.pdp-v9-days button{min-height:31px;border:0;border-radius:7px;background:#fff;font:inherit;font-size:10.5px;cursor:pointer}.pdp-v9-days button:hover,.pdp-v9-days button.ranged{background:#e3eef0}.pdp-v9-days button.selected{background:#145563;color:#fff;font-weight:700}.pdp-v9-calendar-panel footer{margin-top:8px;text-align:left}
     .pdp-v2-selected-count,.pdp-ux-selected-count{display:none!important}.pdp-v2-decision>dl,.pdp-ux-record>div:last-child>dl{display:none!important}.pdp-v2-meta-row>*{box-sizing:border-box;min-height:22px!important;padding:2px 8px!important;border-radius:999px!important;font-size:10.5px!important;line-height:1.45!important;font-weight:700!important}.pdp-v2-meta-row button{font-size:10.5px!important}.pdp-v9-neutral{border-color:#cbd5e1!important;background:#f8fafc!important;color:#334155!important}.pdp-v9-danger{border-color:#fecdd3!important;background:#fff1f2!important;color:#be123c!important}.pdp-v9-high{border-color:#fed7aa!important;background:#fff7ed!important;color:#c2410c!important}.pdp-v9-medium{border-color:#eadb94!important;background:#fff9dd!important;color:#776210!important}.pdp-v9-safe{border-color:#99f6e4!important;background:#f0fdfa!important;color:#0f766e!important}

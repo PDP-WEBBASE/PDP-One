@@ -34,9 +34,9 @@ test("recommended coverage remains canonical without full background prefetch", 
   assert.match(backendView, /Subquery\(latest_effective_recommended_notice_ids\(\)\)/);
 });
 
-test("recent lists keep the three-day label while the compact server feed owns the date filter", () => {
-  assert.match(baseWorkspace, /مناقصات ۳ روز اخیر/);
-  assert.match(baseWorkspace, /استعلامات ۳ روز اخیر/);
+test("recent lists use the approved concise title while the compact server feed owns the date filter", () => {
+  assert.match(baseWorkspace, /مناقصات اخیر/);
+  assert.match(baseWorkspace, /استعلامات اخیر/);
   assert.match(pagination, /return "recent"/);
   assert.match(pagination, /params\.set\("workflow", workflowCode\(state\.workflow\)\)/);
   assert.match(pagination, /COMPACT_NOTICE_PATH/);

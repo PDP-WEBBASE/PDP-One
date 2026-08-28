@@ -22,6 +22,8 @@ type CompactNotice = {
   source_url: string;
   detail_url: string;
   sources: SourceBadge[];
+  business_opportunity_type_label?: string;
+  activity_domain_label?: string;
   [key: string]: unknown;
 };
 type NoticePayload = { count: number; page: number; page_size: number; results: CompactNotice[] };
@@ -217,7 +219,8 @@ function enhanceRecordCards(payload: NoticePayload | null) {
     }
 
     Array.from(article.querySelectorAll<HTMLElement>("span,small")).forEach((node) => {
-      if (normalize(node.textContent).startsWith("پردازش:")) node.style.display = "none";
+      const text = normalize(node.textContent);
+      if (text.startsWith("پردازش:") || text === item.province || text.includes("باقی‌مانده") || text.includes("گذشته")) node.style.display = "none";
     });
 
     const sources = [...(item.sources || [])].sort(sourceSort);
@@ -227,6 +230,8 @@ function enhanceRecordCards(payload: NoticePayload | null) {
       item.province,
       deadline.remaining,
       deadline.date,
+      item.business_opportunity_type_label,
+      item.activity_domain_label,
     ]);
     if (article.dataset.pdpCompactSignature === signature) return;
     article.dataset.pdpCompactSignature = signature;
@@ -236,6 +241,8 @@ function enhanceRecordCards(payload: NoticePayload | null) {
     group.dataset.pdpCompactBadges = "1";
     group.className = "pdp-compact-badge-group";
     sources.forEach((source, index) => group.appendChild(createSourceLink(source, index)));
+    if (item.business_opportunity_type_label) group.appendChild(createChip(item.business_opportunity_type_label, "pdp-compact-chip pdp-preview-classification-badge"));
+    if (item.activity_domain_label) group.appendChild(createChip(item.activity_domain_label, "pdp-compact-chip pdp-preview-classification-badge"));
     if (item.sources.length > 1) group.appendChild(createChip(`${fa.format(item.sources.length)} منبع`, "pdp-compact-chip pdp-source-count"));
     if (item.province) group.appendChild(createChip(item.province));
     group.appendChild(createChip(deadline.remaining));
@@ -391,7 +398,7 @@ export default function ProcurementCompactWorkspaceStableEnhancement() {
   const showBulk = (top === "مناقصات" || top === "استعلامات") && activeWorkflow() === "پیشنهادی";
   const filterPortal = filterHost ? createPortal(<>
     {showBulk && <div className="pdp-compact-bulk-control"><select value={bulkScope} onChange={(event) => setBulkScope(event.target.value as "page" | "all")}><option value="page">همین صفحه</option><option value="all">همه نتایج فیلترشده</option></select><button type="button" disabled={bulkBusy || !noticePayload?.count} onClick={() => void bulkDismiss()}>{bulkBusy ? "در حال حذف..." : "حذف گروهی پیشنهادها"}</button></div>}
-    {message && <small className="pdp-compact-message">{message}</small>}
+    {message && !showBulk && <small className="pdp-compact-message">{message}</small>}
   </>, filterHost) : null;
   const dashboardPortal = dashboardHost && dashboard ? createPortal(<DashboardBox data={dashboard}/>, dashboardHost) : null;
 

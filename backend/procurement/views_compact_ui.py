@@ -1,7 +1,7 @@
 from datetime import date, datetime, time, timedelta
 
 from django.db import transaction
-from django.db.models import Count, DateField, Q, Subquery, Value
+from django.db.models import Count, DateField, OuterRef, Q, Subquery, Value
 from django.db.models.functions import Coalesce
 from django.utils import timezone
 from rest_framework import serializers, status
@@ -12,6 +12,7 @@ from rest_framework.response import Response
 from core.models import AuditEvent
 
 from .analysis_statistics import procurement_analysis_statistics
+from .activity_domains import ACTIVITY_DOMAIN_LABELS, activity_domain_query, classify_activity_domain
 from .models import ProcurementCase, ProcurementNotice
 from .models_analysis import NoticeAnalysisDraft
 from .models_direct import DirectOpportunity
@@ -48,9 +49,17 @@ class CompactNoticeSerializer(ProcurementNoticeListSerializer):
     source_name = serializers.SerializerMethodField()
     source_url = serializers.SerializerMethodField()
     detail_url = serializers.SerializerMethodField()
+    activity_domain = serializers.SerializerMethodField()
+    activity_domain_label = serializers.SerializerMethodField()
 
     class Meta(ProcurementNoticeListSerializer.Meta):
-        fields = ProcurementNoticeListSerializer.Meta.fields + ["sources"]
+        fields = ProcurementNoticeListSerializer.Meta.fields + ["sources", "activity_domain", "activity_domain_label"]
+
+    def get_activity_domain(self, obj):
+        return classify_activity_domain(getattr(obj, "activity_domain_source", ""))
+
+    def get_activity_domain_label(self, obj):
+        return ACTIVITY_DOMAIN_LABELS[self.get_activity_domain(obj)]
 
     def _ordered_source_notices(self, obj):
         items = [link.source_notice for link in obj.source_links.all()]
@@ -154,11 +163,15 @@ def _apply_deadline_filters(queryset, request):
 
 
 def _compact_notice_queryset(request, *, force_recommended: bool = False):
+    latest_category = NoticeAnalysisDraft.objects.filter(notice_id=OuterRef("pk")).order_by(
+        "-analyzed_at", "-id"
+    ).values("category")[:1]
     queryset = (
         ProcurementNotice.objects.filter(soft_deleted_at__isnull=True, is_hidden=False)
         .select_related("case", "case__responsible", "reference_record")
         .prefetch_related("source_links__source_notice__connector__source")
         .annotate(
+            activity_domain_source=Subquery(latest_category),
             source_count=Count("source_links", distinct=True),
             publication_sort=Coalesce(
                 "published_date",
@@ -204,9 +217,9 @@ def _compact_notice_queryset(request, *, force_recommended: bool = False):
             else:
                 source_query |= Q(source_links__source_notice__connector__source__name=source_name)
         queryset = queryset.filter(source_query)
-    province = str(request.query_params.get("province", "")).strip()
-    if province:
-        queryset = queryset.filter(province=province)
+    provinces = _multi_query_values(request, "province")
+    if provinces:
+        queryset = queryset.filter(province__in=provinces)
     importance = _multi_query_values(request, "importance")
     if importance:
         queryset = queryset.filter(importance__in=importance)
@@ -220,6 +233,11 @@ def _compact_notice_queryset(request, *, force_recommended: bool = False):
             queryset = queryset.none()
         else:
             queryset = queryset.filter(business_opportunity_type__in=business_types)
+
+    requested_activity_domains = _multi_query_values(request, "activity_domain")
+    activity_query = activity_domain_query("activity_domain_source", requested_activity_domains)
+    if activity_query is not None:
+        queryset = queryset.filter(activity_query)
 
     published_on = str(request.query_params.get("published_on", "")).strip()
     if published_on:

@@ -62,7 +62,7 @@ test("routes procurement through V23 while preserving V22 to V13 and stable over
   assert.match(managementTools, /OpportunityWorkflowPanel/);
   assert.match(versions.get(14), /AnalysisContextManager/);
   assert.match(versions.get(14), /AnalysisEnginePanel/);
-  assert.match(versions.get(13), /متصل به API و پایگاه‌داده واقعی سامانه/);
+  assert.doesNotMatch(versions.get(13), /متصل به API و پایگاه‌داده واقعی سامانه/);
   assert.doesNotMatch(versions.get(13), /Preview تعاملی/);
   assert.doesNotMatch(versions.get(13), /const notices\s*:/);
   assert.doesNotMatch(versions.get(13), /const directReferrals\s*:/);

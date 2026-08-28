@@ -51,6 +51,10 @@ type ApiDirectOpportunity = {
   employer_name: string;
   opportunity_type: string;
   opportunity_type_label: string;
+  business_opportunity_type?: string;
+  business_opportunity_type_label?: string;
+  activity_domain?: string;
+  activity_domain_label?: string;
   stage: string;
   stage_label: string;
   responsible_username: string;
@@ -171,7 +175,7 @@ const importanceStyles: Record<Importance, CSSProperties> = {
 const selectedNoticeStages = new Set(["selected", "evaluating", "participate", "preparing", "ready_to_submit"]);
 const submittedNoticeStages = new Set(["submitted", "awaiting_result"]);
 const resultNoticeStages = new Set(["won", "lost", "cancelled", "renewed", "do_not_participate"]);
-const recommendedDirectStages = new Set(["reviewing", "following_up", "negotiating"]);
+const recommendedDirectStages = new Set(["new", "reviewing", "following_up", "negotiating"]);
 const selectedDirectStages = new Set(["selected", "preparing"]);
 const resultDirectStages = new Set(["won", "lost", "stopped", "deferred", "converted_to_notice", "converted_to_contract"]);
 
@@ -214,9 +218,9 @@ function isRecentNotice(value: string | null | undefined) {
 }
 
 function allLabel(tab: Tab) {
-  if (tab === "tenders") return "مناقصات ۳ روز اخیر";
-  if (tab === "inquiries") return "استعلامات ۳ روز اخیر";
-  return "کل ارجاعات مستقیم";
+  if (tab === "tenders") return "مناقصات اخیر";
+  if (tab === "inquiries") return "استعلامات اخیر";
+  return "ارجاعات مستقیم اخیر";
 }
 
 function noticeMatches(item: ApiNotice, view: WorkflowView) {
@@ -229,7 +233,7 @@ function noticeMatches(item: ApiNotice, view: WorkflowView) {
 }
 
 function directMatches(item: ApiDirectOpportunity, view: WorkflowView) {
-  if (view === "all") return true;
+  if (view === "all") return recommendedDirectStages.has(item.stage);
   if (view === "recommended") return recommendedDirectStages.has(item.stage);
   if (view === "selected") return selectedDirectStages.has(item.stage);
   if (view === "submitted") return item.stage === "submitted";
@@ -497,7 +501,10 @@ export default function ProcurementWorkspaceV13() {
   }, [activeRun?.id]);
 
   const noticeViews: [WorkflowView, string][] = [["all", allLabel(tab)], ...standardViews];
-  const directViews: [WorkflowView, string][] = [["all", allLabel("direct")], ...standardViews];
+  const directViews: [WorkflowView, string][] = [
+    ["all", allLabel("direct")],
+    ...standardViews.filter(([view]) => view !== "recommended"),
+  ];
 
   const filteredNotices = useMemo(() => notices.filter((item) => {
     const currentUrgency = urgency(item.submission_deadline);
@@ -788,7 +795,7 @@ export default function ProcurementWorkspaceV13() {
 
   return <main className={styles.page} dir="rtl">
     <header className={styles.header}>
-      <div><span>زیرسامانه تخصصی PDP One</span><h1>مناقصات و استعلامات</h1><p>متصل به API و پایگاه‌داده واقعی سامانه</p></div>
+      <div><span>زیرسامانه تخصصی PDP One</span><h1>مناقصات و استعلامات</h1></div>
       <Link href="/">بازگشت به سامانه</Link>
     </header>
 
@@ -836,7 +843,7 @@ export default function ProcurementWorkspaceV13() {
         <article className={`${styles.panel} ${styles.activeCases}`}><div className={styles.sectionHeading}><div><span>انتهای داشبورد</span><h2>پرونده‌های فعال</h2></div><small>مناقصات، استعلامات و ارجاعات مستقیم منتخب یا ارسال‌شده</small></div>{activeCases.length ? <div className={styles.caseTable}>{activeCases.map((item) => { const u=urgency(item.deadline); return <button key={`${item.id}-${item.subtitle}`}><span><b>{item.title}</b><small>{item.subtitle}</small></span><span><b>{item.stage}</b><small>پرونده واقعی</small></span><span className={`${styles.urgency} ${styles[u.tone]}`}><b>{u.label}</b><small>{u.remaining}</small></span></button>; })}</div> : <div className={styles.empty}>پرونده فعالی ثبت نشده است.</div>}</article>
       </section>}
 
-      {(tab === "tenders" || tab === "inquiries") && <section>
+      {(tab === "tenders" || tab === "inquiries") && <section data-pdp-shared-notice-layout={tab}>
         <div className={`${styles.views} pdp-v9-workflow-row`}>{noticeViews.map(([id,label]) => <button key={id} className={noticeView === id ? styles.active : ""} onClick={() => setNoticeView(id)}>{label}</button>)}<ProcurementV9NativeToolbar /></div>
         <div className="pdp-v9-filter-bar" style={filterStyle}>
           <label>جست‌وجو<input style={inputStyle} value={search} onChange={(event) => setSearch(event.target.value)} placeholder="عنوان، کارفرما، استان یا کد" /></label>
@@ -865,7 +872,7 @@ export default function ProcurementWorkspaceV13() {
         </article>; }) : <div className={styles.empty}>رکورد واقعی مطابق این فیلتر وجود ندارد.</div>}</div>
       </section>}
 
-      {tab === "direct" && <section>
+      {tab === "direct" && <section data-pdp-shared-notice-layout="direct">
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:10,flexWrap:"wrap",marginBottom:10}}>
           <div className={`${styles.views} pdp-v9-workflow-row`} style={{marginBottom:0}}>{directViews.map(([id,label]) => <button key={id} className={directView === id ? styles.active : ""} onClick={() => setDirectView(id)}>{label}</button>)}<ProcurementV9NativeToolbar /></div>
           <button className={styles.primaryButton} onClick={() => setDirectModal(true)}>ثبت ارجاع مستقیم جدید</button>
@@ -879,9 +886,9 @@ export default function ProcurementWorkspaceV13() {
           <ProcurementV9NativeFilters noticeTab={false} />
           <b className="pdp-v2-row-count" style={{alignSelf:"end"}}>{fa.format(filteredDirect.length)} رکورد</b>
         </div>
-        <div className={styles.recordList}>{filteredDirect.length ? filteredDirect.map((item,index) => { const u=urgency(item.next_action_due); return <article className={styles.record} style={compactRecordStyle} data-pdp-direct-id={item.id} key={item.id}>
-          <div><div className={styles.recordTop}><small><b>ردیف {fa.format(index+1)}</b>{item.reference_code && directView !== "all" && directView !== "recommended" && <> · <span className={styles.codeBadge}>{item.reference_code}</span></>} · {item.opportunity_type_label}</small><div style={{display:"flex",gap:5,alignItems:"center",marginInlineStart:"auto",flexWrap:"wrap"}}><span style={{...importanceBadgeBase,...importanceStyles[item.importance]}}>اهمیت {item.importance_label || importanceLabels[item.importance]}</span><span className={`${styles.urgency} ${styles[u.tone]}`}>{u.label}</span><button className={styles.secondaryButton} style={compactViewStyle} onClick={() => setDetail({kind:"direct",item})}>مشاهده</button></div></div><h3 style={{margin:"4px 0 2px",fontSize:17}}>{item.title}</h3><p>{item.employer_name || "کارفرما نامشخص"}</p><div className={styles.facts} style={{marginTop:5,gap:5}}>{item.domain && <span>{item.domain}</span>}{item.province && <span>{item.province}</span>}{item.probability_percent !== null && <span>احتمال تبدیل: {fa.format(item.probability_percent)}٪</span>}</div></div>
-          <div className={styles.decision} style={compactDecisionStyle}><span className={styles.stage}>{item.stage_label}</span><dl style={{margin:0}}><div style={{padding:"2px 0"}}><dt>مسئول</dt><dd>{item.responsible_username || "تعیین نشده"}</dd></div></dl></div>
+        <div className={styles.recordList}>{filteredDirect.length ? filteredDirect.map((item,index) => { const u=urgency(item.next_action_due); return <article className={`${styles.record} pdp-v2-record`} style={compactRecordStyle} data-pdp-direct-id={item.id} key={item.id}>
+          <div className="pdp-v2-content"><div className={`${styles.recordTop} pdp-v2-record-top`}><small><b>ردیف {fa.format(index+1)}</b>{item.reference_code && directView !== "all" && <> · <span className={styles.codeBadge}>{item.reference_code}</span></>} · {item.opportunity_type_label}</small><button className={styles.secondaryButton} style={compactViewStyle} onClick={() => setDetail({kind:"direct",item})}>مشاهده</button></div><h3 className="pdp-v2-title" style={{margin:"4px 0 2px",fontSize:17}}>{item.title}</h3><p className="pdp-v2-employer">{item.employer_name || "کارفرما نامشخص"}</p><div className="pdp-v2-meta" data-pdp-v2-meta="1"><div className="pdp-v2-meta-row pdp-v2-status-row"><span className={styles.stage}>{item.stage_label}</span><span style={{...importanceBadgeBase,...importanceStyles[item.importance]}}>اهمیت {item.importance_label || importanceLabels[item.importance]}</span><span className={`${styles.urgency} ${styles[u.tone]}`}>{u.label}</span></div><div className="pdp-v2-meta-row pdp-v2-source-row"><span style={sourceBadgeStyle}>ارجاع مستقیم</span>{item.business_opportunity_type_label && <span className="pdp-compact-chip pdp-preview-classification-badge">{item.business_opportunity_type_label}</span>}{item.activity_domain_label && <span className="pdp-compact-chip pdp-preview-classification-badge">{item.activity_domain_label}</span>}</div><div className="pdp-v2-meta-row pdp-v2-info-row">{item.province && <span className="pdp-compact-chip">{item.province}</span>}<span className="pdp-compact-chip">{u.remaining}</span>{item.probability_percent !== null && <span className="pdp-compact-chip">احتمال تبدیل: {fa.format(item.probability_percent)}٪</span>}</div></div></div>
+          <div className={`${styles.decision} pdp-v2-decision`} style={compactDecisionStyle}><dl style={{margin:0}}><div style={{padding:"2px 0"}}><dt>مسئول</dt><dd>{item.responsible_username || "تعیین نشده"}</dd></div></dl></div>
         </article>; }) : <div className={styles.empty}>ارجاع مستقیم واقعی مطابق این فیلتر وجود ندارد.</div>}</div>
       </section>}
 
