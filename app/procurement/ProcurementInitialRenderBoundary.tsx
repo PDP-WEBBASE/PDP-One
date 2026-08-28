@@ -18,7 +18,7 @@ function ApprovedLoadingShell() {
   return <div dir="rtl" aria-label="در حال آماده‌سازی نمای تاییدشده" style={{ minHeight: "100vh", background: "#f4f7f9", padding: "28px 32px", boxSizing: "border-box" }}>
     <header style={{ minHeight: 190, borderRadius: 28, background: "linear-gradient(105deg,#0d4653,#17656d)", color: "white", padding: "28px 34px", display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 24 }}>
       <button type="button" disabled style={{ border: 0, borderRadius: 12, background: "rgba(255,255,255,.12)", color: "white", padding: "12px 16px", font: "inherit", fontWeight: 700 }}>بازگشت به سامانه</button>
-      <div style={{ textAlign: "right" }}><small style={{ opacity: .85 }}>زیرسامانه تخصصی PDP One</small><h1 style={{ margin: "20px 0 10px", fontSize: 36, lineHeight: 1.2 }}>مناقصات و استعلامات</h1><b style={{ fontSize: 16, opacity: .9 }}>متصل به API و پایگاه‌داده واقعی سامانه</b></div>
+      <div style={{ textAlign: "right" }}><small style={{ opacity: .85 }}>زیرسامانه تخصصی PDP One</small><h1 style={{ margin: "20px 0 10px", fontSize: 36, lineHeight: 1.2 }}>مناقصات و استعلامات</h1></div>
     </header>
 
     <nav style={{ marginTop: 26, minHeight: 62, border: "1px solid #e2e8f0", borderRadius: 16, background: "white", padding: "7px 10px", display: "flex", alignItems: "center", gap: 18, flexWrap: "wrap" }}>
@@ -44,10 +44,9 @@ export default function ProcurementInitialRenderBoundary({ children }: { childre
     if (!root) return;
 
     const checkReady = () => {
-      const finalDashboard = root.querySelector(".pdp-compact-dashboard-box");
+      const compactDashboardHost = root.querySelector("#pdp-procurement-compact-dashboard-host");
       const managementToolsStable = root.querySelector('[data-pdp-management-tools-stable-ready="1"]');
-      if (!finalDashboard) return false;
-      if (!managementToolsStable) {
+      if (!compactDashboardHost || !managementToolsStable) {
         emitProcurementUiSync({ source: "initial-render-boundary", dashboard: true, management: true });
         return false;
       }
