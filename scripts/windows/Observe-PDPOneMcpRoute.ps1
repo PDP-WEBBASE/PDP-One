@@ -6,7 +6,8 @@ param(
     [int]$IncidentFailureThreshold = 3,
     [int]$RecoverySuccessThreshold = 3,
     [int]$HealthyRetentionDays = 7,
-    [int]$IncidentRetentionDays = 60
+    [int]$IncidentRetentionDays = 60,
+    [int]$ExternalEvidenceFreshSeconds = 300
 )
 
 $ErrorActionPreference = "Stop"
@@ -26,6 +27,7 @@ $incidentRoot = Join-Path $reportRoot "incidents"
 $sampleRoot = Join-Path $reportRoot "samples"
 $statePath = Join-Path $reportRoot "state.json"
 $latestPath = Join-Path $reportRoot "latest.json"
+$externalEvidencePath = Join-Path $reportRoot "external-observer.json"
 New-Item -ItemType Directory -Force -Path $reportRoot, $incidentRoot, $sampleRoot | Out-Null
 
 function New-Checkpoint {
@@ -64,15 +66,45 @@ function Read-State {
         last_incident=$null
         incident_sequence=0
         first_failed_checkpoint=$null
+        incident_origin_checkpoint=$null
+        current_failed_checkpoint=$null
+        host_recovery_candidate_at=$null
     }
     if (-not (Test-Path -LiteralPath $statePath)) { return $default }
     try {
         $raw = Get-Content -LiteralPath $statePath -Raw -Encoding UTF8 | ConvertFrom-Json
-        foreach ($key in @('consecutive_failures','consecutive_successes','active_incident','active_incident_started_at','last_incident','incident_sequence','first_failed_checkpoint')) {
+        foreach ($key in @('consecutive_failures','consecutive_successes','active_incident','active_incident_started_at','last_incident','incident_sequence','first_failed_checkpoint','incident_origin_checkpoint','current_failed_checkpoint','host_recovery_candidate_at')) {
             if ($null -ne $raw.PSObject.Properties[$key]) { $default[$key] = $raw.$key }
         }
     } catch { }
+    if (-not $default.incident_origin_checkpoint -and $default.first_failed_checkpoint) {
+        $default.incident_origin_checkpoint = $default.first_failed_checkpoint
+    }
     return $default
+}
+
+function Read-ExternalEvidence {
+    $result = [ordered]@{
+        status='external_evidence_required'
+        observed_at=$null
+        source='none'
+        age_seconds=$null
+        fresh=$false
+    }
+    if (-not (Test-Path -LiteralPath $externalEvidencePath)) { return [pscustomobject]$result }
+    try {
+        $raw = Get-Content -LiteralPath $externalEvidencePath -Raw -Encoding UTF8 | ConvertFrom-Json
+        if ([string]$raw.status -ne 'pass') { return [pscustomobject]$result }
+        [DateTimeOffset]$observed = [DateTimeOffset]::MinValue
+        if (-not [DateTimeOffset]::TryParse([string]$raw.observed_at, [ref]$observed)) { return [pscustomobject]$result }
+        $age = [Math]::Max(0,[int]([DateTimeOffset]::UtcNow - $observed.ToUniversalTime()).TotalSeconds)
+        $result.status = $(if ($age -le [Math]::Max(30,$ExternalEvidenceFreshSeconds)) { 'pass' } else { 'external_evidence_stale' })
+        $result.observed_at = $observed.ToUniversalTime().ToString('o')
+        $result.source = $(if ($null -ne $raw.PSObject.Properties['source']) { [string]$raw.source } else { 'connected_mcp_diagnostic_call' })
+        $result.age_seconds = $age
+        $result.fresh = [bool]($age -le [Math]::Max(30,$ExternalEvidenceFreshSeconds))
+    } catch { }
+    return [pscustomobject]$result
 }
 
 function Write-JsonSafe {
@@ -156,12 +188,15 @@ $checks.Add((New-Checkpoint "CP-12" "pdp_backend" $(if($c.Ok){"pass"}else{"fail"
 $c = Measure-Check { Invoke-DockerText @('compose','exec','-T','db','pg_isready') }
 $checks.Add((New-Checkpoint "CP-13" "postgresql" $(if($c.Ok){"pass"}else{"fail"}) $c.Ms $(if($c.Ok){""}else{"postgresql"}) $(if($c.Ok){"accepting_connections"}else{$c.Error})))
 
-$checks.Add((New-Checkpoint "CP-14" "external_observer" "external_evidence_required" 0 "" "correlate with ChatGPT-side MCP reachability when an incident is reviewed"))
+$externalEvidence = Read-ExternalEvidence
+$cp14Status = $(if ($externalEvidence.fresh -and [string]$externalEvidence.status -eq 'pass') { 'pass' } else { 'external_evidence_required' })
+$cp14Detail = $(if ($cp14Status -eq 'pass') { "connected_mcp_reached age_seconds=$($externalEvidence.age_seconds)" } elseif ($externalEvidence.observed_at) { "external evidence stale; latest=$($externalEvidence.observed_at)" } else { 'correlate with ChatGPT-side MCP reachability when an incident is reviewed' })
+$checks.Add((New-Checkpoint "CP-14" "external_observer" $cp14Status 0 "" $cp14Detail))
 
 $criticalIds = @('CP-01','CP-02','CP-03','CP-04','CP-05','CP-06','CP-07','CP-08','CP-09','CP-10','CP-12','CP-13')
 $failed = @($checks | Where-Object { $criticalIds -contains $_.id -and $_.status -eq 'fail' })
-$overall = $(if ($failed.Count -eq 0) { 'healthy' } else { 'degraded' })
-$firstFailed = $(if ($failed.Count -gt 0) { [string]$failed[0].id } else { $null })
+$hostOverall = $(if ($failed.Count -eq 0) { 'healthy' } else { 'degraded' })
+$currentFailed = $(if ($failed.Count -gt 0) { [string]$failed[0].id } else { $null })
 $now = (Get-Date).ToUniversalTime()
 $state = Read-State
 $recoveredIncident = $null
@@ -169,31 +204,56 @@ $recoveredIncident = $null
 if ($failed.Count -gt 0) {
     $state.consecutive_failures = [int]$state.consecutive_failures + 1
     $state.consecutive_successes = 0
-    if (-not $state.first_failed_checkpoint) { $state.first_failed_checkpoint = $firstFailed }
+    $state.current_failed_checkpoint = $currentFailed
+    $state.host_recovery_candidate_at = $null
+    if (-not $state.first_failed_checkpoint) { $state.first_failed_checkpoint = $currentFailed }
+    if (-not $state.incident_origin_checkpoint) { $state.incident_origin_checkpoint = $state.first_failed_checkpoint }
     if (-not $state.active_incident -and [int]$state.consecutive_failures -ge [Math]::Max(1,$IncidentFailureThreshold)) {
         $state.incident_sequence = [int]$state.incident_sequence + 1
         $state.active_incident = "MCP-INC-$($now.ToString('yyyyMMdd'))-$(([int]$state.incident_sequence).ToString('0000'))"
         $state.active_incident_started_at = $now.ToString('o')
     }
 } else {
+    $state.current_failed_checkpoint = $null
     $state.consecutive_successes = [int]$state.consecutive_successes + 1
     $state.consecutive_failures = 0
-    if ($state.active_incident -and [int]$state.consecutive_successes -ge [Math]::Max(1,$RecoverySuccessThreshold)) {
-        $recoveredIncident = [pscustomobject]@{ Id=[string]$state.active_incident; StartedAt=[string]$state.active_incident_started_at }
-        $state.last_incident = $state.active_incident
-        $state.active_incident = $null
-        $state.active_incident_started_at = $null
+    if ($state.active_incident) {
+        if (-not $state.host_recovery_candidate_at) { $state.host_recovery_candidate_at = $now.ToString('o') }
+        $externalConfirmsRecovery = $false
+        if ($externalEvidence.fresh -and [string]$externalEvidence.status -eq 'pass' -and $externalEvidence.observed_at) {
+            [DateTimeOffset]$externalObserved = [DateTimeOffset]::MinValue
+            [DateTimeOffset]$hostRecoveryCandidate = [DateTimeOffset]::MinValue
+            if ([DateTimeOffset]::TryParse([string]$externalEvidence.observed_at,[ref]$externalObserved) -and [DateTimeOffset]::TryParse([string]$state.host_recovery_candidate_at,[ref]$hostRecoveryCandidate)) {
+                $externalConfirmsRecovery = [bool]($externalObserved.ToUniversalTime() -ge $hostRecoveryCandidate.ToUniversalTime())
+            }
+        }
+        if ([int]$state.consecutive_successes -ge [Math]::Max(1,$RecoverySuccessThreshold) -and $externalConfirmsRecovery) {
+            $recoveredIncident = [pscustomobject]@{ Id=[string]$state.active_incident; StartedAt=[string]$state.active_incident_started_at }
+            $state.last_incident = $state.active_incident
+            $state.active_incident = $null
+            $state.active_incident_started_at = $null
+            $state.first_failed_checkpoint = $null
+            $state.incident_origin_checkpoint = $null
+            $state.current_failed_checkpoint = $null
+            $state.host_recovery_candidate_at = $null
+        }
+    } else {
         $state.first_failed_checkpoint = $null
+        $state.incident_origin_checkpoint = $null
+        $state.host_recovery_candidate_at = $null
     }
 }
 
-$classificationCheckpoint = $(if ($state.first_failed_checkpoint) { [string]$state.first_failed_checkpoint } else { $firstFailed })
-$classification = Get-RootCauseClassification -CheckpointId $classificationCheckpoint
+$currentClassification = $(if ($currentFailed) { Get-RootCauseClassification -CheckpointId $currentFailed } elseif ($state.active_incident) { [pscustomobject]@{ Class='EXTERNAL_CONFIRMATION_PENDING'; Confidence='pending_correlation'; ExternalCorrelation=$true } } else { [pscustomobject]@{ Class='HEALTHY'; Confidence='high'; ExternalCorrelation=$false } })
+$originClassification = Get-RootCauseClassification -CheckpointId ([string]$state.incident_origin_checkpoint)
+$endToEndStatus = $(if ($failed.Count -gt 0) { 'degraded' } elseif ($state.active_incident) { 'host_recovered_pending_external_confirmation' } else { 'healthy' })
 $checksArray = $checks.ToArray()
 $sample = [ordered]@{
     schema = 'pdp-one.mcp-route-observability.v2'
+    state_revision = 'v4-external-correlation'
     observed_at = $now.ToString('o')
-    overall = $overall
+    overall = $hostOverall
+    end_to_end_status = $endToEndStatus
     token_fingerprint = $tokenFingerprint
     public_host = $publicHost
     active_incident = $state.active_incident
@@ -201,9 +261,19 @@ $sample = [ordered]@{
     consecutive_failures = [int]$state.consecutive_failures
     consecutive_successes = [int]$state.consecutive_successes
     first_failed_checkpoint = $state.first_failed_checkpoint
-    root_cause_classification = $classification.Class
-    root_cause_confidence = $classification.Confidence
-    external_correlation_required = [bool]$classification.ExternalCorrelation
+    incident_origin_checkpoint = $state.incident_origin_checkpoint
+    current_failed_checkpoint = $state.current_failed_checkpoint
+    host_recovery_candidate_at = $state.host_recovery_candidate_at
+    root_cause_classification = $currentClassification.Class
+    root_cause_confidence = $currentClassification.Confidence
+    current_root_cause_classification = $currentClassification.Class
+    current_root_cause_confidence = $currentClassification.Confidence
+    incident_origin_root_cause_classification = $originClassification.Class
+    incident_origin_root_cause_confidence = $originClassification.Confidence
+    external_correlation_required = [bool]$currentClassification.ExternalCorrelation
+    external_correlation_status = $externalEvidence.status
+    external_last_observed_at = $externalEvidence.observed_at
+    external_evidence_age_seconds = $externalEvidence.age_seconds
     checkpoints = $checksArray
     passive_only = $true
     repair_actions = 0
@@ -224,17 +294,26 @@ if ($state.active_incident) {
     $startedAt = $(if ($existing -and $existing.started_at) { [string]$existing.started_at } else { [string]$state.active_incident_started_at })
     $incident = [ordered]@{
         schema='pdp-one.mcp-route-incident.v2'
+        state_revision='v4-external-correlation'
         incident_id=$state.active_incident
         started_at=$startedAt
         last_observed_at=$now.ToString('o')
         recovered_at=$null
-        status='active'
+        status=$(if ($failed.Count -gt 0) { 'active' } else { 'host_recovered_pending_external_confirmation' })
         first_failed_checkpoint=$state.first_failed_checkpoint
+        incident_origin_checkpoint=$state.incident_origin_checkpoint
+        current_failed_checkpoint=$state.current_failed_checkpoint
+        host_recovery_candidate_at=$state.host_recovery_candidate_at
         latest_checkpoints=$checksArray
-        evidence_source='local_passive_observer'
-        root_cause_classification=$classification.Class
-        confidence=$classification.Confidence
-        external_correlation_required=[bool]$classification.ExternalCorrelation
+        evidence_source='local_passive_observer_plus_external_mcp_reachability'
+        root_cause_classification=$currentClassification.Class
+        current_root_cause_classification=$currentClassification.Class
+        incident_origin_root_cause_classification=$originClassification.Class
+        confidence=$currentClassification.Confidence
+        external_correlation_required=[bool]$currentClassification.ExternalCorrelation
+        external_correlation_status=$externalEvidence.status
+        external_last_observed_at=$externalEvidence.observed_at
+        end_to_end_status=$endToEndStatus
         evidence_window=[ordered]@{ pre_incident_minutes=15; post_recovery_minutes=10; sample_store='samples/YYYY-MM-DD.jsonl' }
         passive_only=$true
         repair_actions=0
@@ -252,6 +331,9 @@ if ($recoveredIncident) {
                 $incident.status = 'recovered'
                 $incident.recovered_at = $now.ToString('o')
                 $incident.last_observed_at = $now.ToString('o')
+                if ($null -ne $incident.PSObject.Properties['end_to_end_status']) { $incident.end_to_end_status = 'healthy' }
+                if ($null -ne $incident.PSObject.Properties['external_correlation_status']) { $incident.external_correlation_status = 'pass' }
+                if ($null -ne $incident.PSObject.Properties['external_last_observed_at']) { $incident.external_last_observed_at = $externalEvidence.observed_at }
                 Write-JsonSafe -Path $incidentPath -Value $incident
             }
         } catch { }
