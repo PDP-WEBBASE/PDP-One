@@ -1,7 +1,9 @@
 """Compatibility entrypoint for the PDP One MCP server.
 
 The full existing server implementation is preserved byte-for-byte in
-``server_core.py``. This wrapper only registers passive route evidence tools.
+``server_core.py``. This wrapper registers passive route evidence tools and
+adds sanitized Public Edge diagnostics to the already-stable deployment status
+without changing the tool signature.
 
 Static contract markers retained for existing repository tests:
 from exact_candidate_promotion_tools import register_exact_candidate_promotion_tools
@@ -40,9 +42,13 @@ return enqueue(
 redeploy_previous_commit_from_github
 """
 
-from server_core import api, mcp
+import server_core
+from public_edge_status import wrap_get_queue_status
 from route_diagnostics_tools import register_route_diagnostics_tools
 
+server_core.get_queue_status = wrap_get_queue_status(server_core.get_queue_status)
+api = server_core.api
+mcp = server_core.mcp
 register_route_diagnostics_tools(mcp)
 
 if __name__ == "__main__":
