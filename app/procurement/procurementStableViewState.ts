@@ -24,7 +24,10 @@ const TOP_BY_LABEL = new Map<string, ProcurementStableTop>([
 const WORKFLOW_BY_LABEL = new Map<string, ProcurementStableWorkflow>([
   ["مناقصات ۳ روز اخیر", "all"],
   ["استعلامات ۳ روز اخیر", "all"],
+  ["مناقصات اخیر", "all"],
+  ["استعلامات اخیر", "all"],
   ["کل ارجاعات مستقیم", "all"],
+  ["ارجاعات مستقیم اخیر", "all"],
   ["پیشنهادی", "recommended"],
   ["منتخب", "selected"],
   ["ارسال‌شده", "submitted"],
@@ -66,9 +69,9 @@ export function stableTopLabel(top = getProcurementStableViewState().top) {
 
 export function stableWorkflowLabel(state = getProcurementStableViewState()) {
   if (state.workflow !== "all") return WORKFLOW_LABELS[state.workflow];
-  if (state.top === "tenders") return "مناقصات ۳ روز اخیر";
-  if (state.top === "inquiries") return "استعلامات ۳ روز اخیر";
-  if (state.top === "direct") return "کل ارجاعات مستقیم";
+  if (state.top === "tenders") return "مناقصات اخیر";
+  if (state.top === "inquiries") return "استعلامات اخیر";
+  if (state.top === "direct") return "ارجاعات مستقیم اخیر";
   return "";
 }
 

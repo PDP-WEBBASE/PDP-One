@@ -215,7 +215,7 @@ export default function ProcurementWorkflowActionsStableEnhancement() {
       if (state.top === "direct" && state.workflow === "recommended") {
         window.requestAnimationFrame(() => {
           const allButton = Array.from(document.querySelectorAll<HTMLButtonElement>("button")).find(
-            (button) => !button.closest("nav") && normalize(button.textContent) === "کل ارجاعات مستقیم",
+            (button) => !button.closest("nav") && normalize(button.textContent) === "ارجاعات مستقیم اخیر",
           );
           allButton?.click();
         });
@@ -326,7 +326,7 @@ export default function ProcurementWorkflowActionsStableEnhancement() {
           const item = (article.dataset.pdpDirectId && directById.get(article.dataset.pdpDirectId)) || directByRow.get(key);
           if (!item) continue;
           const documentCount = directDocuments[item.id] || 0;
-          if (state.workflow === "recent") {
+          if (state.workflow === "all") {
             const select = actionButton(SELECTABLE_DIRECT_STAGES.has(item.stage) ? "انتخاب" : item.stage_label || "وضعیت ثبت‌شده", SELECTABLE_DIRECT_STAGES.has(item.stage) ? "primary" : "muted");
             select.disabled = !SELECTABLE_DIRECT_STAGES.has(item.stage);
             select.onclick = () => void updateDirectStage(item, "selected");

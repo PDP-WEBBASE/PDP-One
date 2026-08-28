@@ -15,6 +15,7 @@ from .models_direct import (
     OpportunityFollowUp,
     OpportunityResult,
 )
+from .activity_domains import activity_domain_query
 from .permissions_extraction import IsManagerOrReadOnly
 from .opportunity_types import normalize_requested_business_opportunity_types
 from .serializers_direct import (
@@ -28,6 +29,7 @@ from .views import _filter_deadline_urgency
 
 
 DIRECT_RECOMMENDED_STAGES = [
+    DirectOpportunity.Stage.NEW,
     DirectOpportunity.Stage.REVIEWING,
     DirectOpportunity.Stage.FOLLOWING_UP,
     DirectOpportunity.Stage.NEGOTIATING,
@@ -99,6 +101,10 @@ class DirectOpportunityViewSet(
         if importance:
             queryset = queryset.filter(importance__in=importance)
 
+        provinces = [value.strip() for raw in params.getlist("province") for value in str(raw).split(",") if value.strip()]
+        if provinces:
+            queryset = queryset.filter(province__in=provinces)
+
         requested_business_types = [
             value.strip()
             for raw in params.getlist("business_opportunity_type")
@@ -113,6 +119,16 @@ class DirectOpportunityViewSet(
                 queryset = queryset.none()
             else:
                 queryset = queryset.filter(business_opportunity_type__in=business_types)
+
+        requested_activity_domains = [
+            value.strip()
+            for raw in params.getlist("activity_domain")
+            for value in str(raw).split(",")
+            if value.strip()
+        ]
+        activity_query = activity_domain_query("domain", requested_activity_domains)
+        if activity_query is not None:
+            queryset = queryset.filter(activity_query)
 
         urgencies = [value for raw in params.getlist("urgency") for value in raw.split(",") if value]
         if len(urgencies) == 1:

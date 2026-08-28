@@ -8,6 +8,9 @@ const workspace = readFileSync("app/procurement/ProcurementWorkspaceV13.tsx", "u
 const pagination = readFileSync("app/procurement/ProcurementPaginationStableEnhancement.tsx", "utf8");
 const compactApi = readFileSync("backend/procurement/views_compact_ui.py", "utf8");
 const directApi = readFileSync("backend/procurement/views_direct.py", "utf8");
+const stableView = readFileSync("app/procurement/procurementStableViewState.ts", "utf8");
+const actions = readFileSync("app/procurement/ProcurementWorkflowActionsStableEnhancement.tsx", "utf8");
+const bulk = readFileSync("app/procurement/ProcurementCardLayoutBulkRemoveV2.tsx", "utf8");
 
 test("approved V9 enhancement mounts last over the preserved stable identity layers", () => {
   assert.match(composition, /ProcurementWebPreviewV9Enhancement/);
@@ -29,7 +32,7 @@ test("V9 controls are native React children and cannot be detached by an async w
 });
 
 test("V9 uses the approved exact filter and badge geometry instead of the earlier overlay dimensions", () => {
-  assert.match(ui, /grid-template-columns:minmax\(230px,1\.55fr\) repeat\(5,minmax\(108px,\.72fr\)\) minmax\(225px,1\.18fr\) auto!important/);
+  assert.match(ui, /grid-template-columns:minmax\(230px,1\.55fr\) repeat\(6,minmax\(108px,\.72fr\)\) minmax\(225px,1\.18fr\) auto!important/);
   assert.match(ui, /min-height:34px!important;padding:5px 7px!important;font-size:11\.5px!important/);
   assert.match(ui, /min-height:22px!important;padding:2px 8px!important;border-radius:999px!important/);
   for (const tone of ["neutral", "danger", "high", "medium", "safe"]) assert.match(ui, new RegExp(`pdp-v9-${tone}`));
@@ -53,6 +56,34 @@ test("V9 multi-select filters preserve canonical source names and selected-label
   assert.match(directApi, /business_opportunity_type__in/);
   assert.match(compactApi, /_multi_query_values/);
   assert.match(directApi, /params\.getlist\("importance"\)/);
+});
+
+test("the approved notice presentation is one shared layout for tenders and inquiries", () => {
+  assert.match(workspace, /\(tab === "tenders" \|\| tab === "inquiries"\) && <section data-pdp-shared-notice-layout=\{tab\}>/);
+  assert.match(workspace, /data-pdp-shared-notice-layout=\{tab\}[\s\S]*ProcurementV9NativeToolbar[\s\S]*ProcurementV9NativeFilters noticeTab/);
+  for (const label of ["حوزه فعالیت", "استان", "همه"]) assert.match(ui, new RegExp(label));
+  assert.match(ui, /document\.addEventListener\("pointerdown", closeOutside\)/);
+  assert.match(ui, /pdp-v9-select-all/);
+});
+
+test("V16 applies the shared layout to direct referrals without a separate suggested tab", () => {
+  assert.match(workspace, /tab === "direct" && <section data-pdp-shared-notice-layout="direct">/);
+  assert.match(workspace, /return "ارجاعات مستقیم اخیر"/);
+  assert.match(workspace, /standardViews\.filter\(\(\[view\]\) => view !== "recommended"\)/);
+  assert.match(workspace, /if \(view === "all"\) return recommendedDirectStages\.has\(item\.stage\)/);
+  assert.match(stableView, /\["ارجاعات مستقیم اخیر", "all"\]/);
+  assert.match(pagination, /state\.workflow === "all" \|\| state\.workflow === "recommended"/);
+  assert.match(actions, /state\.workflow === "all"/);
+  assert.match(directApi, /DirectOpportunity\.Stage\.NEW/);
+});
+
+test("V16 wires activity-domain classification and keeps bulk geometry fixed", () => {
+  assert.match(pagination, /__pdpV9ActivityDomains/);
+  assert.match(pagination, /params\.append\("activity_domain"/);
+  assert.match(compactApi, /activity_domain_source/);
+  assert.match(directApi, /activity_domain_query\("domain"/);
+  assert.match(bulk, /width:32px;height:32px/);
+  assert.doesNotMatch(bulk, /<small className="pdp-v2-bulk-message"/);
 });
 
 test("publication filtering uses an interactive Persian calendar range and Gregorian API bounds", () => {

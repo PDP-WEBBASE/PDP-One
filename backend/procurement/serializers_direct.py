@@ -6,6 +6,7 @@ from .models_direct import (
     OpportunityFollowUp,
     OpportunityResult,
 )
+from .activity_domains import ACTIVITY_DOMAIN_LABELS, classify_activity_domain
 from .opportunity_types import (
     AUTOMATED_DRAFT_SOURCE,
     HUMAN_SOURCE,
@@ -78,6 +79,8 @@ class DirectOpportunityListSerializer(serializers.ModelSerializer):
     importance_label = serializers.CharField(source="get_importance_display", read_only=True)
     responsible_username = serializers.CharField(source="responsible.username", read_only=True)
     follow_up_count = serializers.IntegerField(read_only=True)
+    activity_domain = serializers.SerializerMethodField()
+    activity_domain_label = serializers.SerializerMethodField()
 
     class Meta:
         model = DirectOpportunity
@@ -89,7 +92,7 @@ class DirectOpportunityListSerializer(serializers.ModelSerializer):
             "business_opportunity_type_reason", "stage", "stage_label", "responsible",
             "responsible_username", "next_action", "next_action_due", "domain", "province",
             "probability", "probability_label", "probability_percent", "importance",
-            "importance_label", "last_activity_at", "follow_up_count", "created_at", "updated_at",
+            "importance_label", "activity_domain", "activity_domain_label", "last_activity_at", "follow_up_count", "created_at", "updated_at",
         ]
         read_only_fields = [
             "id", "reference_code", "business_opportunity_type_source",
@@ -108,6 +111,12 @@ class DirectOpportunityListSerializer(serializers.ModelSerializer):
             return obj.reference_record.code
         except AttributeError:
             return None
+
+    def get_activity_domain(self, obj):
+        return classify_activity_domain(obj.domain)
+
+    def get_activity_domain_label(self, obj):
+        return ACTIVITY_DOMAIN_LABELS[self.get_activity_domain(obj)]
 
     def validate_stage(self, value):
         terminal_stages = {

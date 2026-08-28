@@ -186,6 +186,22 @@ class CompactProcurementUiTests(APITestCase):
         self.assertEqual(response.data["count"], 2)
         self.assertEqual({row["title"] for row in response.data["results"]}, {"اول بازه", "آخر بازه"})
 
+    def test_activity_domain_is_derived_from_latest_analysis_and_filterable(self):
+        building = self.make_notice("طرح ساختمان")
+        infrastructure = self.make_notice("طرح تأسیسات")
+        self.make_draft(building, "b")
+        self.make_draft(infrastructure, "m")
+        NoticeAnalysisDraft.objects.filter(notice=building).update(category="معماری و ساختمان")
+        NoticeAnalysisDraft.objects.filter(notice=infrastructure).update(category="زیرساخت و تأسیسات")
+
+        response = self.client.get(
+            "/api/v1/procurement/ui/notices/?notice_type=inquiry&workflow=recent&activity_domain=building"
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["count"], 1)
+        self.assertEqual(response.data["results"][0]["title"], "طرح ساختمان")
+        self.assertEqual(response.data["results"][0]["activity_domain"], "building")
+
     def test_bulk_dismiss_rejects_only_requested_notice_type_and_preserves_notices(self):
         tender = self.make_notice("پیشنهاد مناقصه", ProcurementNotice.NoticeType.TENDER)
         inquiry = self.make_notice("پیشنهاد استعلام", ProcurementNotice.NoticeType.INQUIRY)
