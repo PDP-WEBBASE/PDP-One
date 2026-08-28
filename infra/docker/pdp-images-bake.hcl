@@ -1,3 +1,4 @@
+# Component identity contract is verified on Session #124 corrective builds.
 variable "RELEASE_SHA" {
   default = "unknown"
 }
