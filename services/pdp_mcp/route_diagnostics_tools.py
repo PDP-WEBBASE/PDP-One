@@ -15,6 +15,12 @@ REPORT_ROOT = Path(
         "/deployment-agent/reports/mcp-route-observability",
     )
 )
+EXTERNAL_OBSERVER_PATH = Path(
+    os.getenv(
+        "PDP_MCP_EXTERNAL_OBSERVER_STATE",
+        "/deployment-agent/queue/coordinator/mcp-external-observer.json",
+    )
+)
 _INCIDENT_ID = re.compile(r"^MCP-INC-[0-9]{8}-[0-9]{4}$")
 
 
@@ -62,7 +68,7 @@ def _record_external_reachability() -> dict[str, Any]:
         "source": "connected_mcp_diagnostic_call",
         "secrets_included": False,
     }
-    path = REPORT_ROOT / "external-observer.json"
+    path = EXTERNAL_OBSERVER_PATH
     temporary = path.with_suffix(".json.tmp")
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
