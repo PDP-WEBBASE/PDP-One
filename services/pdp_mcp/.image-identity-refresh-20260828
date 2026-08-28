@@ -1,0 +1,3 @@
+PDP One MCP content-addressed image identity refresh marker.
+Runtime semantics: none.
+Purpose: force one fresh immutable MCP image so current component identity labels are rebuilt and verified during Session #124 recovery.
