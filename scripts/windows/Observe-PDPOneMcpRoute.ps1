@@ -189,6 +189,7 @@ if ($failed.Count -gt 0) {
 
 $classificationCheckpoint = $(if ($state.first_failed_checkpoint) { [string]$state.first_failed_checkpoint } else { $firstFailed })
 $classification = Get-RootCauseClassification -CheckpointId $classificationCheckpoint
+$checksArray = $checks.ToArray()
 $sample = [ordered]@{
     schema = 'pdp-one.mcp-route-observability.v2'
     observed_at = $now.ToString('o')
@@ -203,7 +204,7 @@ $sample = [ordered]@{
     root_cause_classification = $classification.Class
     root_cause_confidence = $classification.Confidence
     external_correlation_required = [bool]$classification.ExternalCorrelation
-    checkpoints = @($checks)
+    checkpoints = $checksArray
     passive_only = $true
     repair_actions = 0
     secrets_included = $false
@@ -229,7 +230,7 @@ if ($state.active_incident) {
         recovered_at=$null
         status='active'
         first_failed_checkpoint=$state.first_failed_checkpoint
-        latest_checkpoints=@($checks)
+        latest_checkpoints=$checksArray
         evidence_source='local_passive_observer'
         root_cause_classification=$classification.Class
         confidence=$classification.Confidence
