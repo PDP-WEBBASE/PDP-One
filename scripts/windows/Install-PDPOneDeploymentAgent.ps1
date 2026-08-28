@@ -101,7 +101,7 @@ try {
 $action = New-PDPOneHiddenPowerShellAction -ScriptPath $agentScript -ScriptArguments @("-AgentRoot", $AgentRoot) -HiddenRunnerPath $hiddenRunner
 $trigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
 $principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel Highest
-$settings = New-ScheduledTaskSettingsSet -RestartCount 20 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit (New-TimeSpan -Days 3650) -MultipleInstances IgnoreNew
+$settings = New-ScheduledTaskSettingsSet -RestartCount 20 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit (New-TimeSpan -Days 3650) -MultipleInstances IgnoreNew -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
 Register-ScheduledTask -TaskName "PDP One Local Deployment Agent" -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Description "Processes only signed, allowlisted PDP One deployment requests." -Force | Out-Null
 Assert-PDPOneScheduledTaskWindowless -TaskName "PDP One Local Deployment Agent" -HiddenRunnerPath $hiddenRunner | Out-Null
 Start-ScheduledTask -TaskName "PDP One Local Deployment Agent"

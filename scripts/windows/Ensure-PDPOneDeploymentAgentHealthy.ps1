@@ -31,6 +31,7 @@ $report = [ordered]@{
     task_state_after = "unknown"
     task_recreated = $false
     task_action_repaired = $false
+    task_battery_policy_repaired = $false
     task_enabled = $false
     start_requested = $false
     incoming_requests = 0
@@ -111,11 +112,15 @@ function Update-PDPOneAgentCapabilityMetadata {
     }
 }
 
+function New-PDPOneAgentTaskSettings {
+    return New-ScheduledTaskSettingsSet -RestartCount 20 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit (New-TimeSpan -Days 3650) -MultipleInstances IgnoreNew -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
+}
+
 function Register-PDPOneFixedAgentTask {
     $action = New-PDPOneHiddenPowerShellAction -ScriptPath $agentScript -ScriptArguments @("-AgentRoot", $AgentRoot) -HiddenRunnerPath $hiddenRunner
     $trigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
     $principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel Highest
-    $settings = New-ScheduledTaskSettingsSet -RestartCount 20 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit (New-TimeSpan -Days 3650) -MultipleInstances IgnoreNew -StartWhenAvailable
+    $settings = New-PDPOneAgentTaskSettings
     Register-ScheduledTask -TaskName $AgentTaskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Description "Processes only signed, allowlisted PDP One deployment and operational requests." -Force | Out-Null
 }
 
@@ -135,6 +140,13 @@ try {
     } elseif (-not (Test-PDPOneScheduledTaskWindowless -Task $task -HiddenRunnerPath $hiddenRunner)) {
         Register-PDPOneFixedAgentTask
         $report.task_action_repaired = $true
+        $task = Get-ScheduledTask -TaskName $AgentTaskName -ErrorAction Stop
+    }
+
+    if ([bool]$task.Settings.DisallowStartIfOnBatteries -or [bool]$task.Settings.StopIfGoingOnBatteries) {
+        $settings = New-PDPOneAgentTaskSettings
+        Set-ScheduledTask -TaskName $AgentTaskName -Settings $settings -ErrorAction Stop | Out-Null
+        $report.task_battery_policy_repaired = $true
         $task = Get-ScheduledTask -TaskName $AgentTaskName -ErrorAction Stop
     }
 
