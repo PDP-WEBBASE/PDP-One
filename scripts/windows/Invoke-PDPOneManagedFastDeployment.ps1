@@ -35,6 +35,7 @@ $postdeployGuardReport = ""
 $rancherPolicyReport = ""
 $deploymentLease = $null
 $legacyStateUpgraded = $false
+$startupTaskPolicyReconciled = $false
 
 if (-not (Test-Path -LiteralPath $innerScript)) {
     throw "Registry-backed fast deployment implementation was not found."
@@ -86,6 +87,7 @@ try {
             retained_previous_images = @{}
             connectivity_repair_attempted = $false
             connectivity_repair_succeeded = $false
+            startup_task_policy_reconciled = $false
             error = $preflightMessage
         } | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $failureReportPath -Encoding UTF8
         throw "Deployment compatibility preflight failed before production changes. $preflightMessage"
@@ -121,6 +123,19 @@ try {
     Write-PDPOneDeploymentOperation -Lease $deploymentLease -Stage "deploying-exact-commit"
     $deploymentOutput = @(& powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File $innerScript -CommitSha $CommitSha -DeploymentId $DeploymentId -PreviewId $PreviewId -AgentRoot $AgentRoot)
     $deploymentExitCode = $LASTEXITCODE
+
+    if ($deploymentExitCode -eq 0) {
+        Write-PDPOneDeploymentOperation -Lease $deploymentLease -Stage "reconciling-startup-task-policy"
+        $startupTaskPolicyScript = Join-Path $projectRoot "scripts\windows\Register-PDPOneStartupTask.ps1"
+        if (-not (Test-Path -LiteralPath $startupTaskPolicyScript)) {
+            throw "The exact deployed source is missing Register-PDPOneStartupTask.ps1."
+        }
+        & powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File $startupTaskPolicyScript -ProjectRoot $projectRoot -ApplyIfNeeded
+        if ($LASTEXITCODE -ne 0) {
+            throw "The exact deployed Windows Scheduled Task policy could not be reconciled."
+        }
+        $startupTaskPolicyReconciled = $true
+    }
 } finally {
     if ($null -ne $deploymentLease) {
         try { Write-PDPOneDeploymentOperation -Lease $deploymentLease -Stage "postdeploy-cleanup" } catch { }
@@ -167,6 +182,7 @@ if ($deploymentReport -and (Test-Path -LiteralPath $deploymentReport)) {
         $report | Add-Member -NotePropertyName image_source -NotePropertyValue "github_container_registry" -Force
         $report | Add-Member -NotePropertyName deployment_engine -NotePropertyValue $deploymentEngine -Force
         $report | Add-Member -NotePropertyName legacy_state_upgraded_for_scoped_engine -NotePropertyValue $legacyStateUpgraded -Force
+        $report | Add-Member -NotePropertyName startup_task_policy_reconciled -NotePropertyValue $startupTaskPolicyReconciled -Force
         $retentionPolicy = if ($deploymentEngine -eq "scoped_release_manifest_v1") { "active_previous_and_inflight_release_manifests" } else { "active_previous_and_inflight_commit" }
         $report | Add-Member -NotePropertyName retained_image_policy -NotePropertyValue $retentionPolicy -Force
         $report | Add-Member -NotePropertyName kubernetes_enabled -NotePropertyValue $false -Force
