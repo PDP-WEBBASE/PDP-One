@@ -5,9 +5,23 @@ import test from "node:test";
 
 const procurementRoot = path.resolve("app/procurement");
 
-const legacyAllowlist = new Set([
-  "ProcurementPaginationStableEnhancement.tsx",
-  "procurementStableViewState.ts",
+// Exact known legacy debt present before the deterministic architecture migration.
+// This baseline may shrink as files are migrated; any new file/rule pair fails CI.
+const legacyBaseline = new Set([
+  "ProcurementCardLayoutBulkRemoveV2.tsx: capture-phase global click state",
+  "ProcurementCompactWorkspaceEnhancement.tsx: global fetch monkey patch",
+  "ProcurementCompactWorkspaceEnhancement.tsx: capture-phase global click state",
+  "ProcurementListUxRefinement.tsx: capture-phase global click state",
+  "ProcurementManagementPerformanceEnhancement.tsx: global fetch monkey patch",
+  "ProcurementNavigationReadCache.tsx: global fetch monkey patch",
+  "ProcurementNavigationReadCache.tsx: capture-phase global click state",
+  "ProcurementPaginationEnhancement.tsx: global fetch monkey patch",
+  "ProcurementPaginationIntegrityEnhancement.tsx: global fetch monkey patch",
+  "ProcurementPaginationStableEnhancement.tsx: global fetch monkey patch",
+  "ProcurementStartupSessionResilience.tsx: global fetch monkey patch",
+  "ProcurementTabCacheEnhancement.tsx: global fetch monkey patch",
+  "ProcurementWorkspaceV14.tsx: global fetch monkey patch",
+  "procurementStableViewState.ts: capture-phase global click state",
 ]);
 
 async function sourceFiles(dir) {
@@ -28,20 +42,27 @@ const forbidden = [
 ];
 
 test("new procurement code cannot introduce legacy global data/state ownership", async () => {
-  const violations = [];
+  const detected = [];
   for (const file of await sourceFiles(procurementRoot)) {
     const relative = path.relative(procurementRoot, file);
-    const basename = path.basename(file);
     const source = await readFile(file, "utf8");
     for (const rule of forbidden) {
       if (!rule.pattern.test(source)) continue;
-      if (legacyAllowlist.has(basename)) continue;
-      violations.push(`${relative}: ${rule.name}`);
+      detected.push(`${relative}: ${rule.name}`);
     }
   }
-  assert.deepEqual(violations, [], `Procurement architecture drift detected:\n${violations.join("\n")}`);
+
+  const newViolations = detected.filter((violation) => !legacyBaseline.has(violation));
+  assert.deepEqual(
+    newViolations,
+    [],
+    `Procurement architecture drift detected:\n${newViolations.join("\n")}`,
+  );
 });
 
-test("deterministic data client is not a legacy exception", () => {
-  assert.equal(legacyAllowlist.has("procurementDataClient.ts"), false);
+test("legacy architecture baseline can shrink but deterministic data client is never exempt", () => {
+  assert.equal(
+    [...legacyBaseline].some((entry) => entry.startsWith("procurementDataClient.ts:")),
+    false,
+  );
 });
