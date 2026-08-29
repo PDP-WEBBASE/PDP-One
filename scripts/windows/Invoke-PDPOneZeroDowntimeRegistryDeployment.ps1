@@ -233,13 +233,11 @@ try {
     Set-Location $sourceRoot.FullName
     Invoke-PDPOneNative -Command "docker" -Arguments @("compose","config","--quiet") -FailureMessage "Candidate Docker Compose configuration is invalid." -Quiet | Out-Null
 
-    # Exact source is copied while the currently accepted immutable containers keep serving traffic.
     Set-Location $projectRoot
     & robocopy.exe $sourceRoot.FullName $projectRoot /E /COPY:DAT /DCOPY:DAT /R:1 /W:1 /NFL /NDL /NP /XF .env /XD .git work node_modules .next | Out-Null
     if ($LASTEXITCODE -gt 7) { throw "Exact-commit application files could not be copied." }
     $report.production_changed=$true
 
-    # Database changes are applied before traffic movement; zero-downtime requires the declared migration path to be backward-compatible.
     if ($scope.topology_sensitive -or ("backend" -in $changedServices)) {
         Invoke-PDPOneNative -Command "docker" -Arguments @("compose","run","--rm","--no-deps","backend","python","manage.py","migrate","--noinput") -FailureMessage "Controlled migration failed." -Quiet | Out-Null
     }
@@ -281,7 +279,6 @@ try {
     }
     $report.mcp_continuity_probe_failures=$continuityFailures
 
-    # Canonical containers are now replaced behind the already-ready candidate route.
     Set-Location $projectRoot
     if (("backend" -in $changedServices) -or $scope.topology_sensitive) {
         Invoke-PDPOneNative -Command "docker" -Arguments @("compose","up","--detach","--no-build","--pull","never","--no-deps","--force-recreate","backend","worker","beat") -FailureMessage "Canonical backend services failed to start." -Quiet | Out-Null
@@ -341,7 +338,7 @@ try {
         if ($report.production_changed -and $previousCommit -match '^[0-9a-f]{40}$') {
             $recovery=Join-Path $projectRoot "scripts\windows\Restore-PDPOneAcceptedRelease.ps1"
             if (Test-Path $recovery) {
-                & powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File $recovery -AgentRoot $AgentRoot
+                & powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File $recovery -FailedCommit $CommitSha -FailedDeploymentId $DeploymentId -PreviousAcceptedCommit $previousCommit -ProjectRoot $projectRoot -AgentRoot $AgentRoot
                 if ($LASTEXITCODE -eq 0) { $report.automatic_recovery_succeeded=$true }
             }
         }
