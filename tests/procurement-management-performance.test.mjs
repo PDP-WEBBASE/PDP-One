@@ -3,9 +3,9 @@ import fs from "node:fs";
 import test from "node:test";
 
 const v23 = fs.readFileSync("app/procurement/ProcurementWorkspaceV23.tsx", "utf8");
-const management = fs.readFileSync("app/procurement/ProcurementManagementPerformanceEnhancement.tsx", "utf8");
 const serializers = fs.readFileSync("backend/procurement/serializers_extraction.py", "utf8");
 const views = fs.readFileSync("backend/procurement/views_extraction.py", "utf8");
+const dashboardView = fs.readFileSync("backend/procurement/views_dashboard_read_model.py", "utf8");
 
 function between(text, start, end) {
   const from = text.indexOf(start);
@@ -14,13 +14,13 @@ function between(text, start, end) {
   return text.slice(from, to);
 }
 
-test("management extraction history is bounded to one recent UI page", () => {
-  assert.match(v23, /ProcurementManagementPerformanceEnhancement/);
-  assert.match(management, /MANAGEMENT_HISTORY_PAGE_SIZE = 20/);
-  assert.match(management, /original\.pathname === EXTRACTION_RUNS_PATH/);
-  assert.match(management, /searchParams\.set\("page", "1"\)/);
-  assert.match(management, /searchParams\.set\("page_size", String\(MANAGEMENT_HISTORY_PAGE_SIZE\)\)/);
-  assert.match(management, /\{ \.\.\.payload, next: null, previous: null \}/);
+test("management extraction history is bounded at the authoritative server endpoint", () => {
+  assert.doesNotMatch(v23, /ProcurementManagementPerformanceEnhancement/);
+  assert.match(views, /class ExtractionRunPagination\(PageNumberPagination\)/);
+  assert.match(views, /page_size = 20/);
+  assert.match(views, /page_size_query_param = "page_size"/);
+  assert.match(views, /max_page_size = 100/);
+  assert.match(views, /pagination_class = ExtractionRunPagination/);
 });
 
 test("extraction list serializer omits captured page and error detail", () => {
@@ -40,11 +40,8 @@ test("extraction list avoids detail prefetch and list uses summary serializer", 
   assert.match(views, /if self\.action == "retrieve":[\s\S]*prefetch_related\("pages__connector", "errors__connector"\)/);
 });
 
-test("report dashboard result is briefly reused and invalidated after real mutations", () => {
-  assert.match(management, /DASHBOARD_CACHE_TTL_MS = 60 \* 1000/);
-  assert.match(management, /__pdpManagementDashboardCache/);
-  assert.match(management, /original\.pathname === DASHBOARD_PATH/);
-  assert.match(management, /PROCUREMENT_UI_SYNC_EVENT/);
-  assert.match(management, /detail\.source === "pagination"/);
-  assert.match(management, /delete \(window as ManagementWindow\)\.__pdpManagementDashboardCache/);
+test("dashboard performance is owned by the server read model instead of a global fetch cache", () => {
+  assert.doesNotMatch(v23, /ProcurementManagementPerformanceEnhancement/);
+  assert.match(dashboardView, /aggregate\(/);
+  assert.match(dashboardView, /Count\(/);
 });
