@@ -10,6 +10,7 @@ from .analysis_statistics import procurement_analysis_statistics
 from .models import ProcurementCase, ProcurementNotice
 from .models_analysis import NoticeAnalysisDraft
 from .models_direct import DirectOpportunity
+from .performance_metrics import instrument_procurement_endpoint
 from .views import NOTICE_RESULT_STAGES, NOTICE_SELECTED_STAGES, NOTICE_SUBMITTED_STAGES
 
 
@@ -24,6 +25,7 @@ def _type_counts(queryset, field: str) -> dict[str, int]:
     return {key: int(values.get(key) or 0) for key in ("total", "tender", "inquiry")}
 
 
+@instrument_procurement_endpoint("procurement.ui.dashboard.v1")
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def compact_dashboard_read_model(request):
