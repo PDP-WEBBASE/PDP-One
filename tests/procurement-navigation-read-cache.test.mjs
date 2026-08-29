@@ -17,7 +17,7 @@ test("V23 no longer installs a general global fetch cache", () => {
 test("visited high-volume list pages remain bounded and reusable during migration", () => {
   assert.match(stableList, /CACHE_TTL_MS = 5 \* 60 \* 1000/);
   assert.match(stableList, /MAX_CACHE_ENTRIES = 60/);
-  assert.match(stableList, /readCache\(\)/);
+  assert.match(stableList, /listCache\(\)/);
   assert.match(stableList, /cached\.payload/);
   assert.match(stableList, /stateStillMatches/);
 });
