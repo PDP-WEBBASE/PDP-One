@@ -15,6 +15,7 @@ from .models_interaction import (
     ProcurementChangeJournal,
     ProcurementDomainRevision,
     ProcurementOutboxEvent,
+    ProcurementPendingAction,
     ProcurementWriteLease,
 )
 
@@ -22,17 +23,21 @@ DOMAIN = "procurement"
 WRITE_SCOPE = ["procurement.select_notice.v1"]
 DEFAULT_LEASE_MINUTES = 60
 MAX_LEASE_MINUTES = 120
+PENDING_ACTION_MINUTES = 30
+MAX_PENDING_CANDIDATES = 20
 
 CAPABILITIES = {
     "schema": "pdp-one.interaction-capabilities.v1",
     "read": [
         "read.procurement.query.v1",
         "read.procurement.revision.v1",
+        "read.procurement.changes.v1",
     ],
     "write": [
         "write.procurement.arm.v1",
         "write.procurement.disarm.v1",
         "write.procurement.select_notice.v1",
+        "write.procurement.pending_select.v1",
     ],
     "safety": {
         "write_default": "blocked",
@@ -112,6 +117,11 @@ def disarm_write_lease(*, user, conversation_key: str) -> dict:
     )
     lease_ids = [str(item) for item in leases.values_list("id", flat=True)]
     leases.update(revoked_at=now)
+    ProcurementPendingAction.objects.filter(
+        user=user,
+        conversation_key=conversation_key,
+        status=ProcurementPendingAction.Status.AWAITING_CONFIRMATION,
+    ).update(status=ProcurementPendingAction.Status.CANCELLED)
     AuditEvent.objects.create(
         actor=user.username,
         action="procurement.chatgpt.write_lease.disarm",
@@ -145,6 +155,73 @@ def require_write_lease(*, user, conversation_key: str, lease_id: str, capabilit
     lease.last_used_at = now
     lease.save(update_fields=["last_used_at", "updated_at"])
     return lease
+
+
+def prepare_pending_select_v1(*, user, conversation_key: str, lease_id: str, candidate_notice_ids: list[str], requested_text: str = "") -> dict:
+    conversation_key = normalize_conversation_key(conversation_key)
+    require_write_lease(
+        user=user,
+        conversation_key=conversation_key,
+        lease_id=lease_id,
+        capability="procurement.select_notice.v1",
+    )
+    if not isinstance(candidate_notice_ids, list) or not 2 <= len(candidate_notice_ids) <= MAX_PENDING_CANDIDATES:
+        raise ValidationError({"candidate_notice_ids": "Ambiguous confirmation requires between 2 and 20 candidate notice IDs."})
+    parsed_ids = []
+    for value in candidate_notice_ids:
+        try:
+            parsed_ids.append(uuid.UUID(str(value)))
+        except (TypeError, ValueError, AttributeError) as exc:
+            raise ValidationError({"candidate_notice_ids": "Every candidate must be an exact notice UUID."}) from exc
+    records = list(
+        ProcurementNotice.objects.filter(
+            id__in=parsed_ids,
+            soft_deleted_at__isnull=True,
+            is_hidden=False,
+        ).values("id", "resolved_notice_type", "title", "employer_name", "submission_deadline")
+    )
+    by_id = {str(item["id"]): item for item in records}
+    ordered = [by_id[str(item)] for item in parsed_ids if str(item) in by_id]
+    if len(ordered) < 2:
+        raise ValidationError({"candidate_notice_ids": "At least two writable candidates must still exist."})
+    expires_at = timezone.now() + timedelta(minutes=PENDING_ACTION_MINUTES)
+    pending = ProcurementPendingAction.objects.create(
+        user=user,
+        conversation_key=conversation_key,
+        command="select_notice",
+        command_version=1,
+        candidates=[
+            {
+                "notice_id": str(item["id"]),
+                "notice_type": item["resolved_notice_type"],
+                "title": item["title"],
+                "employer_name": item["employer_name"],
+                "submission_deadline": item["submission_deadline"].isoformat() if item["submission_deadline"] else None,
+            }
+            for item in ordered
+        ],
+        requested_payload={"requested_text": str(requested_text or "")[:1000]},
+        expires_at=expires_at,
+    )
+    AuditEvent.objects.create(
+        actor=user.username,
+        action="procurement.command.select_notice.v1.awaiting_confirmation",
+        target_type="procurement_pending_action",
+        target_id=str(pending.id),
+        payload={
+            "candidate_notice_ids": [item["notice_id"] for item in pending.candidates],
+            "expires_at": expires_at.isoformat(),
+        },
+    )
+    return {
+        "pending_action_id": str(pending.id),
+        "status": pending.status,
+        "command": "select_notice.v1",
+        "candidates": pending.candidates,
+        "expires_at": expires_at,
+        "write_performed": False,
+        "confirmation_required": True,
+    }
 
 
 def _next_revision_locked() -> int:
@@ -282,3 +359,60 @@ def select_notice_v1(*, user, conversation_key: str, lease_id: str, notice_id: s
         "verified": verified,
         "verification": "read_after_write" if verified else "failed",
     }
+
+
+def confirm_pending_select_v1(*, user, conversation_key: str, lease_id: str, pending_action_id: str, notice_id: str) -> dict:
+    conversation_key = normalize_conversation_key(conversation_key)
+    require_write_lease(
+        user=user,
+        conversation_key=conversation_key,
+        lease_id=lease_id,
+        capability="procurement.select_notice.v1",
+    )
+    try:
+        parsed_pending_id = uuid.UUID(str(pending_action_id))
+        parsed_notice_id = uuid.UUID(str(notice_id))
+    except (TypeError, ValueError, AttributeError) as exc:
+        raise ValidationError("Exact pending action and notice UUIDs are required.") from exc
+
+    with transaction.atomic():
+        pending = ProcurementPendingAction.objects.select_for_update().filter(
+            id=parsed_pending_id,
+            user=user,
+            conversation_key=conversation_key,
+            command="select_notice",
+            command_version=1,
+        ).first()
+        if pending is None:
+            raise ValidationError({"pending_action_id": "Pending action not found for this conversation."})
+        if pending.expires_at <= timezone.now():
+            pending.status = ProcurementPendingAction.Status.EXPIRED
+            pending.save(update_fields=["status", "updated_at"])
+            raise PermissionDenied("Pending confirmation has expired.")
+        if pending.status != ProcurementPendingAction.Status.AWAITING_CONFIRMATION:
+            raise ValidationError({"pending_action_id": f"Pending action is already {pending.status}."})
+        candidate_ids = {str(item.get("notice_id")) for item in pending.candidates if isinstance(item, dict)}
+        if str(parsed_notice_id) not in candidate_ids:
+            raise ValidationError({"notice_id": "The confirmed notice is not one of the pending candidates."})
+        pending.confirmed_notice_id = parsed_notice_id
+        pending.status = ProcurementPendingAction.Status.CONFIRMED
+        pending.save(update_fields=["confirmed_notice", "status", "updated_at"])
+
+        result = select_notice_v1(
+            user=user,
+            conversation_key=conversation_key,
+            lease_id=lease_id,
+            notice_id=str(parsed_notice_id),
+        )
+        if not result.get("verified"):
+            raise ValidationError("Read-after-write verification failed; pending action was not completed.")
+        pending.status = ProcurementPendingAction.Status.EXECUTED
+        pending.save(update_fields=["status", "updated_at"])
+        AuditEvent.objects.create(
+            actor=user.username,
+            action="procurement.command.select_notice.v1.confirmed",
+            target_type="procurement_pending_action",
+            target_id=str(pending.id),
+            payload={"notice_id": str(parsed_notice_id), "verified": True},
+        )
+        return {**result, "pending_action_id": str(pending.id), "confirmation_consumed": True}
