@@ -11,6 +11,7 @@ RUN chmod +x scripts/*.sh
 RUN npm run build
 
 FROM ${PDP_DOCKER_REGISTRY}/node:22-bookworm-slim
+LABEL io.pdpone.component="web"
 ARG PDP_BUILD_ID=unknown
 WORKDIR /app
 ENV NODE_ENV=production PDP_BUILD_ID=${PDP_BUILD_ID}

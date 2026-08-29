@@ -15,6 +15,12 @@ REPORT_ROOT = Path(
         "/deployment-agent/reports/mcp-route-observability",
     )
 )
+EXTERNAL_OBSERVER_PATH = Path(
+    os.getenv(
+        "PDP_MCP_EXTERNAL_OBSERVER_STATE",
+        "/deployment-agent/queue/coordinator/mcp-external-observer.json",
+    )
+)
 _INCIDENT_ID = re.compile(r"^MCP-INC-[0-9]{8}-[0-9]{4}$")
 
 
@@ -45,6 +51,40 @@ def _parse_timestamp(value: Any) -> datetime | None:
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=timezone.utc)
     return parsed.astimezone(timezone.utc)
+
+
+def _record_external_reachability() -> dict[str, Any]:
+    """Persist only proof that an external MCP diagnostic call reached this process.
+
+    This is observability telemetry, not a recovery or runtime-control mutation. It
+    contains no token, URL, request content, user identity, or auth material.
+    """
+
+    observed_at = datetime.now(timezone.utc).isoformat()
+    payload: dict[str, Any] = {
+        "schema": "pdp-one.mcp-external-observer.v1",
+        "observed_at": observed_at,
+        "status": "pass",
+        "source": "connected_mcp_diagnostic_call",
+        "secrets_included": False,
+    }
+    path = EXTERNAL_OBSERVER_PATH
+    temporary = path.with_suffix(".json.tmp")
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary.write_text(json.dumps(payload, separators=(",", ":")), encoding="utf-8")
+        temporary.replace(path)
+        return payload
+    except OSError as exc:
+        try:
+            temporary.unlink(missing_ok=True)
+        except OSError:
+            pass
+        return {
+            **payload,
+            "status": "evidence_write_failed",
+            "error_class": type(exc).__name__,
+        }
 
 
 def _incident_timeline(incident: dict[str, Any]) -> dict[str, Any]:
@@ -101,7 +141,8 @@ def register_route_diagnostics_tools(mcp: Any) -> None:
     @mcp.tool(
         description=(
             "Read the latest passive MCP route checkpoint summary and last incident metadata. "
-            "This is diagnostic-only and never repairs, restarts, rotates tokens, or changes runtime state."
+            "A successful external call also records sanitized reachability evidence only; "
+            "the tool never repairs, restarts, rotates tokens, or changes application/runtime state."
         ),
         annotations=ToolAnnotations(
             readOnlyHint=True,
@@ -111,9 +152,11 @@ def register_route_diagnostics_tools(mcp: Any) -> None:
         ),
     )
     async def get_mcp_route_diagnostics() -> dict:
+        external_observer = _record_external_reachability()
         result = _read_json(REPORT_ROOT / "latest.json")
         return {
             **result,
+            "external_observer_current_call": external_observer,
             "diagnostic_only": True,
             "secrets_included": False,
         }

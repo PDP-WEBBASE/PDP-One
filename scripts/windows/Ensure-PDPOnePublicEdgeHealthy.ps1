@@ -40,13 +40,21 @@ function Write-JsonAtomic {
 function New-WatchdogReport {
     [ordered]@{
         schema = "pdp-one.public-edge-watchdog.v1"
+        state_revision = "v4-external-correlation"
         checked_at = [DateTime]::UtcNow.ToString("o")
         status = "unknown"
         observer_available = $false
         observer_age_seconds = $null
         active_incident = $null
         consecutive_failures = 0
+        incident_origin_checkpoint = $null
+        current_failed_checkpoint = $null
+        incident_origin_root_cause_classification = "unknown"
         root_cause_classification = "unknown"
+        current_root_cause_classification = "unknown"
+        external_correlation_status = "external_evidence_required"
+        external_last_observed_at = $null
+        end_to_end_status = "unknown"
         local_runtime_healthy = $false
         public_edge_failed = $false
         local_funnel_to_nginx_healthy = $false
@@ -95,6 +103,12 @@ function Get-CheckpointStatus {
     return [string]$match[0].status
 }
 
+function Get-PropertyValue {
+    param($Object, [string]$Name, $Fallback = $null)
+    if ($null -ne $Object -and $null -ne $Object.PSObject.Properties[$Name]) { return $Object.$Name }
+    return $Fallback
+}
+
 function Test-LocalFunnelToNginx {
     $output = @()
     $exitCode = -1
@@ -116,6 +130,7 @@ function Update-StableHealthyConnectivityStatus {
     if ((Get-CheckpointStatus -Sample $Sample -Id 'CP-08') -ne 'pass') { return $false }
     if ((Get-CheckpointStatus -Sample $Sample -Id 'CP-09') -ne 'pass') { return $false }
     if ((Get-CheckpointStatus -Sample $Sample -Id 'CP-10') -ne 'pass') { return $false }
+    if ([string](Get-PropertyValue -Object $Sample -Name 'end_to_end_status' -Fallback 'healthy') -eq 'host_recovered_pending_external_confirmation') { return $false }
 
     $publicBase = [string](Get-PDPOneEnvValue -Path $envPath -Name "PDP_PUBLIC_BASE_URL")
     if ([string]::IsNullOrWhiteSpace($publicBase)) { return $false }
@@ -145,6 +160,8 @@ function Update-StableHealthyConnectivityStatus {
         public_api = 'healthy'
         public_mcp = 'healthy'
         dns_state = 'published'
+        end_to_end_status = 'healthy'
+        external_correlation_status = [string](Get-PropertyValue -Object $Sample -Name 'external_correlation_status' -Fallback 'not_available')
         consecutive_mcp_only_failures = 0
         last_funnel_repair_at = $lastRepairAt
         last_funnel_repair_result = $lastRepairResult
@@ -181,7 +198,14 @@ try {
     $report.observer_age_seconds = $observerAge
     $report.active_incident = [string]$sample.active_incident
     $report.consecutive_failures = [int]$sample.consecutive_failures
-    $report.root_cause_classification = [string]$sample.root_cause_classification
+    $report.incident_origin_checkpoint = Get-PropertyValue -Object $sample -Name 'incident_origin_checkpoint' -Fallback $sample.first_failed_checkpoint
+    $report.current_failed_checkpoint = Get-PropertyValue -Object $sample -Name 'current_failed_checkpoint' -Fallback $sample.first_failed_checkpoint
+    $report.incident_origin_root_cause_classification = [string](Get-PropertyValue -Object $sample -Name 'incident_origin_root_cause_classification' -Fallback $sample.root_cause_classification)
+    $report.root_cause_classification = [string](Get-PropertyValue -Object $sample -Name 'current_root_cause_classification' -Fallback $sample.root_cause_classification)
+    $report.current_root_cause_classification = $report.root_cause_classification
+    $report.external_correlation_status = [string](Get-PropertyValue -Object $sample -Name 'external_correlation_status' -Fallback 'external_evidence_required')
+    $report.external_last_observed_at = Get-PropertyValue -Object $sample -Name 'external_last_observed_at' -Fallback $null
+    $report.end_to_end_status = [string](Get-PropertyValue -Object $sample -Name 'end_to_end_status' -Fallback $sample.overall)
 
     if ($observerAge -gt 180) {
         $report.status = "observer_stale"
@@ -211,19 +235,49 @@ try {
     }
 
     if (-not $publicFailed) {
+        if ([string]$report.end_to_end_status -eq 'host_recovered_pending_external_confirmation' -or ([string]$sample.active_incident -and [string]$report.external_correlation_status -ne 'pass')) {
+            $report.status = "host_recovered_pending_external_confirmation"
+            $report.final_public_mcp = "host_path_healthy"
+            Write-JsonAtomic -Path $watchdogReportPath -Value $report
+            Write-Output $watchdogReportPath
+            exit 0
+        }
         $report.stable_status_refreshed = [bool](Update-StableHealthyConnectivityStatus -Sample $sample)
-    }
-
-    if (-not $publicFailed -or [string]::IsNullOrWhiteSpace([string]$sample.active_incident) -or [int]$sample.consecutive_failures -lt [Math]::Max(1,$IncidentFailureThreshold)) {
         $report.status = "healthy_or_not_confirmed"
+        $report.final_public_mcp = "healthy"
         Write-JsonAtomic -Path $watchdogReportPath -Value $report
         Write-Output $watchdogReportPath
         exit 0
     }
 
+    if ([string]::IsNullOrWhiteSpace([string]$sample.active_incident) -or [int]$sample.consecutive_failures -lt [Math]::Max(1,$IncidentFailureThreshold)) {
+        $report.status = "failure_not_confirmed"
+        Write-JsonAtomic -Path $watchdogReportPath -Value $report
+        Write-Output $watchdogReportPath
+        exit 0
+    }
+
+    # Observation/classification is intentionally performed before repair suppression/cooldown.
+    # Cooldown may suppress mutation, but it must never hide a current external-edge failure.
+    $daemonPass = (Get-CheckpointStatus -Sample $sample -Id 'CP-06') -eq 'pass'
+    $funnelPass = (Get-CheckpointStatus -Sample $sample -Id 'CP-07') -eq 'pass'
+    $dnsPass = (Get-CheckpointStatus -Sample $sample -Id 'CP-08') -eq 'pass'
+    $publicWebFail = (Get-CheckpointStatus -Sample $sample -Id 'CP-09') -eq 'fail'
+    $publicMcpFail = (Get-CheckpointStatus -Sample $sample -Id 'CP-10') -eq 'fail'
+    $externalEdgePattern = [bool]($daemonPass -and $funnelPass -and $dnsPass -and $publicWebFail -and $publicMcpFail)
+    if ($externalEdgePattern) {
+        $report.local_funnel_to_nginx_healthy = Test-LocalFunnelToNginx
+        if ($report.local_funnel_to_nginx_healthy) {
+            $report.root_cause_classification = "TAILSCALE_PUBLIC_EDGE_EXTERNAL_REACHABILITY"
+            $report.current_root_cause_classification = "TAILSCALE_PUBLIC_EDGE_EXTERNAL_REACHABILITY"
+            $report.public_edge_externalized = $true
+            $report.final_public_mcp = "failed"
+        }
+    }
+
     $deploymentOperation = Read-PDPOneDeploymentOperation -AgentRoot $AgentRoot -RemoveStale
     if ($deploymentOperation.Active) {
-        $report.status = "repair_suppressed_deployment"
+        $report.status = $(if ($report.public_edge_externalized) { "tailscale_public_edge_failure_repair_suppressed_deployment" } else { "repair_suppressed_deployment" })
         $report.repair_suppressed_deployment = $true
         Write-JsonAtomic -Path $watchdogReportPath -Value $report
         Write-Output $watchdogReportPath
@@ -234,7 +288,8 @@ try {
     $cooldown = Get-CooldownRemaining -State $state
     $report.cooldown_seconds_remaining = $cooldown
     if ($cooldown -gt 0 -and [string]$state.last_incident -eq [string]$sample.active_incident) {
-        $report.status = "incident_in_cooldown"
+        $report.status = $(if ($report.public_edge_externalized) { "tailscale_public_edge_failure_in_cooldown" } else { "incident_in_cooldown" })
+        $report.repair_stage = "cooldown_observe_only"
         Write-JsonAtomic -Path $watchdogReportPath -Value $report
         Write-Output $watchdogReportPath
         exit 0
@@ -254,11 +309,11 @@ try {
     $report.repair_actions = 1
     $soft = & $repairScript -ProjectRoot $ProjectRoot -RepairAttempts 1 -AllowPersistentMcpEscalation -AgentRoot $AgentRoot
     if ($null -ne $soft -and [string]$soft.status -eq 'succeeded' -and [string]$soft.public_mcp_health -eq 'healthy') {
-        $report.status = "recovered_after_soft_reconcile"
-        $report.final_public_mcp = "healthy"
+        $report.status = "host_path_recovered_pending_external_confirmation"
+        $report.final_public_mcp = "host_path_healthy"
         $state.last_repair_at = [DateTime]::UtcNow.ToString("o")
         $state.last_incident = [string]$sample.active_incident
-        $state.last_result = "soft_reconcile_succeeded"
+        $state.last_result = "soft_reconcile_host_path_succeeded"
         Write-JsonAtomic -Path $watchdogStatePath -Value $state
         if (Test-Path -LiteralPath $observerScript) { & $observerScript -ProjectRoot $ProjectRoot | Out-Null }
         Write-JsonAtomic -Path $watchdogReportPath -Value $report
@@ -274,29 +329,18 @@ try {
         exit 0
     }
 
-    $daemonPass = (Get-CheckpointStatus -Sample $sample -Id 'CP-06') -eq 'pass'
-    $funnelPass = (Get-CheckpointStatus -Sample $sample -Id 'CP-07') -eq 'pass'
-    $dnsPass = (Get-CheckpointStatus -Sample $sample -Id 'CP-08') -eq 'pass'
-    $publicWebFail = (Get-CheckpointStatus -Sample $sample -Id 'CP-09') -eq 'fail'
-    $publicMcpFail = (Get-CheckpointStatus -Sample $sample -Id 'CP-10') -eq 'fail'
-    if ($daemonPass -and $funnelPass -and $dnsPass -and $publicWebFail -and $publicMcpFail) {
-        $localFunnelHealthy = Test-LocalFunnelToNginx
-        $report.local_funnel_to_nginx_healthy = $localFunnelHealthy
-        if ($localFunnelHealthy) {
-            $report.status = "tailscale_public_edge_failure"
-            $report.root_cause_classification = "TAILSCALE_PUBLIC_EDGE_FAILURE"
-            $report.public_edge_externalized = $true
-            $report.repair_stage = "public_edge_observe_only"
-            $report.final_public_mcp = "failed"
-            $state.last_repair_at = [DateTime]::UtcNow.ToString("o")
-            $state.last_incident = [string]$sample.active_incident
-            $state.last_result = "tailscale_public_edge_failure_observed"
-            Write-JsonAtomic -Path $watchdogStatePath -Value $state
-            if (Test-Path -LiteralPath $observerScript) { & $observerScript -ProjectRoot $ProjectRoot | Out-Null }
-            Write-JsonAtomic -Path $watchdogReportPath -Value $report
-            Write-Output $watchdogReportPath
-            exit 0
-        }
+    if ($report.public_edge_externalized) {
+        $report.status = "tailscale_public_edge_failure"
+        $report.repair_stage = "public_edge_observe_only"
+        $report.final_public_mcp = "failed"
+        $state.last_repair_at = [DateTime]::UtcNow.ToString("o")
+        $state.last_incident = [string]$sample.active_incident
+        $state.last_result = "tailscale_public_edge_external_reachability_observed"
+        Write-JsonAtomic -Path $watchdogStatePath -Value $state
+        if (Test-Path -LiteralPath $observerScript) { & $observerScript -ProjectRoot $ProjectRoot | Out-Null }
+        Write-JsonAtomic -Path $watchdogReportPath -Value $report
+        Write-Output $watchdogReportPath
+        exit 0
     }
 
     $report.repair_stage = "bounded_edge_recreate"
@@ -305,9 +349,9 @@ try {
     $state.last_repair_at = [DateTime]::UtcNow.ToString("o")
     $state.last_incident = [string]$sample.active_incident
     if ($null -ne $bounded -and [string]$bounded.status -eq 'succeeded' -and [string]$bounded.public_mcp_health -eq 'healthy') {
-        $report.status = "recovered_after_bounded_edge_recreate"
-        $report.final_public_mcp = "healthy"
-        $state.last_result = "bounded_edge_recreate_succeeded"
+        $report.status = "host_path_recovered_pending_external_confirmation"
+        $report.final_public_mcp = "host_path_healthy"
+        $state.last_result = "bounded_edge_recreate_host_path_succeeded"
     } else {
         $report.status = "repair_failed_preserved_identity"
         $report.final_public_mcp = $(if ($null -ne $bounded) { [string]$bounded.public_mcp_health } else { "failed" })
