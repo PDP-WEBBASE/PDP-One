@@ -9,6 +9,26 @@ $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
 Set-StrictMode -Version Latest
 
+function Invoke-PDPOneDockerQuiet {
+    param(
+        [Parameter(Mandatory = $true)][string[]]$Arguments,
+        [string]$StandardInput = ""
+    )
+
+    $previousErrorActionPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = "Continue"
+        if ([string]::IsNullOrEmpty($StandardInput)) {
+            & docker @Arguments *> $null
+        } else {
+            $StandardInput | & docker @Arguments *> $null
+        }
+        return $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+    }
+}
+
 $stateRoot = Join-Path $AgentRoot "state"
 $secretPath = Join-Path $AgentRoot "secrets\github-token.dpapi"
 $lastDeploymentPath = Join-Path $stateRoot "last-deployment.json"
@@ -35,8 +55,7 @@ $report = [ordered]@{
 
 try {
     if (-not (Get-Command docker -ErrorAction SilentlyContinue)) { throw "Docker CLI is unavailable." }
-    & docker info *> $null
-    if ($LASTEXITCODE -ne 0) { throw "Docker Engine is not ready." }
+    if ((Invoke-PDPOneDockerQuiet -Arguments @("info")) -ne 0) { throw "Docker Engine is not ready." }
 
     if (-not (Test-Path -LiteralPath $secretPath)) { throw "The protected GHCR credential is missing." }
     $report.protected_secret_present = $true
@@ -49,8 +68,9 @@ try {
     if ([string]::IsNullOrWhiteSpace($plainToken)) { throw "The protected GHCR credential could not be decrypted for this Windows account." }
     $report.protected_secret_decryptable = $true
 
-    $plainToken | & docker login ghcr.io --username "PDP-WEBBASE" --password-stdin *> $null
-    if ($LASTEXITCODE -ne 0) { throw "GHCR authentication failed. Refresh the protected credential once with a PAT classic that has read:packages." }
+    if ((Invoke-PDPOneDockerQuiet -Arguments @("login", "ghcr.io", "--username", "PDP-WEBBASE", "--password-stdin") -StandardInput $plainToken) -ne 0) {
+        throw "GHCR authentication failed. Refresh the protected credential once with a PAT classic that has read:packages."
+    }
     $loggedIn = $true
     $report.registry_login_verified = $true
 
@@ -71,8 +91,9 @@ try {
 
     if (-not [string]::IsNullOrWhiteSpace($probeImage)) {
         $report.package_probe_performed = $true
-        & docker manifest inspect $probeImage *> $null
-        if ($LASTEXITCODE -ne 0) { throw "GHCR login succeeded but package read verification failed for an accepted PDP One image. Ensure the token owner can read the PDP One container packages." }
+        if ((Invoke-PDPOneDockerQuiet -Arguments @("manifest", "inspect", $probeImage)) -ne 0) {
+            throw "GHCR login succeeded but package read verification failed for an accepted PDP One image. Ensure the token owner can read the PDP One container packages."
+        }
         $report.package_read_verified = $true
     } else {
         $report.package_read_verified = $true
@@ -94,7 +115,7 @@ try {
     Write-Error $report.error
     exit 1
 } finally {
-    if ($loggedIn) { & docker logout ghcr.io *> $null }
+    if ($loggedIn) { [void](Invoke-PDPOneDockerQuiet -Arguments @("logout", "ghcr.io")) }
     if ($pointer -ne [IntPtr]::Zero) { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($pointer) }
     $plainToken = $null
 }
