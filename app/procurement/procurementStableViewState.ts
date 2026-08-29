@@ -6,11 +6,6 @@ export type ProcurementStableViewState = {
   workflow: ProcurementStableWorkflow;
 };
 
-type StableWindow = Window & {
-  __pdpStableViewState?: ProcurementStableViewState;
-  __pdpStableViewStateInstalled?: boolean;
-};
-
 export const PROCUREMENT_STABLE_VIEW_STATE_EVENT = "pdp-procurement-stable-view-state";
 
 const TOP_BY_LABEL = new Map<string, ProcurementStableTop>([
@@ -58,9 +53,11 @@ function defaultState(): ProcurementStableViewState {
   return { top: "dashboard", workflow: "all" };
 }
 
+let currentState: ProcurementStableViewState = defaultState();
+let legacyInstallerActive = false;
+
 export function getProcurementStableViewState(): ProcurementStableViewState {
-  if (typeof window === "undefined") return defaultState();
-  return { ...((window as StableWindow).__pdpStableViewState || defaultState()) };
+  return { ...currentState };
 }
 
 export function stableTopLabel(top = getProcurementStableViewState().top) {
@@ -75,36 +72,34 @@ export function stableWorkflowLabel(state = getProcurementStableViewState()) {
   return "";
 }
 
-function publish(next: ProcurementStableViewState) {
-  if (typeof window === "undefined") return;
-  const guarded = window as StableWindow;
-  const current = guarded.__pdpStableViewState || defaultState();
-  if (current.top === next.top && current.workflow === next.workflow) return;
-  guarded.__pdpStableViewState = { ...next };
-  window.dispatchEvent(new CustomEvent<ProcurementStableViewState>(PROCUREMENT_STABLE_VIEW_STATE_EVENT, { detail: { ...next } }));
+export function setProcurementStableViewState(next: ProcurementStableViewState) {
+  if (currentState.top === next.top && currentState.workflow === next.workflow) return;
+  currentState = { ...next };
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new CustomEvent<ProcurementStableViewState>(PROCUREMENT_STABLE_VIEW_STATE_EVENT, { detail: { ...next } }));
+  }
 }
 
+/**
+ * Historical compatibility only. New workspace code publishes explicit React state
+ * through setProcurementStableViewState and must not depend on DOM label inference.
+ */
 export function installProcurementStableViewState() {
-  if (typeof window === "undefined" || typeof document === "undefined") return;
-  const guarded = window as StableWindow;
-  if (guarded.__pdpStableViewStateInstalled) return;
-  guarded.__pdpStableViewStateInstalled = true;
-  guarded.__pdpStableViewState = guarded.__pdpStableViewState || defaultState();
-
+  if (typeof document === "undefined" || legacyInstallerActive) return;
+  legacyInstallerActive = true;
   document.addEventListener("click", (event) => {
     const button = event.target instanceof Element ? event.target.closest("button") : null;
     if (!button) return;
     const label = normalize(button.textContent);
-    const current = getProcurementStableViewState();
     const top = TOP_BY_LABEL.get(label);
     if (top) {
-      publish({ top, workflow: "all" });
+      setProcurementStableViewState({ top, workflow: "all" });
       return;
     }
     const workflow = WORKFLOW_BY_LABEL.get(label);
     if (!workflow) return;
-    if (current.top !== "tenders" && current.top !== "inquiries" && current.top !== "direct") return;
-    publish({ ...current, workflow });
+    if (!["tenders", "inquiries", "direct"].includes(currentState.top)) return;
+    setProcurementStableViewState({ ...currentState, workflow });
   }, true);
 }
 
