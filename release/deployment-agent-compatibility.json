@@ -2,41 +2,15 @@
   "schema": "pdp-one.deployment-agent-compatibility.v1",
   "protocol_version": 1,
   "bootstrap_files": [
-    {
-      "path": "scripts/windows/Deployment-Agent.Standard.ps1",
-      "agent_file": "Deployment-Agent.Standard.ps1"
-    },
-    {
-      "path": "scripts/windows/Invoke-PDPOneDeployment.ps1",
-      "agent_file": "Invoke-PDPOneDeployment.ps1"
-    },
-    {
-      "path": "scripts/windows/Invoke-PDPOneManagedFastDeployment.ps1",
-      "agent_file": "Invoke-PDPOneManagedFastDeployment.ps1"
-    },
-    {
-      "path": "scripts/windows/Invoke-PDPOneScopedRegistryDeployment.ps1",
-      "agent_file": "Invoke-PDPOneScopedRegistryDeployment.ps1"
-    },
-    {
-      "path": "scripts/windows/Invoke-PDPOneExactAgentReconciliation.ps1",
-      "agent_file": "Invoke-PDPOneExactAgentReconciliation.ps1"
-    },
-    {
-      "path": "scripts/windows/PDPOne.Common.ps1",
-      "agent_file": "PDPOne.Common.ps1"
-    },
-    {
-      "path": "scripts/windows/PDPOne.OperationLock.ps1",
-      "agent_file": "PDPOne.OperationLock.ps1"
-    },
-    {
-      "path": "scripts/windows/PDPOne.ReleaseManifest.ps1",
-      "agent_file": "PDPOne.ReleaseManifest.ps1"
-    },
-    {
-      "path": "scripts/windows/Test-PDPOneExactCandidateCompatibility.ps1",
-      "agent_file": "Test-PDPOneExactCandidateCompatibility.ps1"
-    }
+    {"path": "scripts/windows/Deployment-Agent.Standard.ps1", "agent_file": "Deployment-Agent.Standard.ps1"},
+    {"path": "scripts/windows/Invoke-PDPOneDeployment.ps1", "agent_file": "Invoke-PDPOneDeployment.ps1"},
+    {"path": "scripts/windows/Invoke-PDPOneManagedFastDeployment.ps1", "agent_file": "Invoke-PDPOneManagedFastDeployment.ps1"},
+    {"path": "scripts/windows/Invoke-PDPOneZeroDowntimeRegistryDeployment.ps1", "agent_file": "Invoke-PDPOneZeroDowntimeRegistryDeployment.ps1"},
+    {"path": "scripts/windows/Invoke-PDPOneScopedRegistryDeployment.ps1", "agent_file": "Invoke-PDPOneScopedRegistryDeployment.ps1"},
+    {"path": "scripts/windows/Invoke-PDPOneExactAgentReconciliation.ps1", "agent_file": "Invoke-PDPOneExactAgentReconciliation.ps1"},
+    {"path": "scripts/windows/PDPOne.Common.ps1", "agent_file": "PDPOne.Common.ps1"},
+    {"path": "scripts/windows/PDPOne.OperationLock.ps1", "agent_file": "PDPOne.OperationLock.ps1"},
+    {"path": "scripts/windows/PDPOne.ReleaseManifest.ps1", "agent_file": "PDPOne.ReleaseManifest.ps1"},
+    {"path": "scripts/windows/Test-PDPOneExactCandidateCompatibility.ps1", "agent_file": "Test-PDPOneExactCandidateCompatibility.ps1"}
   ]
 }
