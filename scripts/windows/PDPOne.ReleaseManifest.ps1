@@ -108,10 +108,16 @@ function Get-PDPOneImageLabelValue {
         [Parameter(Mandatory = $true)][string]$Image,
         [Parameter(Mandatory = $true)][string]$Name
     )
-    $template = "{{ index .Config.Labels `"$Name`" }}"
-    $value = [string](& docker image inspect --format $template $Image 2>$null | Select-Object -First 1)
-    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($value) -or $value -eq "<no value>") { return "" }
-    return $value.Trim()
+    $inspectJson = [string]((& docker image inspect $Image 2>$null | Out-String))
+    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($inspectJson)) { return "" }
+    try {
+        $items = @($inspectJson | ConvertFrom-Json)
+        if ($items.Count -eq 0 -or $null -eq $items[0].Config -or $null -eq $items[0].Config.Labels) { return "" }
+        foreach ($property in @($items[0].Config.Labels.PSObject.Properties)) {
+            if ([string]$property.Name -ceq $Name) { return [string]$property.Value }
+        }
+    } catch { }
+    return ""
 }
 
 function Get-PDPOneImageRepositoryDigest {
