@@ -3,13 +3,15 @@ server {
     server_name _;
     client_max_body_size 50m;
 
-    # Docker service IPs can change when a release recreates backend, web or MCP.
-    # Resolve service names through Docker DNS at request time instead of keeping
-    # the address that existed when nginx first started.
+    # Canonical service names remain the default. The zero-downtime promotion
+    # engine may install a short-lived, non-secret override file and gracefully
+    # reload nginx after candidate readiness. No normal deployment restarts the
+    # persistent nginx/Tailscale Connectivity Edge.
     resolver 127.0.0.11 valid=5s ipv6=off;
     set $pdp_backend_upstream backend:8000;
     set $pdp_mcp_upstream mcp:8010;
     set $pdp_web_upstream web:3000;
+    include /etc/nginx/pdp-runtime-upstreams/*.conf;
 
     location = /healthz {
         access_log off;
@@ -28,8 +30,6 @@ server {
         proxy_set_header X-Forwarded-Proto $http_x_forwarded_proto;
     }
 
-    # Token-bound health route: verifies Tailscale/Nginx token rendering and
-    # Nginx -> MCP reachability without creating an MCP protocol session.
     location = /mcp/${PDP_MCP_PATH_TOKEN}/healthz {
         access_log off;
         proxy_pass http://$pdp_mcp_upstream/healthz;
@@ -44,8 +44,6 @@ server {
         proxy_set_header X-Forwarded-Proto $http_x_forwarded_proto;
     }
 
-    # Trial-only capability URL. The random path is generated locally and is
-    # never committed. Closing the temporary tunnel revokes external access.
     location = /mcp/${PDP_MCP_PATH_TOKEN} {
         proxy_pass http://$pdp_mcp_upstream/mcp;
         proxy_http_version 1.1;
@@ -53,8 +51,6 @@ server {
         proxy_request_buffering off;
         proxy_cache off;
         proxy_connect_timeout 5s;
-        # Streamable HTTP may keep a response stream open for a long time.
-        # Do not terminate a healthy idle stream at the previous 300s boundary.
         proxy_send_timeout 3600s;
         proxy_read_timeout 3600s;
         proxy_set_header Host $host;
@@ -77,7 +73,6 @@ server {
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
     }
 
-    # Vite emits content-hashed assets. These are safe to cache indefinitely.
     location /assets/ {
         proxy_pass http://$pdp_web_upstream;
         proxy_http_version 1.1;
@@ -87,7 +82,6 @@ server {
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
     }
 
-    # HTML and route responses must never remain cached across a deployment.
     location / {
         proxy_pass http://$pdp_web_upstream;
         proxy_http_version 1.1;

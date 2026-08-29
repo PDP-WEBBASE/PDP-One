@@ -14,22 +14,31 @@ Set-StrictMode -Version Latest
 . (Join-Path $PSScriptRoot "PDPOne.Common.ps1")
 . (Join-Path $PSScriptRoot "PDPOne.OperationLock.ps1")
 $stateCompatibilityScript = Join-Path $PSScriptRoot "PDPOne.DeploymentStateCompatibility.ps1"
-if (Test-Path -LiteralPath $stateCompatibilityScript) {
-    . $stateCompatibilityScript
-}
+if (Test-Path -LiteralPath $stateCompatibilityScript) { . $stateCompatibilityScript }
 
 $projectRoot = Get-PDPOneProjectRoot
 $guardScript = Join-Path $PSScriptRoot "Invoke-PDPOneDiskGuard.ps1"
 $policyScript = Join-Path $PSScriptRoot "Ensure-PDPOneRancherPolicy.ps1"
 $compatibilityPreflightScript = Join-Path $PSScriptRoot "Test-PDPOneExactCandidateCompatibility.ps1"
+$credentialPreflightScript = Join-Path $PSScriptRoot "Test-PDPOneGhcrCredential.ps1"
+$zeroDowntimeScript = Join-Path $PSScriptRoot "Invoke-PDPOneZeroDowntimeRegistryDeployment.ps1"
 $scopedScript = Join-Path $PSScriptRoot "Invoke-PDPOneScopedRegistryDeployment.ps1"
 $legacyScript = Join-Path $PSScriptRoot "Invoke-PDPOneRegistryFastDeployment.ps1"
-$innerScript = if (Test-Path -LiteralPath $scopedScript) { $scopedScript } else { $legacyScript }
-$deploymentEngine = if ($innerScript -eq $scopedScript) { "scoped_release_manifest_v1" } else { "legacy_exact_sha" }
+if (Test-Path -LiteralPath $zeroDowntimeScript) {
+    $innerScript = $zeroDowntimeScript
+    $deploymentEngine = "zero_downtime_overlap_v1"
+} elseif (Test-Path -LiteralPath $scopedScript) {
+    $innerScript = $scopedScript
+    $deploymentEngine = "scoped_release_manifest_v1"
+} else {
+    $innerScript = $legacyScript
+    $deploymentEngine = "legacy_exact_sha"
+}
 $downloadRoot = Join-Path $AgentRoot ("downloads\" + $DeploymentId)
 $deploymentOutput = @()
 $deploymentExitCode = 1
 $compatibilityPreflightReport = ""
+$credentialPreflightReport = ""
 $predeployGuardReport = ""
 $postdeployGuardReport = ""
 $rancherPolicyReport = ""
@@ -37,32 +46,19 @@ $deploymentLease = $null
 $legacyStateUpgraded = $false
 $startupTaskPolicyReconciled = $false
 
-if (-not (Test-Path -LiteralPath $innerScript)) {
-    throw "Registry-backed fast deployment implementation was not found."
-}
+if (-not (Test-Path -LiteralPath $innerScript)) { throw "Registry-backed fast deployment implementation was not found." }
 
-$deploymentLease = Enter-PDPOneDeploymentOperation `
-    -DeploymentId $DeploymentId `
-    -CommitSha $CommitSha `
-    -PreviewId $PreviewId `
-    -AgentRoot $AgentRoot
-
-if ($null -eq $deploymentLease) {
-    throw "Another PDP One deployment is already in progress."
-}
+$deploymentLease = Enter-PDPOneDeploymentOperation -DeploymentId $DeploymentId -CommitSha $CommitSha -PreviewId $PreviewId -AgentRoot $AgentRoot
+if ($null -eq $deploymentLease) { throw "Another PDP One deployment is already in progress." }
 
 try {
     Write-PDPOneDeploymentOperation -Lease $deploymentLease -Stage "deployment-compatibility-preflight"
-    if (-not (Test-Path -LiteralPath $compatibilityPreflightScript)) {
-        throw "Deployment compatibility preflight is missing from the installed Agent. Bootstrap the exact accepted preflight helper before retrying."
-    }
+    if (-not (Test-Path -LiteralPath $compatibilityPreflightScript)) { throw "Deployment compatibility preflight is missing from the installed Agent. Bootstrap the exact accepted preflight helper before retrying." }
     $preflightOutput = @(& powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File $compatibilityPreflightScript -CommitSha $CommitSha -DeploymentId $DeploymentId -AgentRoot $AgentRoot 2>&1)
     $preflightExitCode = $LASTEXITCODE
     if ($preflightExitCode -ne 0) {
         $preflightMessage = ConvertTo-PDPOneRedactedText (($preflightOutput | ForEach-Object { [string]$_ }) -join [Environment]::NewLine)
-        if ([string]::IsNullOrWhiteSpace($preflightMessage)) {
-            $preflightMessage = "Deployment compatibility preflight failed without a diagnostic message."
-        }
+        if ([string]::IsNullOrWhiteSpace($preflightMessage)) { $preflightMessage = "Deployment compatibility preflight failed without a diagnostic message." }
         $failureReportRoot = Join-Path $AgentRoot "reports"
         New-Item -ItemType Directory -Force -Path $failureReportRoot | Out-Null
         $failureReportPath = Join-Path $failureReportRoot ($DeploymentId + ".json")
@@ -88,11 +84,50 @@ try {
             connectivity_repair_attempted = $false
             connectivity_repair_succeeded = $false
             startup_task_policy_reconciled = $false
+            ghcr_credential_refresh_required = $false
             error = $preflightMessage
         } | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $failureReportPath -Encoding UTF8
         throw "Deployment compatibility preflight failed before production changes. $preflightMessage"
     }
     if ($preflightOutput.Count -gt 0) { $compatibilityPreflightReport = [string]$preflightOutput[-1] }
+
+    Write-PDPOneDeploymentOperation -Lease $deploymentLease -Stage "ghcr-credential-preflight"
+    if (-not (Test-Path -LiteralPath $credentialPreflightScript)) { throw "Persistent GHCR credential health helper is missing from the installed Agent. Bootstrap the exact accepted helper before retrying." }
+    $credentialOutput = @(& powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File $credentialPreflightScript -AgentRoot $AgentRoot 2>&1)
+    $credentialExitCode = $LASTEXITCODE
+    if ($credentialExitCode -ne 0) {
+        $credentialMessage = ConvertTo-PDPOneRedactedText (($credentialOutput | ForEach-Object { [string]$_ }) -join [Environment]::NewLine)
+        if ([string]::IsNullOrWhiteSpace($credentialMessage)) { $credentialMessage = "Persistent GHCR credential health verification failed." }
+        $failureReportRoot = Join-Path $AgentRoot "reports"
+        New-Item -ItemType Directory -Force -Path $failureReportRoot | Out-Null
+        $failureReportPath = Join-Path $failureReportRoot ($DeploymentId + ".json")
+        [ordered]@{
+            schema = "pdp-one.deployment-report.v4-zero-downtime"
+            deployment_id = $DeploymentId
+            preview_id = $PreviewId
+            approved_commit = $CommitSha
+            previous_commit = ""
+            started_at = [DateTime]::UtcNow.ToString("o")
+            completed_at = [DateTime]::UtcNow.ToString("o")
+            status = "failed"
+            stage = "ghcr-credential-preflight"
+            change_management_mode = "development_fast"
+            image_source = "github_container_registry"
+            local_image_build_performed = $false
+            production_changed = $false
+            health_profile = "none"
+            changed_services = @()
+            changed_paths = @()
+            active_images = @{}
+            retained_previous_images = @{}
+            ghcr_credential_preflight_passed = $false
+            ghcr_credential_refresh_required = $true
+            secrets_included = $false
+            error = $credentialMessage
+        } | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $failureReportPath -Encoding UTF8
+        throw "Persistent GHCR credential is unhealthy. Refresh it once with Set-PDPOnePersistentGhcrCredential.ps1; production was not changed. $credentialMessage"
+    }
+    if ($credentialOutput.Count -gt 0) { $credentialPreflightReport = [string]$credentialOutput[-1] }
 
     Write-PDPOneDeploymentOperation -Lease $deploymentLease -Stage "applying-rancher-policy"
     if (Test-Path -LiteralPath $policyScript) {
@@ -106,20 +141,14 @@ try {
         try {
             $guardOutput = @(& powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File $guardScript -Mode predeploy -ProjectRoot $projectRoot -AgentRoot $AgentRoot -BuildCacheBudgetGB 2)
             if ($guardOutput.Count -gt 0) { $predeployGuardReport = [string]$guardOutput[-1] }
-        } catch {
-            Write-Warning "Pre-deployment cleanup could not finish. Registry deployment will still be attempted until Docker reports an actual write failure."
-        }
+        } catch { Write-Warning "Pre-deployment cleanup could not finish. Registry deployment will still be attempted until Docker reports an actual write failure." }
     }
 
-    if ($innerScript -eq $scopedScript) {
-        if (-not (Get-Command Update-PDPOneLegacyDeploymentStateForScopedEngine -ErrorAction SilentlyContinue)) {
-            throw "Scoped deployment state-compatibility helper is missing."
-        }
+    if ($innerScript -eq $scopedScript -or $innerScript -eq $zeroDowntimeScript) {
+        if (-not (Get-Command Update-PDPOneLegacyDeploymentStateForScopedEngine -ErrorAction SilentlyContinue)) { throw "Scoped deployment state-compatibility helper is missing." }
         $legacyStateUpgraded = [bool](Update-PDPOneLegacyDeploymentStateForScopedEngine -AgentRoot $AgentRoot)
     }
 
-    # Keep this stable stage name for existing deployment-operation observers and
-    # contracts. The selected engine may activate an exact release manifest.
     Write-PDPOneDeploymentOperation -Lease $deploymentLease -Stage "deploying-exact-commit"
     $deploymentOutput = @(& powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File $innerScript -CommitSha $CommitSha -DeploymentId $DeploymentId -PreviewId $PreviewId -AgentRoot $AgentRoot)
     $deploymentExitCode = $LASTEXITCODE
@@ -127,41 +156,25 @@ try {
     if ($deploymentExitCode -eq 0) {
         Write-PDPOneDeploymentOperation -Lease $deploymentLease -Stage "reconciling-startup-task-policy"
         $startupTaskPolicyScript = Join-Path $projectRoot "scripts\windows\Register-PDPOneStartupTask.ps1"
-        if (-not (Test-Path -LiteralPath $startupTaskPolicyScript)) {
-            throw "The exact deployed source is missing Register-PDPOneStartupTask.ps1."
-        }
+        if (-not (Test-Path -LiteralPath $startupTaskPolicyScript)) { throw "The exact deployed source is missing Register-PDPOneStartupTask.ps1." }
         & powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File $startupTaskPolicyScript -ProjectRoot $projectRoot -ApplyIfNeeded
-        if ($LASTEXITCODE -ne 0) {
-            throw "The exact deployed Windows Scheduled Task policy could not be reconciled."
-        }
+        if ($LASTEXITCODE -ne 0) { throw "The exact deployed Windows Scheduled Task policy could not be reconciled." }
         $startupTaskPolicyReconciled = $true
     }
 } finally {
-    if ($null -ne $deploymentLease) {
-        try { Write-PDPOneDeploymentOperation -Lease $deploymentLease -Stage "postdeploy-cleanup" } catch { }
-    }
-
-    if (Test-Path -LiteralPath $downloadRoot) {
-        try { Remove-Item -LiteralPath $downloadRoot -Recurse -Force -ErrorAction Stop } catch { }
-    }
-
+    if ($null -ne $deploymentLease) { try { Write-PDPOneDeploymentOperation -Lease $deploymentLease -Stage "postdeploy-cleanup" } catch { } }
+    if (Test-Path -LiteralPath $downloadRoot) { try { Remove-Item -LiteralPath $downloadRoot -Recurse -Force -ErrorAction Stop } catch { } }
     if (Test-Path -LiteralPath $guardScript) {
         try {
             $guardOutput = @(& powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File $guardScript -Mode postdeploy -ProjectRoot $projectRoot -AgentRoot $AgentRoot -BuildCacheBudgetGB 2)
             if ($guardOutput.Count -gt 0) { $postdeployGuardReport = [string]$guardOutput[-1] }
-        } catch {
-            Write-Warning "Post-deployment cleanup did not finish. The deployment result is preserved and the daily disk task will retry cleanup."
-        }
+        } catch { Write-Warning "Post-deployment cleanup did not finish. The deployment result is preserved and the daily disk task will retry cleanup." }
     }
-
     Exit-PDPOneDeploymentOperation -Lease $deploymentLease
     $deploymentLease = $null
 }
 
-if ($deploymentExitCode -ne 0) {
-    foreach ($line in $deploymentOutput) { Write-Output $line }
-    exit $deploymentExitCode
-}
+if ($deploymentExitCode -ne 0) { foreach ($line in $deploymentOutput) { Write-Output $line }; exit $deploymentExitCode }
 
 $deploymentReport = if ($deploymentOutput.Count -gt 0) { [string]$deploymentOutput[-1] } else { "" }
 if ($deploymentReport -and (Test-Path -LiteralPath $deploymentReport)) {
@@ -169,6 +182,9 @@ if ($deploymentReport -and (Test-Path -LiteralPath $deploymentReport)) {
         $report = Get-Content -LiteralPath $deploymentReport -Raw -Encoding UTF8 | ConvertFrom-Json
         $report | Add-Member -NotePropertyName compatibility_preflight_report -NotePropertyValue $compatibilityPreflightReport -Force
         $report | Add-Member -NotePropertyName compatibility_preflight_passed -NotePropertyValue $true -Force
+        $report | Add-Member -NotePropertyName ghcr_credential_preflight_report -NotePropertyValue $credentialPreflightReport -Force
+        $report | Add-Member -NotePropertyName ghcr_credential_preflight_passed -NotePropertyValue $true -Force
+        $report | Add-Member -NotePropertyName ghcr_credential_refresh_required -NotePropertyValue $false -Force
         $report | Add-Member -NotePropertyName rancher_policy_report -NotePropertyValue $rancherPolicyReport -Force
         $report | Add-Member -NotePropertyName predeploy_disk_guard_report -NotePropertyValue $predeployGuardReport -Force
         $report | Add-Member -NotePropertyName postdeploy_disk_guard_report -NotePropertyValue $postdeployGuardReport -Force
@@ -183,11 +199,11 @@ if ($deploymentReport -and (Test-Path -LiteralPath $deploymentReport)) {
         $report | Add-Member -NotePropertyName deployment_engine -NotePropertyValue $deploymentEngine -Force
         $report | Add-Member -NotePropertyName legacy_state_upgraded_for_scoped_engine -NotePropertyValue $legacyStateUpgraded -Force
         $report | Add-Member -NotePropertyName startup_task_policy_reconciled -NotePropertyValue $startupTaskPolicyReconciled -Force
-        $retentionPolicy = if ($deploymentEngine -eq "scoped_release_manifest_v1") { "active_previous_and_inflight_release_manifests" } else { "active_previous_and_inflight_commit" }
+        $releaseManifestEngine = ($deploymentEngine -eq "scoped_release_manifest_v1" -or $deploymentEngine -eq "zero_downtime_overlap_v1")
+        $retentionPolicy = if ($releaseManifestEngine) { "active_previous_and_inflight_release_manifests" } else { "active_previous_and_inflight_commit" }
         $report | Add-Member -NotePropertyName retained_image_policy -NotePropertyValue $retentionPolicy -Force
         $report | Add-Member -NotePropertyName kubernetes_enabled -NotePropertyValue $false -Force
         $report | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $deploymentReport -Encoding UTF8
     } catch { }
 }
-
 Write-Output $deploymentReport
