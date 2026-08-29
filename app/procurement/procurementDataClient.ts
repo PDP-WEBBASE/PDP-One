@@ -144,19 +144,21 @@ export class ProcurementDataClient {
 
   abort(context: ProcurementQueryContext) {
     const key = procurementQueryKey(context);
-    this.controllers.get(key)?.abort();
-    this.controllers.delete(key);
-    this.generation.set(key, (this.generation.get(key) || 0) + 1);
+    this.abortKey(key);
   }
 
   abortAllExcept(context: ProcurementQueryContext) {
     const keep = procurementQueryKey(context);
-    for (const [key, controller] of this.controllers.entries()) {
-      if (key === keep) continue;
-      controller.abort();
-      this.controllers.delete(key);
-      this.generation.set(key, (this.generation.get(key) || 0) + 1);
+    for (const key of [...this.controllers.keys()]) {
+      if (key !== keep) this.abortKey(key);
     }
+  }
+
+  private abortKey(key: string) {
+    this.controllers.get(key)?.abort();
+    this.controllers.delete(key);
+    this.inflight.delete(key);
+    this.generation.set(key, (this.generation.get(key) || 0) + 1);
   }
 
   private fetchKey<T>(key: string, context: ProcurementQueryContext): Promise<ProcurementQueryPayload<T>> {
@@ -169,27 +171,27 @@ export class ProcurementDataClient {
     this.controllers.set(key, controller);
     const params = procurementQueryParams(context);
 
-    const request = this.fetchImpl(`${this.endpoint}?${params.toString()}`, {
+    const baseRequest = this.fetchImpl(`${this.endpoint}?${params.toString()}`, {
       method: "GET",
       headers: { Accept: "application/json" },
       signal: controller.signal,
-    })
-      .then(async (response) => {
-        if (!response.ok) throw new Error(`Procurement request failed with HTTP ${response.status}`);
-        const payload = (await response.json()) as ProcurementQueryPayload<T>;
-        if (this.generation.get(key) !== requestGeneration) {
-          throw new DOMException("Stale procurement response discarded", "AbortError");
-        }
-        this.cache.set(key, { payload, fetchedAt: this.now() });
-        return payload;
-      })
-      .finally(() => {
-        if (this.inflight.get(key) === request) this.inflight.delete(key);
-        if (this.controllers.get(key) === controller) this.controllers.delete(key);
-      });
+    }).then(async (response) => {
+      if (!response.ok) throw new Error(`Procurement request failed with HTTP ${response.status}`);
+      const payload = (await response.json()) as ProcurementQueryPayload<T>;
+      if (this.generation.get(key) !== requestGeneration) {
+        throw new DOMException("Stale procurement response discarded", "AbortError");
+      }
+      this.cache.set(key, { payload, fetchedAt: this.now() });
+      return payload;
+    });
 
-    this.inflight.set(key, request as Promise<ProcurementQueryPayload>);
-    return request;
+    const trackedRequest = baseRequest.finally(() => {
+      if (this.inflight.get(key) === trackedRequest) this.inflight.delete(key);
+      if (this.controllers.get(key) === controller) this.controllers.delete(key);
+    });
+
+    this.inflight.set(key, trackedRequest as Promise<ProcurementQueryPayload>);
+    return trackedRequest;
   }
 }
 
