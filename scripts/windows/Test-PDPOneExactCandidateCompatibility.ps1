@@ -17,6 +17,7 @@ $SteadyStateAgentFiles = @(
     "Deployment-Agent.Standard.ps1",
     "Invoke-PDPOneDeployment.ps1",
     "Invoke-PDPOneManagedFastDeployment.ps1",
+    "Invoke-PDPOneZeroDowntimeRegistryDeployment.ps1",
     "Invoke-PDPOneScopedRegistryDeployment.ps1",
     "Invoke-PDPOneExactAgentReconciliation.ps1",
     "PDPOne.Common.ps1",
@@ -52,9 +53,7 @@ function Get-PDPOneRawCandidateFile {
     for ($attempt = 1; $attempt -le 3; $attempt += 1) {
         try {
             Invoke-WebRequest -UseBasicParsing -Uri $uri -OutFile $Destination -TimeoutSec 45
-            if (-not (Test-Path -LiteralPath $Destination) -or (Get-Item -LiteralPath $Destination).Length -le 0) {
-                throw "Downloaded candidate file is empty."
-            }
+            if (-not (Test-Path -LiteralPath $Destination) -or (Get-Item -LiteralPath $Destination).Length -le 0) { throw "Downloaded candidate file is empty." }
             return
         } catch {
             $lastError = $_
@@ -71,31 +70,21 @@ function Assert-PDPOneManifestSet {
         [Parameter(Mandatory = $true)][string[]]$ExpectedFiles
     )
     $entries = @($Contract.bootstrap_files)
-    if ($entries.Count -ne $ExpectedFiles.Count) {
-        throw "Exact candidate compatibility contract has an unexpected bootstrap file count."
-    }
+    if ($entries.Count -ne $ExpectedFiles.Count) { throw "Exact candidate compatibility contract has an unexpected bootstrap file count." }
     $seenFiles = @{}
     $seenPaths = @{}
     foreach ($entry in $entries) {
         $repositoryPath = [string]$entry.path
         $agentFile = [string]$entry.agent_file
-        if ($repositoryPath -notmatch '^scripts/windows/[A-Za-z0-9._-]+\.ps1$') {
-            throw "Compatibility contract contains an invalid bootstrap repository path."
-        }
-        if ($agentFile -notmatch '^[A-Za-z0-9._-]+\.ps1$' -or $agentFile -ne (Split-Path $repositoryPath -Leaf)) {
-            throw "Compatibility contract contains an invalid agent bootstrap filename."
-        }
-        if ($seenFiles.ContainsKey($agentFile) -or $seenPaths.ContainsKey($repositoryPath)) {
-            throw "Compatibility contract contains duplicate bootstrap entries."
-        }
+        if ($repositoryPath -notmatch '^scripts/windows/[A-Za-z0-9._-]+\.ps1$') { throw "Compatibility contract contains an invalid bootstrap repository path." }
+        if ($agentFile -notmatch '^[A-Za-z0-9._-]+\.ps1$' -or $agentFile -ne (Split-Path $repositoryPath -Leaf)) { throw "Compatibility contract contains an invalid agent bootstrap filename." }
+        if ($seenFiles.ContainsKey($agentFile) -or $seenPaths.ContainsKey($repositoryPath)) { throw "Compatibility contract contains duplicate bootstrap entries." }
         $seenFiles[$agentFile] = $true
         $seenPaths[$repositoryPath] = $true
     }
     $actual = @($seenFiles.Keys | Sort-Object)
     $expected = @($ExpectedFiles | Sort-Object)
-    if (($actual -join "`n") -ne ($expected -join "`n")) {
-        throw "Exact candidate compatibility contract does not match the fixed bootstrap file set for this stage."
-    }
+    if (($actual -join "`n") -ne ($expected -join "`n")) { throw "Exact candidate compatibility contract does not match the fixed bootstrap file set for this stage." }
     return $entries
 }
 
@@ -123,9 +112,7 @@ try {
     Get-PDPOneRawCandidateFile -RepositoryPath "release/deployment-agent-compatibility.json" -Destination $contractPath
     $report.candidate_manifest_sha256 = (Get-FileHash -LiteralPath $contractPath -Algorithm SHA256).Hash.ToLowerInvariant()
     $contract = Get-Content -LiteralPath $contractPath -Raw -Encoding UTF8 | ConvertFrom-Json
-    if ([string]$contract.schema -ne "pdp-one.deployment-agent-compatibility.v1") {
-        throw "Exact candidate compatibility contract schema is unsupported."
-    }
+    if ([string]$contract.schema -ne "pdp-one.deployment-agent-compatibility.v1") { throw "Exact candidate compatibility contract schema is unsupported." }
 
     $protocol = [int]$contract.protocol_version
     $report.protocol_version = $protocol
@@ -154,20 +141,17 @@ try {
         $agentFile = [string]$entry.agent_file
         $candidatePath = Join-Path $downloadRoot $agentFile
         Get-PDPOneRawCandidateFile -RepositoryPath $repositoryPath -Destination $candidatePath
-
         $parseTokens = $null
         $parseErrors = $null
         [System.Management.Automation.Language.Parser]::ParseFile($candidatePath, [ref]$parseTokens, [ref]$parseErrors) | Out-Null
-        if (@($parseErrors).Count -gt 0) {
-            throw "Candidate Agent bootstrap file failed Windows PowerShell 5.1 parsing: $agentFile"
-        }
+        if (@($parseErrors).Count -gt 0) { throw "Candidate Agent bootstrap file failed Windows PowerShell 5.1 parsing: $agentFile" }
 
         $installedPath = Join-Path $binRoot $agentFile
         $candidateHash = (Get-FileHash -LiteralPath $candidatePath -Algorithm SHA256).Hash.ToLowerInvariant()
         $installedExists = Test-Path -LiteralPath $installedPath
         $installedHash = if ($installedExists) { (Get-FileHash -LiteralPath $installedPath -Algorithm SHA256).Hash.ToLowerInvariant() } else { "" }
         $matches = $installedExists -and [string]::Equals($candidateHash, $installedHash, [StringComparison]::OrdinalIgnoreCase)
-        $check = [ordered]@{
+        $checks += [ordered]@{
             file = $agentFile
             repository_path = $repositoryPath
             candidate_sha256 = $candidateHash
@@ -175,7 +159,6 @@ try {
             installed = [bool]$installedExists
             matches = [bool]$matches
         }
-        $checks += $check
         if (-not $matches) { $mismatches += $agentFile }
     }
 
@@ -197,11 +180,7 @@ try {
 
     $report.checked_at = [DateTime]::UtcNow.ToString("o")
     $report | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $reportPath -Encoding UTF8
-
-    if ($InspectionOnly) {
-        Write-Output $reportPath
-        return
-    }
+    if ($InspectionOnly) { Write-Output $reportPath; return }
     if ($report.classification -ne "MATCH") {
         if ($report.classification -eq "SAFE_RECONCILABLE") {
             $joined = ($mismatches -join ", ")
@@ -212,22 +191,14 @@ try {
     Write-Output $reportPath
 } catch {
     if ($report.classification -eq "UNKNOWN") { $report.classification = "UNSAFE" }
-    if ($report.classification -eq "PROTOCOL_MISMATCH") {
-        $report.status = "protocol_mismatch"
-    } elseif ($report.classification -ne "SAFE_RECONCILABLE") {
-        $report.status = "incompatible"
-    }
+    if ($report.classification -eq "PROTOCOL_MISMATCH") { $report.status = "protocol_mismatch" }
+    elseif ($report.classification -ne "SAFE_RECONCILABLE") { $report.status = "incompatible" }
     $report.error = [string]$_.Exception.Message
     $report.checked_at = [DateTime]::UtcNow.ToString("o")
     $report.production_changed = $false
     $report | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $reportPath -Encoding UTF8
-    if ($InspectionOnly) {
-        Write-Output $reportPath
-        return
-    }
+    if ($InspectionOnly) { Write-Output $reportPath; return }
     throw $report.error
 } finally {
-    if (Test-Path -LiteralPath $downloadRoot) {
-        Remove-Item -LiteralPath $downloadRoot -Recurse -Force -ErrorAction SilentlyContinue
-    }
+    if (Test-Path -LiteralPath $downloadRoot) { Remove-Item -LiteralPath $downloadRoot -Recurse -Force -ErrorAction SilentlyContinue }
 }
