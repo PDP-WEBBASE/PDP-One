@@ -29,8 +29,9 @@ from .views_automation import ProcurementAutomationSettingsViewSet
 from .views_bulk_workflow import bulk_remove_workflow_items, compact_notice_feed_with_dismissals
 from .views_case_actions import ProcurementCaseViewSet
 from .views_case_followup import case_follow_up, follow_up_summary, follow_up_users
-from .views_compact_ui import bulk_dismiss_recommendations, compact_dashboard
+from .views_compact_ui import bulk_dismiss_recommendations
 from .views_contract_draft import contract_draft_preview, create_contract_draft_from_case
+from .views_dashboard_read_model import compact_dashboard_read_model
 from .views_direct import DirectOpportunityViewSet, OpportunityContactViewSet, OpportunityFollowUpViewSet, OpportunityResultViewSet
 from .views_documents import ProcurementSubmissionDocumentViewSet
 from .views_extraction import ExtractionRunViewSet
@@ -76,7 +77,7 @@ urlpatterns = [
     path("", include(router.urls)),
     path("dashboard/", procurement_dashboard, name="procurement-dashboard"),
     path("ui/notices/", compact_notice_feed_with_dismissals, name="procurement-compact-notice-feed"),
-    path("ui/dashboard/", compact_dashboard, name="procurement-compact-dashboard"),
+    path("ui/dashboard/", compact_dashboard_read_model, name="procurement-compact-dashboard"),
     path("ui/workflow-page-metadata/", workflow_page_metadata, name="procurement-workflow-page-metadata"),
     path("ui/recommendations/dismiss-bulk/", bulk_dismiss_recommendations, name="procurement-bulk-dismiss-recommendations"),
     path("ui/workflow/remove-bulk/", bulk_remove_workflow_items, name="procurement-bulk-remove-workflow-items"),
