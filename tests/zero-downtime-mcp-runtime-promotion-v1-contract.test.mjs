@@ -42,6 +42,17 @@ test('candidate readiness happens before traffic switch', () => {
   assert.match(engine, /readiness_before_switch=\$true/);
 });
 
+test('candidate readiness polling tolerates transient native stderr and retries by exit code', () => {
+  const waitStart = at(engine, 'function Wait-PDPOneCandidateHttp');
+  const waitEnd = at(engine, 'function Test-PDPOneHttpOnce');
+  const wait = engine.slice(waitStart, waitEnd);
+  assert.match(wait, /\$probeCode = 1/);
+  assert.match(wait, /\$ErrorActionPreference = "Continue"/);
+  assert.match(wait, /\$probeCode = \$LASTEXITCODE/);
+  assert.match(wait, /if \(\$probeCode -eq 0\) \{ return \}/);
+  assert.match(wait, /Start-Sleep -Seconds 2/);
+});
+
 test('backend changes always receive an MCP continuity candidate', () => {
   assert.match(engine, /\$needsMcpContinuity=\("backend" -in \$changedServices\) -or \("mcp" -in \$changedServices\)/);
   assert.match(engine, /PDP_API_URL=http:\/\/"\+\$backendTarget\+":8000\/api\/v1/);
