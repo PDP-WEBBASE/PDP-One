@@ -9,6 +9,26 @@ $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
 Set-StrictMode -Version Latest
 
+function Invoke-PDPOneDockerQuiet {
+    param(
+        [Parameter(Mandatory = $true)][string[]]$Arguments,
+        [string]$StandardInput = ""
+    )
+
+    $previousErrorActionPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = "Continue"
+        if ([string]::IsNullOrEmpty($StandardInput)) {
+            & docker @Arguments *> $null
+        } else {
+            $StandardInput | & docker @Arguments *> $null
+        }
+        return $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+    }
+}
+
 $secretsRoot = Join-Path $AgentRoot "secrets"
 $stateRoot = Join-Path $AgentRoot "state"
 $secretPath = Join-Path $secretsRoot "github-token.dpapi"
@@ -31,15 +51,15 @@ $probeImage = ""
 
 try {
     if (-not (Get-Command docker -ErrorAction SilentlyContinue)) { throw "Docker CLI is unavailable." }
-    & docker info *> $null
-    if ($LASTEXITCODE -ne 0) { throw "Docker Engine must be ready before GHCR credential validation." }
+    if ((Invoke-PDPOneDockerQuiet -Arguments @("info")) -ne 0) { throw "Docker Engine must be ready before GHCR credential validation." }
 
     $pointer = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secureToken)
     $plainToken = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($pointer)
     if ([string]::IsNullOrWhiteSpace($plainToken)) { throw "The supplied token could not be opened for validation." }
 
-    $plainToken | & docker login ghcr.io --username "PDP-WEBBASE" --password-stdin *> $null
-    if ($LASTEXITCODE -ne 0) { throw "GHCR authentication failed. Use a PAT classic with read:packages and package-read access." }
+    if ((Invoke-PDPOneDockerQuiet -Arguments @("login", "ghcr.io", "--username", "PDP-WEBBASE", "--password-stdin") -StandardInput $plainToken) -ne 0) {
+        throw "GHCR authentication failed. Use a PAT classic with read:packages and package-read access."
+    }
     $loggedIn = $true
 
     if (Test-Path -LiteralPath $lastDeploymentPath) {
@@ -58,8 +78,9 @@ try {
     }
 
     if (-not [string]::IsNullOrWhiteSpace($probeImage)) {
-        & docker manifest inspect $probeImage *> $null
-        if ($LASTEXITCODE -ne 0) { throw "GHCR authentication succeeded but package-read validation failed for an accepted PDP One image." }
+        if ((Invoke-PDPOneDockerQuiet -Arguments @("manifest", "inspect", $probeImage)) -ne 0) {
+            throw "GHCR authentication succeeded but package-read validation failed for an accepted PDP One image."
+        }
     }
 
     $secureToken | ConvertFrom-SecureString | Set-Content -LiteralPath $tempPath -Encoding ASCII
@@ -80,7 +101,7 @@ try {
 
     Write-Host "Persistent GHCR credential is healthy and stored with Windows DPAPI. Future deployments will reuse it automatically." -ForegroundColor Green
 } finally {
-    if ($loggedIn) { & docker logout ghcr.io *> $null }
+    if ($loggedIn) { [void](Invoke-PDPOneDockerQuiet -Arguments @("logout", "ghcr.io")) }
     if ($pointer -ne [IntPtr]::Zero) { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($pointer) }
     $plainToken = $null
     if (Test-Path -LiteralPath $tempPath) { Remove-Item -LiteralPath $tempPath -Force -ErrorAction SilentlyContinue }
