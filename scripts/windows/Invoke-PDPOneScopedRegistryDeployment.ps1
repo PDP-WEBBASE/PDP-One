@@ -123,7 +123,7 @@ function Test-PDPOneConnectivityEdgeImpact {
     )
     if ($ConservativeFullStack) { return $true }
     foreach ($raw in @($Paths)) {
-        $path = ([string]$raw).Replace('\', '/')
+        $path = ([string]$raw).Replace('\\', '/')
         if (-not $path) { continue }
         if ($path -eq "docker-compose.yml" -or $path.StartsWith("infra/nginx/", [System.StringComparison]::OrdinalIgnoreCase)) {
             return $true
@@ -135,7 +135,7 @@ function Test-PDPOneConnectivityEdgeImpact {
 $projectRoot = Get-PDPOneProjectRoot
 $envPath = Assert-PDPOneConfiguration -ProjectRoot $projectRoot
 $reportsRoot = Join-Path $AgentRoot "reports"
-$downloadRoot = Join-Path $AgentRoot ("downloads\" + $DeploymentId)
+$downloadRoot = Join-Path $AgentRoot ("downloads\\" + $DeploymentId)
 $extractRoot = Join-Path $downloadRoot "source"
 $stateRoot = Join-Path $AgentRoot "state"
 $lastStatePath = Join-Path $stateRoot "last-deployment.json"
@@ -205,7 +205,7 @@ $report = [ordered]@{
 }
 $report | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $reportPath -Encoding UTF8
 
-$secretPath = Join-Path $AgentRoot "secrets\github-token.dpapi"
+$secretPath = Join-Path $AgentRoot "secrets\\github-token.dpapi"
 $pointer = [IntPtr]::Zero
 $plainToken = $null
 $sourceEnvPath = $null
@@ -255,7 +255,7 @@ try {
     $sourceRoot = Get-ChildItem -LiteralPath $extractRoot -Directory | Select-Object -First 1
     if ($null -eq $sourceRoot -or -not (Test-Path -LiteralPath (Join-Path $sourceRoot.FullName "docker-compose.yml"))) { throw "The exact-commit source archive is invalid." }
 
-    $riskPath = Join-Path $sourceRoot.FullName "release\database-change-risk.json"
+    $riskPath = Join-Path $sourceRoot.FullName "release\\database-change-risk.json"
     if (Test-Path -LiteralPath $riskPath) {
         $risk = Get-Content -LiteralPath $riskPath -Raw -Encoding UTF8 | ConvertFrom-Json
         if ([bool]$risk.requires_backup) { throw "This commit declares a destructive or sensitive database change and must use the standard backup workflow." }
@@ -312,6 +312,13 @@ try {
     foreach ($service in @("backend", "mcp", "web")) {
         $image = [string]$currentImages[$service]
         $needsPull = ($service -in $changedServices) -or -not (Test-PDPOneImageExistsLocally -Image $image)
+        if (-not $needsPull) {
+            try {
+                Assert-PDPOneResolvedImage -Service $service -Image $image -TargetImageMode $imageMode -TargetFingerprint ([string]$fingerprints[$service]) -ReleaseCommit $CommitSha
+            } catch {
+                $needsPull = $true
+            }
+        }
         if ($needsPull) {
             Invoke-PDPOneRetry -Stage "Pulling immutable $service image" -Action {
                 Invoke-PDPOneNative -Command "docker" -Arguments @("pull", $image) -FailureMessage "Image pull failed for $service." | Out-Null
@@ -373,7 +380,7 @@ try {
 
     $report.stage = "scope-aware-health-check"
     $report | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $reportPath -Encoding UTF8
-    $scopedHealthScript = Join-Path $projectRoot "scripts\windows\Test-PDPOneScopedHealth.ps1"
+    $scopedHealthScript = Join-Path $projectRoot "scripts\\windows\\Test-PDPOneScopedHealth.ps1"
     if (-not (Test-Path -LiteralPath $scopedHealthScript)) { throw "Scope-aware health script is missing from the exact release." }
     try {
         $scopedHealthArguments = @(
@@ -386,7 +393,7 @@ try {
         & powershell.exe @scopedHealthArguments
         if ($LASTEXITCODE -ne 0) { throw "Scope-aware health returned a non-zero code." }
     } catch {
-        $repairScript = Join-Path $projectRoot "scripts\windows\Repair-PDPOneConnectivity.ps1"
+        $repairScript = Join-Path $projectRoot "scripts\\windows\\Repair-PDPOneConnectivity.ps1"
         if (Test-Path -LiteralPath $repairScript) {
             $report.connectivity_repair_attempted = $true
             $report.stage = "repairing-public-connectivity"
@@ -436,7 +443,7 @@ try {
 
     $binRoot = Join-Path $AgentRoot "bin"
     New-Item -ItemType Directory -Force -Path $binRoot | Out-Null
-    Copy-Item -Path (Join-Path $projectRoot "scripts\windows\*.ps1") -Destination $binRoot -Force
+    Copy-Item -Path (Join-Path $projectRoot "scripts\\windows\\*.ps1") -Destination $binRoot -Force
     Set-Content -LiteralPath (Join-Path $stateRoot "restart-agent-after-response") -Value ([DateTime]::UtcNow.ToString("o")) -Encoding ASCII
 
     $report.status = "healthy"
@@ -455,7 +462,7 @@ try {
         $report.stage = "recovering-previous-accepted-release"
         $report | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $reportPath -Encoding UTF8
         try {
-            $recoveryScript = Join-Path $projectRoot "scripts\windows\Restore-PDPOneAcceptedRelease.ps1"
+            $recoveryScript = Join-Path $projectRoot "scripts\\windows\\Restore-PDPOneAcceptedRelease.ps1"
             if (-not (Test-Path -LiteralPath $recoveryScript)) { throw "Accepted-release recovery helper is missing from the failed candidate." }
             $recoveryArguments = @(
                 "-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $recoveryScript,
