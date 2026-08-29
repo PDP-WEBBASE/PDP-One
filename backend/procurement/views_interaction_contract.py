@@ -14,6 +14,7 @@ from .interaction_contract import (
     select_notice_v1,
 )
 from .models_interaction import ProcurementChangeJournal
+from .performance_metrics import instrument_procurement_endpoint
 from .views_compact_ui import CompactNoticeSerializer, _compact_notice_queryset, _page_parameters
 
 
@@ -33,6 +34,7 @@ def interaction_capabilities(request):
     return Response({**CAPABILITIES, "domain_revision": current_revision()})
 
 
+@instrument_procurement_endpoint("procurement.interaction.query.v1")
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def query_procurement_notices(request):
@@ -76,12 +78,14 @@ def query_procurement_notices(request):
     )
 
 
+@instrument_procurement_endpoint("procurement.interaction.revision.v1")
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def procurement_revision(request):
     return Response({"domain": "procurement", "revision": current_revision()})
 
 
+@instrument_procurement_endpoint("procurement.interaction.changes.v1")
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def procurement_changes(request):
