@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 const source = await readFile(new URL("../services/pdp_mcp/interaction_tools.py", import.meta.url), "utf8");
+const dockerfile = await readFile(new URL("../services/pdp_mcp/Dockerfile", import.meta.url), "utf8");
 
 test("procurement read remains available without PDPONE WEB arming", () => {
   assert.match(source, /async def query_procurement_notices/);
@@ -24,4 +25,8 @@ test("ambiguous writes have a pending confirmation path and exact writes require
   assert.match(source, /Do not guess notice identity/);
   assert.match(source, /if not result\.get\("verified"\)/);
   assert.match(source, /read-after-write verification/);
+});
+
+test("MCP runtime image packages the interaction tool module registered by server.py", () => {
+  assert.match(dockerfile, /COPY[^\n]*interaction_tools\.py[^\n]*\.\//);
 });
