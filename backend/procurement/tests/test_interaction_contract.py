@@ -9,6 +9,7 @@ from procurement.models import ProcurementCase, ProcurementNotice
 from procurement.models_interaction import (
     ProcurementChangeJournal,
     ProcurementOutboxEvent,
+    ProcurementPendingAction,
     ProcurementWriteLease,
 )
 
@@ -55,6 +56,7 @@ class ProcurementInteractionContractTests(APITestCase):
         self.assertEqual(response.data["schema"], "pdp-one.interaction-capabilities.v1")
         self.assertEqual(response.data["safety"]["write_default"], "blocked")
         self.assertTrue(response.data["safety"]["server_side_lease_required"])
+        self.assertTrue(response.data["safety"]["ambiguous_write_requires_confirmation"])
         self.assertFalse(response.data["safety"]["generic_database_write"])
 
     def test_query_is_bounded_and_filters_server_side(self):
@@ -107,6 +109,79 @@ class ProcurementInteractionContractTests(APITestCase):
         self.assertEqual(response.status_code, 403)
         self.assertFalse(ProcurementCase.objects.filter(notice=self.notice).exists())
 
+    def test_ambiguous_select_creates_pending_action_without_mutation_then_consumes_confirmation(self):
+        lease_id = self._arm("chat-A")
+        pending = self.client.post(
+            "/api/v1/procurement/interaction/pending/select/",
+            {
+                "conversation_key": "chat-A",
+                "lease_id": lease_id,
+                "candidate_notice_ids": [str(self.notice.id), str(self.other_notice.id)],
+                "requested_text": "این مورد را منتخب کن",
+            },
+            format="json",
+        )
+        self.assertEqual(pending.status_code, 200)
+        self.assertTrue(pending.data["confirmation_required"])
+        self.assertFalse(pending.data["write_performed"])
+        self.assertEqual(ProcurementCase.objects.count(), 0)
+        pending_id = pending.data["pending_action_id"]
+        self.assertEqual(
+            ProcurementPendingAction.objects.get(id=pending_id).status,
+            ProcurementPendingAction.Status.AWAITING_CONFIRMATION,
+        )
+
+        confirmed = self.client.post(
+            "/api/v1/procurement/interaction/pending/select/confirm/",
+            {
+                "conversation_key": "chat-A",
+                "lease_id": lease_id,
+                "pending_action_id": pending_id,
+                "notice_id": str(self.notice.id),
+            },
+            format="json",
+        )
+        self.assertEqual(confirmed.status_code, 200)
+        self.assertTrue(confirmed.data["verified"])
+        self.assertTrue(confirmed.data["confirmation_consumed"])
+        self.assertEqual(ProcurementCase.objects.filter(notice=self.notice).count(), 1)
+        self.assertEqual(ProcurementCase.objects.filter(notice=self.other_notice).count(), 0)
+        self.assertEqual(
+            ProcurementPendingAction.objects.get(id=pending_id).status,
+            ProcurementPendingAction.Status.EXECUTED,
+        )
+
+    def test_pending_confirmation_rejects_notice_outside_candidates(self):
+        lease_id = self._arm("chat-A")
+        third = ProcurementNotice.objects.create(
+            resolved_notice_type=ProcurementNotice.NoticeType.INQUIRY,
+            title="گزینه سوم",
+            employer_name="کارفرمای سوم",
+            first_seen_at=timezone.now(),
+            last_seen_at=timezone.now(),
+        )
+        pending = self.client.post(
+            "/api/v1/procurement/interaction/pending/select/",
+            {
+                "conversation_key": "chat-A",
+                "lease_id": lease_id,
+                "candidate_notice_ids": [str(self.notice.id), str(self.other_notice.id)],
+            },
+            format="json",
+        )
+        rejected = self.client.post(
+            "/api/v1/procurement/interaction/pending/select/confirm/",
+            {
+                "conversation_key": "chat-A",
+                "lease_id": lease_id,
+                "pending_action_id": pending.data["pending_action_id"],
+                "notice_id": str(third.id),
+            },
+            format="json",
+        )
+        self.assertEqual(rejected.status_code, 400)
+        self.assertEqual(ProcurementCase.objects.count(), 0)
+
     def test_select_is_verified_audited_versioned_and_idempotent(self):
         lease_id = self._arm("chat-A")
         first = self.client.post(
@@ -129,6 +204,11 @@ class ProcurementInteractionContractTests(APITestCase):
             ).exists()
         )
 
+        changes = self.client.get("/api/v1/procurement/interaction/changes/", {"since": 0})
+        self.assertEqual(changes.status_code, 200)
+        self.assertEqual(len(changes.data["changes"]), 1)
+        self.assertIn("inquiry:selected", changes.data["changes"][0]["affected_contexts"])
+
         second = self.client.post(
             "/api/v1/procurement/interaction/commands/select-notice/",
             {"conversation_key": "chat-A", "lease_id": lease_id, "notice_id": str(self.notice.id)},
@@ -142,8 +222,17 @@ class ProcurementInteractionContractTests(APITestCase):
         self.assertEqual(ProcurementChangeJournal.objects.count(), 1)
         self.assertEqual(ProcurementOutboxEvent.objects.count(), 1)
 
-    def test_disarm_revokes_write_lease(self):
+    def test_disarm_revokes_write_lease_and_pending_actions(self):
         lease_id = self._arm("chat-A")
+        pending = self.client.post(
+            "/api/v1/procurement/interaction/pending/select/",
+            {
+                "conversation_key": "chat-A",
+                "lease_id": lease_id,
+                "candidate_notice_ids": [str(self.notice.id), str(self.other_notice.id)],
+            },
+            format="json",
+        )
         disarm = self.client.post(
             "/api/v1/procurement/interaction/write/disarm/",
             {"conversation_key": "chat-A"},
@@ -151,6 +240,10 @@ class ProcurementInteractionContractTests(APITestCase):
         )
         self.assertEqual(disarm.status_code, 200)
         self.assertFalse(disarm.data["write_armed"])
+        self.assertEqual(
+            ProcurementPendingAction.objects.get(id=pending.data["pending_action_id"]).status,
+            ProcurementPendingAction.Status.CANCELLED,
+        )
         blocked = self.client.post(
             "/api/v1/procurement/interaction/commands/select-notice/",
             {"conversation_key": "chat-A", "lease_id": lease_id, "notice_id": str(self.notice.id)},
