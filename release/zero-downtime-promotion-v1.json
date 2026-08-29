@@ -1,0 +1,14 @@
+{
+  "schema": "pdp-one.zero-downtime-promotion.v1",
+  "strategy": "temporary_candidate_nginx_graceful_switch_v1",
+  "stabilization_seconds": 30,
+  "candidate_readiness_required": true,
+  "mcp_continuity_required": true,
+  "api_continuity_required": true,
+  "nginx_restart_allowed_for_normal_application_promotion": false,
+  "tailscale_restart_allowed_for_normal_application_promotion": false,
+  "kubernetes_required": false,
+  "credential_rotation_allowed": false,
+  "destructive_database_action_allowed": false,
+  "docker_volume_reset_allowed": false
+}
