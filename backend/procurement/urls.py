@@ -6,6 +6,7 @@ from .views_analysis import AnalysisBatchViewSet, AnalysisRequestViewSet, active
 from .views_analysis_adaptive import claim_analysis_work_adaptive
 from .views_analysis_engine import analysis_engine_work, finish_analysis_engine, start_analysis_engine
 from .views_analysis_management import ManagedAnalysisContextAttachmentViewSet, ManagedAnalysisContextSnapshotViewSet
+from .views_analysis_reconciliation import analysis_integrity, repair_analysis_integrity
 from .views_analysis_run_status_stats import analysis_run_status_with_statistics, current_analysis_run_with_statistics
 from .views_analysis_runs import (
     analysis_dataset_status,
@@ -82,6 +83,8 @@ urlpatterns = [
     path("analysis/context/active/", active_analysis_context, name="analysis-context-active"),
     path("analysis/latest-extraction/", latest_extraction_run, name="analysis-latest-extraction"),
     path("analysis/queue/", analysis_queue, name="analysis-queue"),
+    path("analysis/integrity/", analysis_integrity, name="analysis-integrity"),
+    path("analysis/integrity/repair/", repair_analysis_integrity, name="analysis-integrity-repair"),
     path("analysis/review-summary/", analysis_review_summary_view, name="analysis-review-summary"),
     path("analysis/notices/<uuid:notice_id>/context/", notice_analysis_context, name="notice-analysis-context"),
     path("analysis/engine/start/", start_analysis_engine, name="analysis-engine-start"),
