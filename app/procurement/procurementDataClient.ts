@@ -3,7 +3,13 @@ export type ProcurementWorkflow = "recent" | "recommended" | "selected" | "submi
 
 export type ProcurementQueryContext = {
   noticeType: ProcurementNoticeType;
-  workflow: ProcurementWorkflow;
+  /**
+   * Workspace callers may derive this value from local view-state helpers. The
+   * data client validates it against the closed server workflow allowlist before
+   * it participates in a query key or URL, so an unexpected string fails closed
+   * to the bounded `recent` view rather than becoming an open query parameter.
+   */
+  workflow: ProcurementWorkflow | string;
   page: number;
   pageSize: number;
   filters?: Record<string, string | string[] | number | boolean | null | undefined>;
@@ -37,6 +43,20 @@ export type ProcurementDataClientOptions = {
   now?: () => number;
 };
 
+const WORKFLOW_ALLOWLIST = new Set<ProcurementWorkflow>([
+  "recent",
+  "recommended",
+  "selected",
+  "submitted",
+  "results",
+]);
+
+export function normalizeProcurementWorkflow(value: string): ProcurementWorkflow {
+  return WORKFLOW_ALLOWLIST.has(value as ProcurementWorkflow)
+    ? value as ProcurementWorkflow
+    : "recent";
+}
+
 function normalizedFilterEntries(filters: ProcurementQueryContext["filters"] = {}) {
   return Object.entries(filters)
     .filter(([, value]) => value !== undefined && value !== null && value !== "")
@@ -52,7 +72,7 @@ function normalizedFilterEntries(filters: ProcurementQueryContext["filters"] = {
 export function procurementQueryKey(context: ProcurementQueryContext) {
   return JSON.stringify({
     noticeType: context.noticeType,
-    workflow: context.workflow,
+    workflow: normalizeProcurementWorkflow(context.workflow),
     page: Math.max(1, context.page),
     pageSize: Math.max(1, context.pageSize),
     sort: context.sort || "",
@@ -72,7 +92,7 @@ function appendQueryValue(params: URLSearchParams, key: string, value: unknown) 
 export function procurementQueryParams(context: ProcurementQueryContext) {
   const params = new URLSearchParams();
   params.set("notice_type", context.noticeType);
-  params.set("workflow", context.workflow);
+  params.set("workflow", normalizeProcurementWorkflow(context.workflow));
   params.set("page", String(Math.max(1, context.page)));
   params.set("page_size", String(Math.max(1, context.pageSize)));
   if (context.sort) params.set("ordering", context.sort);
