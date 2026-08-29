@@ -61,6 +61,22 @@ test('temporary candidates are isolated from canonical Compose lifecycle', () =>
   assert.doesNotMatch(engine, /docker compose down/);
 });
 
+test('candidate cleanup is idempotent before creation and still fails on unexpected removal errors', () => {
+  const inspect = at(engine, '& docker container inspect $Name *> $null');
+  const inspectCode = at(engine, '$inspectCode = $LASTEXITCODE');
+  const absentNoop = at(engine, 'if ($inspectCode -ne 0) { return }');
+  const remove = at(engine, '& docker rm -f $Name *> $null');
+  const removeCode = at(engine, '$removeCode = $LASTEXITCODE');
+  const controlledFailure = at(engine, 'throw "Candidate container cleanup failed for $Name (exit code $removeCode)."');
+  assert.ok(inspect < inspectCode);
+  assert.ok(inspectCode < absentNoop);
+  assert.ok(absentNoop < remove);
+  assert.ok(remove < removeCode);
+  assert.ok(removeCode < controlledFailure);
+  assert.ok(at(engine, 'Remove-PDPOneCandidate $backendCandidate') < at(engine, '@($candidateCompose + @("run","--detach","--no-deps","--name",$backendCandidate,"backend"))'));
+  assert.match(engine, /\$ErrorActionPreference = "Continue"/);
+});
+
 test('traffic is moved with graceful nginx reload, never an nginx or tailscale restart', () => {
   assert.match(engine, /"nginx","-s","reload"/);
   assert.doesNotMatch(engine, /compose[^\n]+stop[^\n]+nginx/);
