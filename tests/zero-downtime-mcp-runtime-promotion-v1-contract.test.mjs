@@ -47,6 +47,20 @@ test('backend changes always receive an MCP continuity candidate', () => {
   assert.match(engine, /PDP_API_URL=http:\/\/"\+\$backendTarget\+":8000\/api\/v1/);
 });
 
+test('temporary candidates are isolated from canonical Compose lifecycle', () => {
+  assert.match(engine, /\$candidateProject="pdp-zd-\$short"/);
+  assert.match(engine, /"--project-name",\$candidateProject/);
+  assert.match(engine, /candidate-runtime\.override\.yml/);
+  assert.match(engine, /Get-PDPOneCanonicalRuntimeNetwork/);
+  assert.match(engine, /Get-PDPOneCanonicalPrivateFilesVolume/);
+  assert.match(engine, /external: true/);
+  assert.match(engine, /candidate_compose_isolated=\$true/);
+  const isolatedCandidate = at(engine, '@($candidateCompose + @("run","--detach","--no-deps","--name",$backendCandidate,"backend"))');
+  const canonicalBackend = at(engine, '"--force-recreate","backend","worker","beat"');
+  assert.ok(isolatedCandidate < canonicalBackend);
+  assert.doesNotMatch(engine, /docker compose down/);
+});
+
 test('traffic is moved with graceful nginx reload, never an nginx or tailscale restart', () => {
   assert.match(engine, /"nginx","-s","reload"/);
   assert.doesNotMatch(engine, /compose[^\n]+stop[^\n]+nginx/);
