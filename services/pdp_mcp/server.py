@@ -63,7 +63,7 @@ register_route_diagnostics_tools(mcp)
     annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, openWorldHint=False, idempotentHint=True),
 )
 async def get_procurement_analysis_integrity() -> dict:
-    return await api("GET", "procurement/analysis/integrity/")
+    return await api("GET", "procurement/analysis/integrity/", timeout=120)
 
 
 @mcp.tool(
@@ -75,7 +75,7 @@ async def get_procurement_analysis_integrity() -> dict:
     annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, openWorldHint=False, idempotentHint=True),
 )
 async def repair_procurement_analysis_integrity() -> dict:
-    return await api("POST", "procurement/analysis/integrity/repair/", json={})
+    return await api("POST", "procurement/analysis/integrity/repair/", json={}, timeout=120)
 
 
 if __name__ == "__main__":
