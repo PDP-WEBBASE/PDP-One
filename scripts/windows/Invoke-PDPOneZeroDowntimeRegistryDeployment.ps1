@@ -125,6 +125,46 @@ function Remove-PDPOneCandidate([string]$Name) {
     & docker rm -f $Name *> $null
 }
 
+function Get-PDPOneCanonicalRuntimeNetwork {
+    $raw = @(& docker inspect "pdp-one-nginx-1" 2>&1)
+    if ($LASTEXITCODE -ne 0 -or $raw.Count -eq 0) { throw "Canonical Nginx runtime network could not be inspected." }
+    $inspect = (($raw | ForEach-Object { [string]$_ }) -join [Environment]::NewLine) | ConvertFrom-Json
+    $names = @($inspect[0].NetworkSettings.Networks.PSObject.Properties | ForEach-Object { [string]$_.Name })
+    if ($names.Count -ne 1) { throw "Canonical runtime network could not be resolved unambiguously." }
+    $name = $names[0]
+    if ($name -notmatch '^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$') { throw "Canonical runtime network name is invalid." }
+    return $name
+}
+
+function Get-PDPOneCanonicalPrivateFilesVolume {
+    $raw = @(& docker inspect "pdp-one-backend-1" 2>&1)
+    if ($LASTEXITCODE -ne 0 -or $raw.Count -eq 0) { throw "Canonical backend volume could not be inspected." }
+    $inspect = (($raw | ForEach-Object { [string]$_ }) -join [Environment]::NewLine) | ConvertFrom-Json
+    $mount = @($inspect[0].Mounts | Where-Object { $_.Type -eq "volume" -and $_.Destination -eq "/data/private" }) | Select-Object -First 1
+    if ($null -eq $mount) { throw "Canonical private-files volume could not be resolved." }
+    $name = [string]$mount.Name
+    if ($name -notmatch '^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$') { throw "Canonical private-files volume name is invalid." }
+    return $name
+}
+
+function Write-PDPOneCandidateComposeOverride {
+    param(
+        [Parameter(Mandatory=$true)][string]$Path,
+        [Parameter(Mandatory=$true)][string]$NetworkName,
+        [Parameter(Mandatory=$true)][string]$PrivateFilesVolume
+    )
+    @(
+        "networks:",
+        "  default:",
+        "    external: true",
+        "    name: `"$NetworkName`"",
+        "volumes:",
+        "  private_files:",
+        "    external: true",
+        "    name: `"$PrivateFilesVolume`""
+    ) | Set-Content -LiteralPath $Path -Encoding ASCII
+}
+
 $projectRoot = Get-PDPOneProjectRoot
 $envPath = Assert-PDPOneConfiguration -ProjectRoot $projectRoot
 $reportsRoot = Join-Path $AgentRoot "reports"
@@ -148,6 +188,9 @@ $imageMode = "legacy-exact-sha"
 $healthProfile = "full"
 $backendCandidate = ""
 $mcpCandidate = ""
+$candidateProject = ""
+$candidateOverridePath = $null
+$candidateRuntimeNetwork = ""
 $overrideActive = $false
 $sourceEnvPath = $null
 $loggedIntoRegistry = $false
@@ -164,6 +207,7 @@ $report = [ordered]@{
     changed_services=@(); changed_paths=@(); active_images=$currentImages; retained_previous_images=$previousImages
     health_profile=$healthProfile; release_manifest=$null
     zero_downtime_strategy="temporary_candidate_nginx_graceful_switch_v1"; stabilization_seconds=$StabilizationSeconds
+    candidate_compose_isolated=$false; candidate_compose_project=$null; candidate_runtime_network=$null
     readiness_before_switch=$false; nginx_restarted=$false; tailscale_restarted=$false; graceful_reload_used=$false
     mcp_continuity_probe_failures=0; api_continuity_probe_failures=0; traffic_switched_to_candidate=$false; traffic_returned_to_canonical=$false
     automatic_recovery_enabled=$true; automatic_recovery_attempted=$false; automatic_recovery_succeeded=$false
@@ -243,19 +287,28 @@ try {
     }
 
     $short=$CommitSha.Substring(0,8)
+    $candidateProject="pdp-zd-$short"
+    $candidateRuntimeNetwork=Get-PDPOneCanonicalRuntimeNetwork
+    $candidatePrivateFilesVolume=Get-PDPOneCanonicalPrivateFilesVolume
+    $candidateOverridePath=Join-Path $downloadRoot "candidate-runtime.override.yml"
+    Write-PDPOneCandidateComposeOverride -Path $candidateOverridePath -NetworkName $candidateRuntimeNetwork -PrivateFilesVolume $candidatePrivateFilesVolume
+    $candidateCompose=@("compose","--project-name",$candidateProject,"-f",(Join-Path $projectRoot "docker-compose.yml"),"-f",$candidateOverridePath)
+    Invoke-PDPOneNative -Command "docker" -Arguments @($candidateCompose + @("config","--quiet")) -FailureMessage "Isolated candidate Docker Compose configuration is invalid." -Quiet | Out-Null
+    $report.candidate_compose_isolated=$true; $report.candidate_compose_project=$candidateProject; $report.candidate_runtime_network=$candidateRuntimeNetwork
+
     $backendTarget="backend"
     $needsMcpContinuity=("backend" -in $changedServices) -or ("mcp" -in $changedServices) -or $scope.topology_sensitive
     if (("backend" -in $changedServices) -or $scope.topology_sensitive) {
         $backendCandidate="pdp-zd-backend-$short"
         Remove-PDPOneCandidate $backendCandidate
-        Invoke-PDPOneNative -Command "docker" -Arguments @("compose","run","--detach","--no-deps","--name",$backendCandidate,"backend") -FailureMessage "Candidate backend could not start." -Quiet | Out-Null
+        Invoke-PDPOneNative -Command "docker" -Arguments @($candidateCompose + @("run","--detach","--no-deps","--name",$backendCandidate,"backend")) -FailureMessage "Candidate backend could not start." -Quiet | Out-Null
         Wait-PDPOneCandidateHttp -Container $backendCandidate -Port 8000 -Path "/api/v1/auth/session/" -Timeout 90
         $backendTarget=$backendCandidate
     }
     if ($needsMcpContinuity) {
         $mcpCandidate="pdp-zd-mcp-$short"
         Remove-PDPOneCandidate $mcpCandidate
-        Invoke-PDPOneNative -Command "docker" -Arguments @("compose","run","--detach","--no-deps","--name",$mcpCandidate,"-e",("PDP_API_URL=http://"+$backendTarget+":8000/api/v1"),"mcp") -FailureMessage "Candidate MCP could not start." -Quiet | Out-Null
+        Invoke-PDPOneNative -Command "docker" -Arguments @($candidateCompose + @("run","--detach","--no-deps","--name",$mcpCandidate,"-e",("PDP_API_URL=http://"+$backendTarget+":8000/api/v1"),"mcp")) -FailureMessage "Candidate MCP could not start." -Quiet | Out-Null
         Wait-PDPOneCandidateHttp -Container $mcpCandidate -Port 8010 -Path "/healthz" -Expected "pdp-one-mcp" -Timeout 90
     }
     $report.readiness_before_switch=$true
