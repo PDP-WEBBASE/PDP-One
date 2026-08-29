@@ -317,3 +317,10 @@ from .models_extraction import (  # noqa: E402,F401
     ExtractionSchedule,
 )
 from .models_internet_usage import InternetUsageEvent  # noqa: E402,F401
+from .models_interaction import (  # noqa: E402,F401
+    ProcurementChangeJournal,
+    ProcurementDomainRevision,
+    ProcurementOutboxEvent,
+    ProcurementPendingAction,
+    ProcurementWriteLease,
+)
