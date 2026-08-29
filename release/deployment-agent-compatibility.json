@@ -11,6 +11,8 @@
     {"path": "scripts/windows/PDPOne.Common.ps1", "agent_file": "PDPOne.Common.ps1"},
     {"path": "scripts/windows/PDPOne.OperationLock.ps1", "agent_file": "PDPOne.OperationLock.ps1"},
     {"path": "scripts/windows/PDPOne.ReleaseManifest.ps1", "agent_file": "PDPOne.ReleaseManifest.ps1"},
-    {"path": "scripts/windows/Test-PDPOneExactCandidateCompatibility.ps1", "agent_file": "Test-PDPOneExactCandidateCompatibility.ps1"}
+    {"path": "scripts/windows/Test-PDPOneExactCandidateCompatibility.ps1", "agent_file": "Test-PDPOneExactCandidateCompatibility.ps1"},
+    {"path": "scripts/windows/Test-PDPOneGhcrCredential.ps1", "agent_file": "Test-PDPOneGhcrCredential.ps1"},
+    {"path": "scripts/windows/Set-PDPOnePersistentGhcrCredential.ps1", "agent_file": "Set-PDPOnePersistentGhcrCredential.ps1"}
   ]
 }
