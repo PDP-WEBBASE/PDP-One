@@ -1,9 +1,9 @@
 """Compatibility entrypoint for the PDP One MCP server.
 
 The full existing server implementation is preserved byte-for-byte in
-``server_core.py``. This wrapper registers passive route evidence tools and
-adds sanitized Public Edge diagnostics to the already-stable deployment status
-without changing the tool signature.
+``server_core.py``. This wrapper registers passive route evidence tools,
+Zero-Loss integrity tools, and adds sanitized Public Edge diagnostics to the
+already-stable deployment status without changing existing tool signatures.
 
 Static contract markers retained for existing repository tests:
 from server_core import api, mcp
@@ -44,6 +44,7 @@ redeploy_previous_commit_from_github
 """
 
 import server_core
+from mcp.types import ToolAnnotations
 from public_edge_status import wrap_get_queue_status
 from route_diagnostics_tools import register_route_diagnostics_tools
 
@@ -51,6 +52,31 @@ server_core.get_queue_status = wrap_get_queue_status(server_core.get_queue_statu
 api = server_core.api
 mcp = server_core.mcp
 register_route_diagnostics_tools(mcp)
+
+
+@mcp.tool(
+    description=(
+        "Run a full read-only Zero-Loss reconciliation across every visible procurement notice. "
+        "Reports active-context/current-content analysis coverage, orphan work, stale run items, explicit poison/failed exceptions, "
+        "and analysis_orphan_count. It does not mutate procurement data."
+    ),
+    annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, openWorldHint=False, idempotentHint=True),
+)
+async def get_procurement_analysis_integrity() -> dict:
+    return await api("GET", "procurement/analysis/integrity/")
+
+
+@mcp.tool(
+    description=(
+        "Repair Zero-Loss analysis integrity for the existing active run. Missing current-basis notices are attached as pending work; "
+        "stale or terminal-without-valid-result items are reset only when they are not under a live lease. Historical AI drafts are preserved. "
+        "This never approves or publishes a procurement decision."
+    ),
+    annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, openWorldHint=False, idempotentHint=True),
+)
+async def repair_procurement_analysis_integrity() -> dict:
+    return await api("POST", "procurement/analysis/integrity/repair/", json={})
+
 
 if __name__ == "__main__":
     mcp.run(transport="streamable-http")
