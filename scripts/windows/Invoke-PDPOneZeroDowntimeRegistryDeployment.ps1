@@ -80,8 +80,14 @@ function Wait-PDPOneCandidateHttp {
     $deadline = (Get-Date).AddSeconds([Math]::Max(10,$Timeout))
     while ((Get-Date) -lt $deadline) {
         $python = "import urllib.request,sys; r=urllib.request.urlopen('http://127.0.0.1:$Port$Path',timeout=3); b=r.read(1024); sys.exit(0 if r.status==200" + $(if ($Expected) { " and b'" + $Expected.Replace("'","") + "' in b" } else { "" }) + " else 1)"
-        & docker exec $Container python -c $python *> $null
-        if ($LASTEXITCODE -eq 0) { return }
+        $probeCode = 1
+        $old = $ErrorActionPreference
+        try {
+            $ErrorActionPreference = "Continue"
+            & docker exec $Container python -c $python *> $null
+            $probeCode = $LASTEXITCODE
+        } finally { $ErrorActionPreference = $old }
+        if ($probeCode -eq 0) { return }
         Start-Sleep -Seconds 2
     }
     throw "Candidate $Container did not become ready."
@@ -213,7 +219,7 @@ $report = [ordered]@{
     deployment_id=$DeploymentId; preview_id=$PreviewId; approved_commit=$CommitSha; previous_commit=$previousCommit
     started_at=[DateTime]::UtcNow.ToString("o"); completed_at=$null; status="starting"; stage="initializing"
     change_management_mode="development_fast"; image_source="github_container_registry"; production_changed=$false
-    changed_services=@(); changed_paths=@(); active_images=$currentImages; retained_previous_images=$previousImages
+    changed_services=@(); changed_paths=@($changedPaths); active_images=$currentImages; retained_previous_images=$previousImages
     health_profile=$healthProfile; release_manifest=$null
     zero_downtime_strategy="temporary_candidate_nginx_graceful_switch_v1"; stabilization_seconds=$StabilizationSeconds
     candidate_compose_isolated=$false; candidate_compose_project=$null; candidate_runtime_network=$null
