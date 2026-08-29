@@ -312,6 +312,13 @@ try {
     foreach ($service in @("backend", "mcp", "web")) {
         $image = [string]$currentImages[$service]
         $needsPull = ($service -in $changedServices) -or -not (Test-PDPOneImageExistsLocally -Image $image)
+        if (-not $needsPull) {
+            try {
+                Assert-PDPOneResolvedImage -Service $service -Image $image -TargetImageMode $imageMode -TargetFingerprint ([string]$fingerprints[$service]) -ReleaseCommit $CommitSha
+            } catch {
+                $needsPull = $true
+            }
+        }
         if ($needsPull) {
             Invoke-PDPOneRetry -Stage "Pulling immutable $service image" -Action {
                 Invoke-PDPOneNative -Command "docker" -Arguments @("pull", $image) -FailureMessage "Image pull failed for $service." | Out-Null

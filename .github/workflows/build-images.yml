@@ -46,7 +46,7 @@ jobs:
         shell: bash
         run: node scripts/ci/component-fingerprints.mjs --github-output "$GITHUB_OUTPUT"
 
-      - name: Plan missing immutable component images
+      - name: Plan valid immutable component images
         id: plan
         shell: bash
         env:
@@ -66,6 +66,17 @@ jobs:
             action="build"
             if docker buildx imagetools inspect "$image" >/dev/null 2>&1; then
               action="reuse"
+              if ! docker pull "$image" >/dev/null 2>&1; then
+                action="rebuild_invalid"
+                targets+=("$component")
+              else
+                actual_component="$(docker image inspect --format '{{index .Config.Labels "io.pdpone.component"}}' "$image" 2>/dev/null || true)"
+                actual_fingerprint="$(docker image inspect --format '{{index .Config.Labels "io.pdpone.component.fingerprint"}}' "$image" 2>/dev/null || true)"
+                if [ "$actual_component" != "$component" ] || [ "$actual_fingerprint" != "$fingerprint" ]; then
+                  action="rebuild_invalid"
+                  targets+=("$component")
+                fi
+              fi
             else
               targets+=("$component")
             fi
@@ -119,7 +130,7 @@ jobs:
           echo "No healthy base image registry could resolve both required base images." >&2
           exit 1
 
-      - name: Build and push only missing immutable component images
+      - name: Build and push missing or invalid immutable component images
         if: steps.plan.outputs.targets != ''
         uses: docker/bake-action@v7
         env:
@@ -151,7 +162,6 @@ jobs:
           '
 
       - name: Verify immutable component metadata and repository digests
-        if: steps.contract.outputs.required == 'true'
         shell: bash
         env:
           BACKEND_IMAGE: ${{ steps.plan.outputs.backend_image }}

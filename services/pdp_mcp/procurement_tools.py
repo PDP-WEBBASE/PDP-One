@@ -59,6 +59,28 @@ def register_procurement_tools(mcp: FastMCP, api: ApiCallable) -> None:
 
     @mcp.tool(
         description=(
+            "Run a full read-only Zero-Loss reconciliation across every visible procurement notice. "
+            "Reports active-context/current-content analysis coverage, orphan work, stale run items, explicit poison/failed exceptions, "
+            "and analysis_orphan_count. It does not mutate procurement data."
+        ),
+        annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, openWorldHint=False, idempotentHint=True),
+    )
+    async def get_procurement_analysis_integrity() -> dict:
+        return await api("GET", "procurement/analysis/integrity/")
+
+    @mcp.tool(
+        description=(
+            "Repair Zero-Loss analysis integrity for the existing active run. Missing current-basis notices are attached as pending work; "
+            "stale or terminal-without-valid-result items are reset only when they are not under a live lease. Historical AI drafts are preserved. "
+            "This never approves or publishes a procurement decision."
+        ),
+        annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, openWorldHint=False, idempotentHint=True),
+    )
+    async def repair_procurement_analysis_integrity() -> dict:
+        return await api("POST", "procurement/analysis/integrity/repair/", json={})
+
+    @mcp.tool(
+        description=(
             "Read one procurement notice with its normalized source data, current analysis basis hash, and latest draft analysis."
         ),
         annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, openWorldHint=False, idempotentHint=True),
