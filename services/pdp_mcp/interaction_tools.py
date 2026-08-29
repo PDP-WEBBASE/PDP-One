@@ -110,8 +110,59 @@ def register_interaction_tools(mcp: FastMCP, api: ApiCallable) -> None:
 
     @mcp.tool(
         description=(
+            "Create a server-side pending select action when the user's intended notice is ambiguous. "
+            "Requires PDPONE WEB but performs no business mutation. Present the returned candidates to the user and wait for explicit confirmation."
+        ),
+        annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, openWorldHint=False, idempotentHint=False),
+    )
+    async def prepare_procurement_select_confirmation(
+        candidate_notice_ids: list[str],
+        conversation_key: str,
+        lease_id: str,
+        requested_text: str = "",
+    ) -> dict:
+        return await api(
+            "POST",
+            "procurement/interaction/pending/select/",
+            json={
+                "candidate_notice_ids": candidate_notice_ids,
+                "conversation_key": conversation_key,
+                "lease_id": lease_id,
+                "requested_text": requested_text,
+            },
+        )
+
+    @mcp.tool(
+        description=(
+            "Consume one pending ambiguous select action after the user explicitly confirms one returned candidate. "
+            "Requires the same PDPONE WEB lease and conversation, validates candidate membership, and verifies the write after execution."
+        ),
+        annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, openWorldHint=False, idempotentHint=True),
+    )
+    async def confirm_procurement_select(
+        pending_action_id: str,
+        notice_id: str,
+        conversation_key: str,
+        lease_id: str,
+    ) -> dict:
+        result = await api(
+            "POST",
+            "procurement/interaction/pending/select/confirm/",
+            json={
+                "pending_action_id": pending_action_id,
+                "notice_id": notice_id,
+                "conversation_key": conversation_key,
+                "lease_id": lease_id,
+            },
+        )
+        if not result.get("verified"):
+            raise RuntimeError("PDP One confirmed write did not pass read-after-write verification")
+        return result
+
+    @mcp.tool(
+        description=(
             "Select one exact procurement notice by UUID. Requires an active PDPONE WEB server-side lease for the same conversation. "
-            "Do not guess notice identity: if the user's target is ambiguous, ask for confirmation before calling this tool. "
+            "Do not guess notice identity: if the user's target is ambiguous, use prepare_procurement_select_confirmation and ask the user first. "
             "The command is idempotent, audited, emits a change revision/outbox event, and reports read-after-write verification."
         ),
         annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, openWorldHint=False, idempotentHint=True),
