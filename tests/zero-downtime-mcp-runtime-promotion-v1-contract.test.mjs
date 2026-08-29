@@ -79,6 +79,16 @@ test('zero-downtime engine never uses stop-before-start for application activati
   assert.doesNotMatch(engine, /@\("compose","stop"/);
 });
 
+test('failed production mutation uses the bounded accepted-release recovery contract', () => {
+  assert.match(engine, /Restore-PDPOneAcceptedRelease\.ps1/);
+  assert.match(engine, /-FailedCommit \$CommitSha/);
+  assert.match(engine, /-FailedDeploymentId \$DeploymentId/);
+  assert.match(engine, /-PreviousAcceptedCommit \$previousCommit/);
+  assert.match(engine, /-ProjectRoot \$projectRoot/);
+  assert.match(engine, /-AgentRoot \$AgentRoot/);
+  assert.doesNotMatch(engine, /-RefreshConnectivityEdge/);
+});
+
 test('security and exact-release invariants remain explicit', () => {
   assert.match(engine, /Get-PDPOneTokenFingerprint/);
   assert.match(engine, /Deployment changed the MCP path token without authorization/);
