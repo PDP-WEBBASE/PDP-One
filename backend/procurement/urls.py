@@ -35,6 +35,15 @@ from .views_direct import DirectOpportunityViewSet, OpportunityContactViewSet, O
 from .views_documents import ProcurementSubmissionDocumentViewSet
 from .views_extraction import ExtractionRunViewSet
 from .views_extraction_observability import latest_extraction_run
+from .views_interaction_contract import (
+    arm_procurement_write,
+    command_select_notice,
+    disarm_procurement_write,
+    interaction_capabilities,
+    procurement_changes,
+    procurement_revision,
+    query_procurement_notices,
+)
 from .views_management_dashboard import unified_management_dashboard
 from .views_internet_usage import internet_usage_dashboard
 from .views_pagination_metrics import pagination_dashboard_metrics
@@ -71,6 +80,13 @@ urlpatterns = [
     path("ui/workflow-page-metadata/", workflow_page_metadata, name="procurement-workflow-page-metadata"),
     path("ui/recommendations/dismiss-bulk/", bulk_dismiss_recommendations, name="procurement-bulk-dismiss-recommendations"),
     path("ui/workflow/remove-bulk/", bulk_remove_workflow_items, name="procurement-bulk-remove-workflow-items"),
+    path("interaction/capabilities/", interaction_capabilities, name="procurement-interaction-capabilities"),
+    path("interaction/query/notices/", query_procurement_notices, name="procurement-interaction-query-notices"),
+    path("interaction/revision/", procurement_revision, name="procurement-interaction-revision"),
+    path("interaction/changes/", procurement_changes, name="procurement-interaction-changes"),
+    path("interaction/write/arm/", arm_procurement_write, name="procurement-interaction-write-arm"),
+    path("interaction/write/disarm/", disarm_procurement_write, name="procurement-interaction-write-disarm"),
+    path("interaction/commands/select-notice/", command_select_notice, name="procurement-interaction-command-select-notice"),
     path("pagination-dashboard-metrics/", pagination_dashboard_metrics, name="procurement-pagination-dashboard-metrics"),
     path("management-dashboard/", unified_management_dashboard, name="procurement-management-dashboard"),
     path("internet-usage-dashboard/", internet_usage_dashboard, name="procurement-internet-usage-dashboard"),
