@@ -98,7 +98,7 @@ test('watchdog self-test is bounded, lane-aware and fails safe', () => {
   assert.doesNotMatch(watchdogSelfTest, /docker\s+(?:volume|system)\s+prune|tailscale\s+logout|Remove-Item[^\n]+\.env/i);
 });
 
-test('steady-state compatibility protects all ten bootstrap files', () => {
+test('steady-state compatibility protects all twelve bootstrap files', () => {
   assert.equal(contract.schema, 'pdp-one.deployment-agent-compatibility.v1');
   assert.equal(contract.protocol_version, 1);
   assert.equal(Object.hasOwn(contract, 'migration_stage'), false);
@@ -114,6 +114,8 @@ test('steady-state compatibility protects all ten bootstrap files', () => {
     'PDPOne.Common.ps1',
     'PDPOne.OperationLock.ps1',
     'PDPOne.ReleaseManifest.ps1',
+    'Set-PDPOnePersistentGhcrCredential.ps1',
     'Test-PDPOneExactCandidateCompatibility.ps1',
+    'Test-PDPOneGhcrCredential.ps1',
   ].sort());
 });
