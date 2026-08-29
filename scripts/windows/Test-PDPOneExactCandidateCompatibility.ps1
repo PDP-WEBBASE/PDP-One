@@ -23,7 +23,9 @@ $SteadyStateAgentFiles = @(
     "PDPOne.Common.ps1",
     "PDPOne.OperationLock.ps1",
     "PDPOne.ReleaseManifest.ps1",
-    "Test-PDPOneExactCandidateCompatibility.ps1"
+    "Test-PDPOneExactCandidateCompatibility.ps1",
+    "Test-PDPOneGhcrCredential.ps1",
+    "Set-PDPOnePersistentGhcrCredential.ps1"
 )
 $StageAAgentFiles = @(
     "Deployment-Agent.Standard.ps1",
