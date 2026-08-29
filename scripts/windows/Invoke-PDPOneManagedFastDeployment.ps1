@@ -20,6 +20,7 @@ $projectRoot = Get-PDPOneProjectRoot
 $guardScript = Join-Path $PSScriptRoot "Invoke-PDPOneDiskGuard.ps1"
 $policyScript = Join-Path $PSScriptRoot "Ensure-PDPOneRancherPolicy.ps1"
 $compatibilityPreflightScript = Join-Path $PSScriptRoot "Test-PDPOneExactCandidateCompatibility.ps1"
+$credentialPreflightScript = Join-Path $PSScriptRoot "Test-PDPOneGhcrCredential.ps1"
 $zeroDowntimeScript = Join-Path $PSScriptRoot "Invoke-PDPOneZeroDowntimeRegistryDeployment.ps1"
 $scopedScript = Join-Path $PSScriptRoot "Invoke-PDPOneScopedRegistryDeployment.ps1"
 $legacyScript = Join-Path $PSScriptRoot "Invoke-PDPOneRegistryFastDeployment.ps1"
@@ -37,6 +38,7 @@ $downloadRoot = Join-Path $AgentRoot ("downloads\" + $DeploymentId)
 $deploymentOutput = @()
 $deploymentExitCode = 1
 $compatibilityPreflightReport = ""
+$credentialPreflightReport = ""
 $predeployGuardReport = ""
 $postdeployGuardReport = ""
 $rancherPolicyReport = ""
@@ -82,11 +84,50 @@ try {
             connectivity_repair_attempted = $false
             connectivity_repair_succeeded = $false
             startup_task_policy_reconciled = $false
+            ghcr_credential_refresh_required = $false
             error = $preflightMessage
         } | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $failureReportPath -Encoding UTF8
         throw "Deployment compatibility preflight failed before production changes. $preflightMessage"
     }
     if ($preflightOutput.Count -gt 0) { $compatibilityPreflightReport = [string]$preflightOutput[-1] }
+
+    Write-PDPOneDeploymentOperation -Lease $deploymentLease -Stage "ghcr-credential-preflight"
+    if (-not (Test-Path -LiteralPath $credentialPreflightScript)) { throw "Persistent GHCR credential health helper is missing from the installed Agent. Bootstrap the exact accepted helper before retrying." }
+    $credentialOutput = @(& powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File $credentialPreflightScript -AgentRoot $AgentRoot 2>&1)
+    $credentialExitCode = $LASTEXITCODE
+    if ($credentialExitCode -ne 0) {
+        $credentialMessage = ConvertTo-PDPOneRedactedText (($credentialOutput | ForEach-Object { [string]$_ }) -join [Environment]::NewLine)
+        if ([string]::IsNullOrWhiteSpace($credentialMessage)) { $credentialMessage = "Persistent GHCR credential health verification failed." }
+        $failureReportRoot = Join-Path $AgentRoot "reports"
+        New-Item -ItemType Directory -Force -Path $failureReportRoot | Out-Null
+        $failureReportPath = Join-Path $failureReportRoot ($DeploymentId + ".json")
+        [ordered]@{
+            schema = "pdp-one.deployment-report.v4-zero-downtime"
+            deployment_id = $DeploymentId
+            preview_id = $PreviewId
+            approved_commit = $CommitSha
+            previous_commit = ""
+            started_at = [DateTime]::UtcNow.ToString("o")
+            completed_at = [DateTime]::UtcNow.ToString("o")
+            status = "failed"
+            stage = "ghcr-credential-preflight"
+            change_management_mode = "development_fast"
+            image_source = "github_container_registry"
+            local_image_build_performed = $false
+            production_changed = $false
+            health_profile = "none"
+            changed_services = @()
+            changed_paths = @()
+            active_images = @{}
+            retained_previous_images = @{}
+            ghcr_credential_preflight_passed = $false
+            ghcr_credential_refresh_required = $true
+            secrets_included = $false
+            error = $credentialMessage
+        } | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $failureReportPath -Encoding UTF8
+        throw "Persistent GHCR credential is unhealthy. Refresh it once with Set-PDPOnePersistentGhcrCredential.ps1; production was not changed. $credentialMessage"
+    }
+    if ($credentialOutput.Count -gt 0) { $credentialPreflightReport = [string]$credentialOutput[-1] }
 
     Write-PDPOneDeploymentOperation -Lease $deploymentLease -Stage "applying-rancher-policy"
     if (Test-Path -LiteralPath $policyScript) {
@@ -141,6 +182,9 @@ if ($deploymentReport -and (Test-Path -LiteralPath $deploymentReport)) {
         $report = Get-Content -LiteralPath $deploymentReport -Raw -Encoding UTF8 | ConvertFrom-Json
         $report | Add-Member -NotePropertyName compatibility_preflight_report -NotePropertyValue $compatibilityPreflightReport -Force
         $report | Add-Member -NotePropertyName compatibility_preflight_passed -NotePropertyValue $true -Force
+        $report | Add-Member -NotePropertyName ghcr_credential_preflight_report -NotePropertyValue $credentialPreflightReport -Force
+        $report | Add-Member -NotePropertyName ghcr_credential_preflight_passed -NotePropertyValue $true -Force
+        $report | Add-Member -NotePropertyName ghcr_credential_refresh_required -NotePropertyValue $false -Force
         $report | Add-Member -NotePropertyName rancher_policy_report -NotePropertyValue $rancherPolicyReport -Force
         $report | Add-Member -NotePropertyName predeploy_disk_guard_report -NotePropertyValue $predeployGuardReport -Force
         $report | Add-Member -NotePropertyName postdeploy_disk_guard_report -NotePropertyValue $postdeployGuardReport -Force
