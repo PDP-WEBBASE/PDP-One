@@ -122,7 +122,16 @@ function Clear-PDPOneNginxRuntimeUpstreams {
 
 function Remove-PDPOneCandidate([string]$Name) {
     if (-not $Name) { return }
-    & docker rm -f $Name *> $null
+    $old = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = "Continue"
+        & docker container inspect $Name *> $null
+        $inspectCode = $LASTEXITCODE
+        if ($inspectCode -ne 0) { return }
+        & docker rm -f $Name *> $null
+        $removeCode = $LASTEXITCODE
+    } finally { $ErrorActionPreference = $old }
+    if ($removeCode -ne 0) { throw "Candidate container cleanup failed for $Name (exit code $removeCode)." }
 }
 
 function Get-PDPOneCanonicalRuntimeNetwork {
