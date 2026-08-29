@@ -61,11 +61,28 @@ try {
         New-Item -ItemType Directory -Force -Path $failureReportRoot | Out-Null
         $failureReportPath = Join-Path $failureReportRoot ($DeploymentId + ".json")
         [ordered]@{
-            schema="pdp-one.deployment-report.v3"; deployment_id=$DeploymentId; preview_id=$PreviewId; approved_commit=$CommitSha; previous_commit=""
-            started_at=[DateTime]::UtcNow.ToString("o"); completed_at=[DateTime]::UtcNow.ToString("o"); status="failed"; stage="deployment-compatibility-preflight"
-            change_management_mode="development_fast"; image_source="github_container_registry"; local_image_build_performed=$false; production_changed=$false
-            health_profile="none"; changed_services=@(); changed_paths=@(); active_images=@{}; retained_previous_images=@{}
-            connectivity_repair_attempted=$false; connectivity_repair_succeeded=$false; startup_task_policy_reconciled=$false; error=$preflightMessage
+            schema = "pdp-one.deployment-report.v3"
+            deployment_id = $DeploymentId
+            preview_id = $PreviewId
+            approved_commit = $CommitSha
+            previous_commit = ""
+            started_at = [DateTime]::UtcNow.ToString("o")
+            completed_at = [DateTime]::UtcNow.ToString("o")
+            status = "failed"
+            stage = "deployment-compatibility-preflight"
+            change_management_mode = "development_fast"
+            image_source = "github_container_registry"
+            local_image_build_performed = $false
+            production_changed = $false
+            health_profile = "none"
+            changed_services = @()
+            changed_paths = @()
+            active_images = @{}
+            retained_previous_images = @{}
+            connectivity_repair_attempted = $false
+            connectivity_repair_succeeded = $false
+            startup_task_policy_reconciled = $false
+            error = $preflightMessage
         } | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $failureReportPath -Encoding UTF8
         throw "Deployment compatibility preflight failed before production changes. $preflightMessage"
     }
