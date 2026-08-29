@@ -3,41 +3,45 @@ import fs from "node:fs";
 import test from "node:test";
 
 const v23 = fs.readFileSync("app/procurement/ProcurementWorkspaceV23.tsx", "utf8");
-const stableList = fs.readFileSync("app/procurement/ProcurementPaginationStableEnhancement.tsx", "utf8");
+const workspace = fs.readFileSync("app/procurement/ProcurementWorkspaceV13.tsx", "utf8");
 const dataClient = fs.readFileSync("app/procurement/procurementDataClient.ts", "utf8");
 const manager = fs.readFileSync("app/procurement/FastAnalysisContextManager.tsx", "utf8");
 
-test("V23 no longer installs a general global fetch cache", () => {
+test("active Procurement runtime has no global fetch cache or interceptor", () => {
   assert.doesNotMatch(v23, /ProcurementNavigationReadCache/);
   assert.doesNotMatch(v23, /ProcurementManagementPerformanceEnhancement/);
-  assert.match(v23, /ProcurementPaginationStableEnhancement/);
+  assert.doesNotMatch(v23, /ProcurementPaginationStableEnhancement/);
   assert.doesNotMatch(v23, /ProcurementTabCacheEnhancement/);
+  assert.doesNotMatch(workspace, /window\.fetch\s*=/);
 });
 
-test("visited high-volume list pages remain bounded and reusable during migration", () => {
-  assert.match(stableList, /CACHE_TTL_MS = 5 \* 60 \* 1000/);
-  assert.match(stableList, /MAX_CACHE_ENTRIES = 60/);
-  assert.match(stableList, /listCache\(\)/);
-  assert.match(stableList, /cached\.payload/);
-  assert.match(stableList, /stateStillMatches/);
-});
-
-test("new scoped data client owns context cache and stale-while-revalidate without window globals", () => {
+test("scoped data client owns context cache, SWR, dedupe, abort and stale protection", () => {
   assert.match(dataClient, /private readonly cache = new Map/);
+  assert.match(dataClient, /private readonly inflight = new Map/);
   assert.match(dataClient, /staleWhileRevalidate/);
   assert.match(dataClient, /prefetch/);
   assert.match(dataClient, /AbortController/);
   assert.match(dataClient, /requestGeneration/);
+  assert.match(dataClient, /Stale procurement response discarded/);
   assert.doesNotMatch(dataClient, /window\.fetch\s*=/);
   assert.doesNotMatch(dataClient, /window\.__pdp/);
 });
 
-test("current no-store analysis callers remain explicit rather than relying on a global cache override", () => {
-  assert.match(manager, /cache: "no-store"/);
-  assert.doesNotMatch(v23, /ProcurementNavigationReadCache/);
+test("workspace uses lazy view-scoped list requests instead of initial list hydration", () => {
+  assert.match(workspace, /tab !== "dashboard"/);
+  assert.match(workspace, /tab !== "tenders" && tab !== "inquiries"/);
+  assert.match(workspace, /tab !== "direct"/);
+  assert.match(workspace, /ui\/dashboard\//);
+  assert.doesNotMatch(workspace, /Promise\.all\(\[\s*fetchCollection<ApiNotice>/);
+  assert.doesNotMatch(workspace, /fetchCollection<ApiNotice>\(`\$\{PROCUREMENT_API\}\/notices\/\?ordering=-last_seen_at`\)/);
 });
 
-test("writes are not hidden behind a browser-wide read cache", () => {
-  assert.doesNotMatch(v23, /ProcurementNavigationReadCache/);
+test("writes explicitly invalidate scoped caches", () => {
+  assert.match(workspace, /procurementDataClient\.invalidate\(\)/);
+  assert.match(workspace, /directCache\.current\.clear\(\)/);
   assert.match(dataClient, /invalidate\(/);
+});
+
+test("current no-store analysis callers remain explicit", () => {
+  assert.match(manager, /cache: "no-store"/);
 });
