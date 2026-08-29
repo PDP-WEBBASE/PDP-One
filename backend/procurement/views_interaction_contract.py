@@ -1,5 +1,3 @@
-from datetime import datetime
-
 from django.utils.dateparse import parse_datetime
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
@@ -9,11 +7,12 @@ from rest_framework.response import Response
 from .interaction_contract import (
     CAPABILITIES,
     arm_write_lease,
+    confirm_pending_select_v1,
     current_revision,
     disarm_write_lease,
+    prepare_pending_select_v1,
     select_notice_v1,
 )
-from .models import ProcurementNotice
 from .models_interaction import ProcurementChangeJournal
 from .views_compact_ui import CompactNoticeSerializer, _compact_notice_queryset, _page_parameters
 
@@ -117,16 +116,48 @@ def procurement_changes(request):
 @api_view(["POST"])
 @permission_classes([IsAuthenticated])
 def arm_procurement_write(request):
-    conversation_key = request.data.get("conversation_key", "")
-    ttl_minutes = request.data.get("ttl_minutes", 60)
-    return Response(arm_write_lease(user=request.user, conversation_key=conversation_key, ttl_minutes=ttl_minutes))
+    return Response(
+        arm_write_lease(
+            user=request.user,
+            conversation_key=request.data.get("conversation_key", ""),
+            ttl_minutes=request.data.get("ttl_minutes", 60),
+        )
+    )
 
 
 @api_view(["POST"])
 @permission_classes([IsAuthenticated])
 def disarm_procurement_write(request):
-    conversation_key = request.data.get("conversation_key", "")
-    return Response(disarm_write_lease(user=request.user, conversation_key=conversation_key))
+    return Response(
+        disarm_write_lease(user=request.user, conversation_key=request.data.get("conversation_key", ""))
+    )
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def prepare_pending_select(request):
+    return Response(
+        prepare_pending_select_v1(
+            user=request.user,
+            conversation_key=request.data.get("conversation_key", ""),
+            lease_id=request.data.get("lease_id", ""),
+            candidate_notice_ids=request.data.get("candidate_notice_ids", []),
+            requested_text=request.data.get("requested_text", ""),
+        )
+    )
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def confirm_pending_select(request):
+    result = confirm_pending_select_v1(
+        user=request.user,
+        conversation_key=request.data.get("conversation_key", ""),
+        lease_id=request.data.get("lease_id", ""),
+        pending_action_id=request.data.get("pending_action_id", ""),
+        notice_id=request.data.get("notice_id", ""),
+    )
+    return Response(result, status=status.HTTP_200_OK if result.get("verified") else status.HTTP_409_CONFLICT)
 
 
 @api_view(["POST"])
@@ -138,5 +169,4 @@ def command_select_notice(request):
         lease_id=request.data.get("lease_id", ""),
         notice_id=request.data.get("notice_id", ""),
     )
-    http_status = status.HTTP_200_OK if result.get("verified") else status.HTTP_409_CONFLICT
-    return Response(result, status=http_status)
+    return Response(result, status=status.HTTP_200_OK if result.get("verified") else status.HTTP_409_CONFLICT)
