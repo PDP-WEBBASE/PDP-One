@@ -92,11 +92,16 @@ test('persistent GHCR credential is checked before production deployment and ref
   assert.match(managed, /ghcr_credential_refresh_required = \$true/);
   assert.match(managed, /production_changed = \$false/);
   assert.match(ghcrHealth, /github-token\.dpapi/);
-  assert.match(ghcrHealth, /docker login ghcr\.io/);
-  assert.match(ghcrHealth, /docker manifest inspect/);
+  assert.match(ghcrHealth, /Invoke-PDPOneDockerQuiet/);
+  assert.match(ghcrHealth, /@\("login", "ghcr\.io", "--username", "PDP-WEBBASE", "--password-stdin"\)/);
+  assert.match(ghcrHealth, /@\("manifest", "inspect", \$probeImage\)/);
+  assert.match(ghcrHealth, /\$ErrorActionPreference = "Continue"/);
+  assert.match(ghcrHealth, /return \$LASTEXITCODE/);
   assert.match(ghcrHealth, /refresh_required = \$false/);
   assert.match(ghcrHealth, /secrets_included = \$false/);
   assert.match(ghcrSet, /Read-Host "Paste the GitHub PAT classic with read:packages" -AsSecureString/);
+  assert.match(ghcrSet, /Invoke-PDPOneDockerQuiet/);
+  assert.match(ghcrSet, /@\("login", "ghcr\.io", "--username", "PDP-WEBBASE", "--password-stdin"\)/);
   assert.match(ghcrSet, /ConvertFrom-SecureString/);
   assert.match(ghcrSet, /Future deployments will reuse it automatically/);
   assert.doesNotMatch(ghcrHealth + ghcrSet, /Write-Host\s+\$plainToken|Write-Output\s+\$plainToken/);
