@@ -1,14 +1,10 @@
+import { ProcurementRequestClient } from "./procurementRequestClient";
+
 export type ProcurementNoticeType = "tender" | "inquiry";
 export type ProcurementWorkflow = "recent" | "recommended" | "selected" | "submitted" | "results";
 
 export type ProcurementQueryContext = {
   noticeType: ProcurementNoticeType;
-  /**
-   * Workspace callers may derive this value from local view-state helpers. The
-   * data client validates it against the closed server workflow allowlist before
-   * it participates in a query key or URL, so an unexpected string fails closed
-   * to the bounded `recent` view rather than becoming an open query parameter.
-   */
   workflow: ProcurementWorkflow | string;
   page: number;
   pageSize: number;
@@ -41,6 +37,7 @@ export type ProcurementDataClientOptions = {
   cacheTtlMs?: number;
   fetchImpl?: typeof fetch;
   now?: () => number;
+  concurrency?: number;
 };
 
 const WORKFLOW_ALLOWLIST = new Set<ProcurementWorkflow>([
@@ -103,8 +100,8 @@ export function procurementQueryParams(context: ProcurementQueryContext) {
 export class ProcurementDataClient {
   private readonly endpoint: string;
   private readonly cacheTtlMs: number;
-  private readonly fetchImpl: typeof fetch;
   private readonly now: () => number;
+  private readonly requestClient: ProcurementRequestClient;
   private readonly cache = new Map<string, ProcurementCacheEntry>();
   private readonly inflight = new Map<string, Promise<ProcurementQueryPayload>>();
   private readonly controllers = new Map<string, AbortController>();
@@ -113,8 +110,12 @@ export class ProcurementDataClient {
   constructor(options: ProcurementDataClientOptions = {}) {
     this.endpoint = options.endpoint || "/api/v1/procurement/ui/notices/";
     this.cacheTtlMs = options.cacheTtlMs ?? 60_000;
-    this.fetchImpl = options.fetchImpl || fetch;
     this.now = options.now || Date.now;
+    this.requestClient = new ProcurementRequestClient({
+      concurrency: options.concurrency ?? 3,
+      fetchImpl: options.fetchImpl,
+      now: this.now,
+    });
   }
 
   getCached<T = unknown>(context: ProcurementQueryContext): ProcurementLoadResult<T> | null {
@@ -163,8 +164,7 @@ export class ProcurementDataClient {
   }
 
   abort(context: ProcurementQueryContext) {
-    const key = procurementQueryKey(context);
-    this.abortKey(key);
+    this.abortKey(procurementQueryKey(context));
   }
 
   abortAllExcept(context: ProcurementQueryContext) {
@@ -190,14 +190,14 @@ export class ProcurementDataClient {
     this.generation.set(key, requestGeneration);
     this.controllers.set(key, controller);
     const params = procurementQueryParams(context);
+    const requestUrl = `${this.endpoint}?${params.toString()}`;
 
-    const baseRequest = this.fetchImpl(`${this.endpoint}?${params.toString()}`, {
-      method: "GET",
-      headers: { Accept: "application/json" },
+    const baseRequest = this.requestClient.getJson<ProcurementQueryPayload<T>>(requestUrl, {
+      key: `notice:${key}`,
+      priority: "interactive",
       signal: controller.signal,
-    }).then(async (response) => {
-      if (!response.ok) throw new Error(`Procurement request failed with HTTP ${response.status}`);
-      const payload = (await response.json()) as ProcurementQueryPayload<T>;
+      retryTransient: true,
+    }).then((payload) => {
       if (this.generation.get(key) !== requestGeneration) {
         throw new DOMException("Stale procurement response discarded", "AbortError");
       }
