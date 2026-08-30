@@ -9,6 +9,7 @@ import {
   resetProcurementV9NativeFilters,
 } from "./ProcurementWebPreviewV9Enhancement";
 import { procurementDataClient, type ProcurementQueryContext } from "./procurementDataClient";
+import { directWorkflowQuery } from "./directWorkflowSemantics";
 import { getProcurementV9FilterState } from "./procurementV9FilterState";
 import { setProcurementStableViewState } from "./procurementStableViewState";
 import { emitProcurementUiSync, PROCUREMENT_UI_SYNC_EVENT, ProcurementUiSyncDetail } from "./procurementUiSync";
@@ -153,6 +154,8 @@ type DetailItem = { kind: "notice"; item: ApiNotice } | { kind: "direct"; item: 
 type DirectCacheEntry = { payload: { count: number; results: ApiDirectOpportunity[] }; fetchedAt: number };
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "/api/v1";
 const PROCUREMENT_API = `${API_BASE}/procurement`;
+const NOTICE_DATA_EVENT = "pdp-procurement-compact-notice-data";
+const DIRECT_DATA_EVENT = "pdp-procurement-direct-page-data";
 const fa = new Intl.NumberFormat("fa-IR");
 const dateFa = new Intl.DateTimeFormat("fa-IR-u-ca-persian", { year: "numeric", month: "2-digit", day: "2-digit" });
 const dateTimeFa = new Intl.DateTimeFormat("fa-IR-u-ca-persian", { year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
@@ -232,10 +235,6 @@ function allLabel(tab: Tab) {
 
 function workflowCode(view: WorkflowView) {
   return view === "all" ? "recent" : view;
-}
-
-function directWorkflowCode(view: WorkflowView) {
-  return view === "all" ? "recommended" : view;
 }
 
 function sameOriginPath(value: string) {
@@ -478,10 +477,12 @@ export default function ProcurementWorkspaceV13() {
       if (!active) return;
       setNotices(fresh.payload.results || []);
       setNoticeCount(Number(fresh.payload.count || fresh.payload.results?.length || 0));
+      window.dispatchEvent(new CustomEvent(NOTICE_DATA_EVENT, { detail: fresh.payload }));
     }).then((result) => {
       if (!active) return;
       setNotices(result.payload.results || []);
       setNoticeCount(Number(result.payload.count || result.payload.results?.length || 0));
+      window.dispatchEvent(new CustomEvent(NOTICE_DATA_EVENT, { detail: result.payload }));
     }).catch((error) => {
       if (!active || (error instanceof DOMException && error.name === "AbortError")) return;
       setNoticeError("دریافت این فهرست موقتاً ناموفق بود؛ داده سالم قبلی حفظ شده است.");
@@ -496,7 +497,8 @@ export default function ProcurementWorkspaceV13() {
     params.set("page", String(directPage));
     params.set("page_size", String(directPageSize));
     params.set("ordering", "-last_activity_at,-id");
-    params.set("workflow_view", directWorkflowCode(directView));
+    const workflowView = directWorkflowQuery(directView);
+    if (workflowView) params.set("workflow_view", workflowView);
     if (debouncedSearch) params.set("search", debouncedSearch);
     if (directTypeFilter) params.set("opportunity_type", directTypeFilter);
     appendRepeated(params, "province", extra.provinces.length ? extra.provinces : (provinceFilter ? [provinceFilter] : []));
@@ -510,6 +512,7 @@ export default function ProcurementWorkspaceV13() {
     if (cached) {
       setDirectReferrals(cached.payload.results);
       setDirectCount(cached.payload.count);
+      window.dispatchEvent(new CustomEvent(DIRECT_DATA_EVENT, { detail: cached.payload }));
     }
     directController.current?.abort();
     const controller = new AbortController();
@@ -524,9 +527,11 @@ export default function ProcurementWorkspaceV13() {
       const results = Array.isArray(payload) ? payload : (payload.results || []);
       const count = Array.isArray(payload) ? results.length : Number(payload.count || results.length);
       if (directGeneration.current !== generation) throw new DOMException("Stale direct response discarded", "AbortError");
-      directCache.current.set(cacheKey, { payload: { count, results }, fetchedAt: Date.now() });
+      const directPayload = { count, results };
+      directCache.current.set(cacheKey, { payload: directPayload, fetchedAt: Date.now() });
       setDirectReferrals(results);
       setDirectCount(count);
+      window.dispatchEvent(new CustomEvent(DIRECT_DATA_EVENT, { detail: directPayload }));
     }).catch((error) => {
       if (error instanceof DOMException && error.name === "AbortError") return;
       setDirectError("دریافت ارجاعات مستقیم موقتاً ناموفق بود؛ داده سالم قبلی حفظ شده است.");
