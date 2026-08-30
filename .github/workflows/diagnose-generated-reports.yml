@@ -1,0 +1,79 @@
+name: Diagnose generated report sources
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Snapshot after checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p diagnostic/after-checkout
+          git status --short --untracked-files=all > diagnostic/after-checkout/git-status.txt
+          if [ -d src/components/reports ]; then
+            find src/components/reports -maxdepth 2 -type f -print | sort > diagnostic/after-checkout/files.txt
+            cp -a src/components/reports diagnostic/after-checkout/reports
+          else
+            echo ABSENT > diagnostic/after-checkout/files.txt
+          fi
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Snapshot after npm ci
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p diagnostic/after-install
+          git status --short --untracked-files=all > diagnostic/after-install/git-status.txt
+          if [ -d src/components/reports ]; then
+            find src/components/reports -maxdepth 2 -type f -print | sort > diagnostic/after-install/files.txt
+            cp -a src/components/reports diagnostic/after-install/reports
+          else
+            echo ABSENT > diagnostic/after-install/files.txt
+          fi
+
+      - name: Reproduce frontend build failure
+        id: reproduce
+        shell: bash
+        run: |
+          set +e
+          npm test > diagnostic/npm-test.log 2>&1
+          status=$?
+          set -e
+          mkdir -p diagnostic/after-test
+          git status --short --untracked-files=all > diagnostic/after-test/git-status.txt
+          if [ -d src/components/reports ]; then
+            find src/components/reports -maxdepth 2 -type f -print | sort > diagnostic/after-test/files.txt
+            cp -a src/components/reports diagnostic/after-test/reports
+          else
+            echo ABSENT > diagnostic/after-test/files.txt
+          fi
+          echo "$status" > diagnostic/npm-test-exit-code.txt
+          exit "$status"
+
+      - name: Upload bounded diagnostic artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pdp-one-generated-reports-diagnostic-${{ github.event.pull_request.head.sha }}
+          path: diagnostic
+          if-no-files-found: error
+          retention-days: 1
