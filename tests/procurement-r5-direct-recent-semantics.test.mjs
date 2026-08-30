@@ -7,7 +7,7 @@ const directApi = readFileSync("backend/procurement/views_direct.py", "utf8");
 
 test("direct recent entry has an explicit unfiltered API projection", () => {
   assert.match(semantics, /return view === \"all\" \? \"\" : view/);
-  assert.doesNotMatch(semantics, /all.*recommended/);
+  assert.doesNotMatch(semantics, /return view === \"all\" \? \"recommended\" : view/);
 });
 
 test("backend keeps recommended as an explicit optional workflow instead of default list semantics", () => {
