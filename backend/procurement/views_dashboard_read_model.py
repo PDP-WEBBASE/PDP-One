@@ -9,6 +9,7 @@ from rest_framework.response import Response
 
 from .analysis_run_service import active_run
 from .models import ProcurementCase, ProcurementNotice
+from .models_analysis import NoticeAnalysisDraft
 from .models_analysis_runs import ProcurementAnalysisRunItem
 from .models_direct import DirectOpportunity
 from .performance_metrics import instrument_procurement_endpoint
@@ -50,17 +51,27 @@ def _typed_count_fields(prefix: str, field: str, extra_filter: Q | None = None) 
     }
 
 
-def _analysis_remaining(run) -> dict[str, int]:
-    """Return a truthful split with at most one cold-path aggregate.
+def _analysis_remaining(run, notices) -> dict[str, int]:
+    """Return a truthful analysis backlog with at most one cold-path aggregate.
 
-    Newer runs may persist a by-type split in counters. Older runs do not. In
-    that case one grouped aggregate over the indexed run/status relation is
-    cheaper and more truthful than the former full statistics snapshot, and the
-    result is protected by the dashboard's short shared cache.
+    Active persistent runs use their persisted counters when a truthful by-type
+    split is available, otherwise one grouped aggregate over the indexed
+    run/status relation. When there is no active persistent run, the dashboard
+    falls back to notices without an analysis draft rather than reporting a
+    false zero. The whole dashboard payload is protected by the short shared
+    cache, so the fallback does not become a per-render query storm.
     """
 
     if run is None:
-        return {"total": 0, "tender": 0, "inquiry": 0}
+        drafted_notice_ids = NoticeAnalysisDraft.objects.filter(
+            notice__soft_deleted_at__isnull=True,
+            notice__is_hidden=False,
+        ).values("notice_id")
+        remaining = notices.exclude(pk__in=Subquery(drafted_notice_ids))
+        values = remaining.aggregate(
+            **_typed_count_fields("remaining", "resolved_notice_type")
+        )
+        return _breakdown(values, "remaining")
 
     counters = run.counters or {}
     persisted = counters.get("remaining_by_type") or {}
@@ -183,7 +194,7 @@ def _dashboard_payload():
     ).order_by("next_action_due", "id")
 
     run = active_run()
-    analysis_remaining = _analysis_remaining(run)
+    analysis_remaining = _analysis_remaining(run, notices)
 
     return {
         "generated_at": now,
@@ -206,7 +217,7 @@ def _dashboard_payload():
         },
         "active_cases": _active_case_projection(active_cases, direct_case_items),
         "analysis": {
-            "basis": "persisted_run_counters_or_bounded_split" if run else "no_active_run",
+            "basis": "persisted_run_counters_or_bounded_split" if run else "without_analysis_draft",
             "run_id": str(run.id) if run else None,
             "run_status": run.status if run else None,
         },
