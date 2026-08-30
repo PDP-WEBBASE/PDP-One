@@ -40,7 +40,7 @@ test("workspace-level client-only presentation has an explicit initial-render bo
   }
 });
 
-test("procurement first paint waits for structural shell readiness, never dashboard data success", () => {
+test("procurement first paint waits for structural shell readiness but cannot deadlock navigation", () => {
   const workspace = fs.readFileSync(path.join(appRoot, "procurement", "ProcurementWorkspaceV23.tsx"), "utf8");
   const boundary = fs.readFileSync(path.join(appRoot, "procurement", "ProcurementInitialRenderBoundary.tsx"), "utf8");
   const management = fs.readFileSync(path.join(appRoot, "procurement", "ProcurementManagementToolsStableEnhancement.tsx"), "utf8");
@@ -65,6 +65,11 @@ test("procurement first paint waits for structural shell readiness, never dashbo
     /observer\.observe\([\s\S]*?emitProcurementUiSync\(\{ source: "initial-render-boundary", dashboard: true, management: true \}\)/,
     "observer must be armed before the single bounded initialization sync so synchronous structural changes cannot be missed",
   );
+
+  assert.match(boundary, /MAX_STRUCTURAL_WAIT_MS\s*=\s*1500/);
+  assert.match(boundary, /window\.setTimeout\([\s\S]*?reveal\(\)[\s\S]*?MAX_STRUCTURAL_WAIT_MS/);
+  assert.match(boundary, /window\.clearTimeout\(fallbackTimer\)/);
+  assert.match(boundary, /Availability must win over presentation stabilization/);
 
   assert.match(management, /STABLE_READY_ATTRIBUTE\s*=\s*"data-pdp-management-tools-stable-ready"/);
   assert.match(management, /if \(!root \|\| !nav\) return false/);
