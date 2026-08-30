@@ -27,3 +27,9 @@ test("query key includes all context dimensions needed for deterministic cache o
     assert.match(source, new RegExp(marker));
   }
 });
+
+test("request governor single-flight key is isolated by data-client generation", () => {
+  assert.match(source, /const requestGovernorKey = `notice:\$\{key\}:generation:\$\{requestGeneration\}`/);
+  assert.match(source, /key: requestGovernorKey/);
+  assert.doesNotMatch(source, /key: `notice:\$\{key\}`/);
+});
