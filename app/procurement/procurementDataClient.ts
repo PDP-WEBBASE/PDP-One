@@ -128,7 +128,10 @@ export class ProcurementDataClient {
     this.endpoint = options.endpoint || "/api/v1/procurement/ui/notices/";
     this.cacheTtlMs = options.cacheTtlMs ?? 60_000;
     this.now = options.now || Date.now;
-    this.fetchImpl = options.fetchImpl || fetch;
+    // Never store the native Window.fetch function as an unbound instance method.
+    // Chromium requires the Window receiver for native fetch; the wrapper preserves
+    // dependency injection while always invoking the platform fetch with its own realm.
+    this.fetchImpl = options.fetchImpl ?? ((input, init) => globalThis.fetch(input, init));
   }
 
   getCached<T = unknown>(context: ProcurementQueryContext): ProcurementLoadResult<T> | null {
