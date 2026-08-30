@@ -75,15 +75,26 @@ class DirectOpportunityViewSet(
     ordering = ["-last_activity_at", "-id"]
 
     def get_queryset(self):
-        queryset = (
-            DirectOpportunity.objects.filter(soft_deleted_at__isnull=True)
-            .select_related(
-                "responsible", "created_by", "primary_contact", "result", "result__contract",
-                "reference_record",
+        base_queryset = DirectOpportunity.objects.filter(soft_deleted_at__isnull=True)
+        if self.action == "list":
+            # The list serializer only reads responsible/reference_record plus the
+            # follow-up count. Keep contacts, follow-up bodies, result and other
+            # detail-only relations out of the hot paginated list path.
+            queryset = (
+                base_queryset
+                .select_related("responsible", "reference_record")
+                .annotate(follow_up_count=Count("follow_ups"))
             )
-            .prefetch_related("contacts", "follow_ups__created_by")
-            .annotate(follow_up_count=Count("follow_ups"))
-        )
+        else:
+            queryset = (
+                base_queryset
+                .select_related(
+                    "responsible", "created_by", "primary_contact", "result", "result__contract",
+                    "reference_record",
+                )
+                .prefetch_related("contacts", "follow_ups__created_by")
+                .annotate(follow_up_count=Count("follow_ups"))
+            )
         params = self.request.query_params
         workflow_view = params.get("workflow_view", "").strip()
         if workflow_view == "recommended":

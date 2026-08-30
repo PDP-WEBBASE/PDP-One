@@ -5,6 +5,7 @@ import test from "node:test";
 const wrapperPath = new URL("../app/procurement/ProcurementWorkspaceV23.tsx", import.meta.url);
 const overlayPath = new URL("../app/procurement/ProcurementCompactWorkspaceStableEnhancement.tsx", import.meta.url);
 const backendPath = new URL("../backend/procurement/views_compact_ui.py", import.meta.url);
+const dashboardPath = new URL("../backend/procurement/views_dashboard_read_model.py", import.meta.url);
 const urlsPath = new URL("../backend/procurement/urls.py", import.meta.url);
 
 test("mounts the stable compact procurement enhancement after bounded workflow actions", async () => {
@@ -49,17 +50,17 @@ test("keeps compact workspace free of duplicate deadline and publication filters
   assert.match(backend, /published_on/);
 });
 
-test("dashboard uses server-side analysis statistics and overall tender inquiry breakdowns", async () => {
+test("dashboard uses the bounded server read model and compact presentation has no duplicate dashboard ownership", async () => {
   const frontend = await readFile(overlayPath, "utf8");
-  const backend = await readFile(backendPath, "utf8");
-  assert.match(backend, /procurement_analysis_statistics\(\)/);
-  assert.match(backend, /active_run\.get\("remaining"\)/);
-  assert.match(backend, /"tender"/);
-  assert.match(backend, /"inquiry"/);
-  assert.match(frontend, /محاسبه مستقیم سمت سرور/);
-  assert.match(frontend, /مناقصه/);
-  assert.match(frontend, /استعلام/);
-  assert.match(frontend, /normalize\(node\.textContent\) === "داده واقعی"/);
+  const dashboard = await readFile(dashboardPath, "utf8");
+  assert.doesNotMatch(frontend, /ui\/dashboard\//);
+  assert.match(dashboard, /DASHBOARD_CACHE_TTL_SECONDS = 20/);
+  assert.match(dashboard, /remaining_by_type/);
+  assert.match(dashboard, /run\.items\.filter\(status__in=OPEN_ANALYSIS_ITEM_STATUSES\)\.aggregate/);
+  assert.match(dashboard, /ProcurementNotice\.NoticeType\.TENDER/);
+  assert.match(dashboard, /ProcurementNotice\.NoticeType\.INQUIRY/);
+  assert.match(dashboard, /persisted_run_counters_or_bounded_split/);
+  assert.doesNotMatch(dashboard, /procurement_analysis_statistics\(\)/);
 });
 
 test("routes the compact UI feed dashboard and bulk-dismiss endpoints", async () => {

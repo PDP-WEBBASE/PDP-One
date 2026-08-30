@@ -4,27 +4,25 @@ import test from "node:test";
 
 const read = (path) => readFile(new URL(`../${path}`, import.meta.url), "utf8");
 
-test("startup session resilience is installed before the React-owned procurement workspace", async () => {
+test("startup compatibility boundary remains mounted without owning browser fetch", async () => {
   const workspace = await read("app/procurement/ProcurementWorkspaceV23.tsx");
   const startup = workspace.indexOf("<ProcurementStartupSessionResilience />");
   const baseWorkspace = workspace.indexOf("<ProcurementWorkspaceV22 />");
+  const source = await read("app/procurement/ProcurementStartupSessionResilience.tsx");
 
-  assert.ok(startup >= 0, "startup session resilience must be mounted");
-  assert.ok(baseWorkspace > startup, "startup session resilience must precede the React-owned workspace chain");
+  assert.ok(startup >= 0, "startup compatibility boundary must remain mounted");
+  assert.ok(baseWorkspace > startup, "compatibility boundary must precede the React-owned workspace chain");
   assert.doesNotMatch(workspace, /ProcurementPaginationStableEnhancement/);
+  assert.doesNotMatch(source, /window\.fetch\s*=/, "startup compatibility must never replace window.fetch");
+  assert.doesNotMatch(source, /SESSION_ATTEMPT_TIMEOUT_MS|SESSION_MAX_ATTEMPTS|pdp_reset_session/,
+    "startup boundary must not own timeout/retry/session recovery policy");
 });
 
-test("session startup gets bounded retries without changing ordinary procurement endpoint timeouts", async () => {
-  const source = await read("app/procurement/ProcurementStartupSessionResilience.tsx");
+test("active V14 is presentation-only and cannot create retry storms", async () => {
   const guard = await read("app/procurement/ProcurementWorkspaceV14.tsx");
 
-  assert.match(source, /SESSION_PATH = "\/api\/v1\/auth\/session\/"/);
-  assert.match(source, /SESSION_ATTEMPT_TIMEOUT_MS = 15_000/);
-  assert.match(source, /SESSION_MAX_ATTEMPTS = 2/);
-  assert.match(source, /pdp_reset_session/);
-  assert.match(source, /cache: "no-store"/);
-  assert.doesNotMatch(source, /window\.location\.reload/);
-
-  assert.match(guard, /}, 10_000\);/);
-  assert.match(guard, /parsed\.pathname\.startsWith\("\/api\/v1\/procurement\/"\)/);
+  assert.doesNotMatch(guard, /window\.fetch\s*=/, "V14 must not replace browser fetch");
+  assert.doesNotMatch(guard, /AbortController|10_000|FETCH_RECOVERY_ATTEMPTS|probeFailedEndpoint|recoverBrowserSession/,
+    "V14 must not impose subsystem-wide timeout/retry/probe behaviour");
+  assert.match(guard, /Request resilience belongs to scoped data\/session clients/);
 });

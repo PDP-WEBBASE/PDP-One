@@ -26,7 +26,7 @@ from .views_analysis_runs import (
 )
 from .views_analysis_statistics import analysis_statistics
 from .views_automation import ProcurementAutomationSettingsViewSet
-from .views_bulk_workflow import bulk_remove_workflow_items, compact_notice_feed_with_dismissals
+from .views_bulk_workflow import bulk_remove_workflow_items
 from .views_case_actions import ProcurementCaseViewSet
 from .views_case_followup import case_follow_up, follow_up_summary, follow_up_users
 from .views_compact_ui import bulk_dismiss_recommendations
@@ -48,6 +48,7 @@ from .views_interaction_contract import (
     query_procurement_notices,
 )
 from .views_management_dashboard import unified_management_dashboard
+from .views_notice_feed_read_model import bounded_notice_feed
 from .views_internet_usage import internet_usage_dashboard
 from .views_pagination_metrics import pagination_dashboard_metrics
 from .views_recommended import AIRecommendedNoticeViewSet
@@ -78,7 +79,7 @@ router.register("automation-settings", ProcurementAutomationSettingsViewSet, bas
 urlpatterns = [
     path("", include(router.urls)),
     path("dashboard/", procurement_dashboard, name="procurement-dashboard"),
-    path("ui/notices/", compact_notice_feed_with_dismissals, name="procurement-compact-notice-feed"),
+    path("ui/notices/", bounded_notice_feed, name="procurement-compact-notice-feed"),
     path("ui/dashboard/", compact_dashboard_read_model, name="procurement-compact-dashboard"),
     path("ui/workflow-page-metadata/", workflow_page_metadata, name="procurement-workflow-page-metadata"),
     path("ui/recommendations/dismiss-bulk/", bulk_dismiss_recommendations, name="procurement-bulk-dismiss-recommendations"),

@@ -27,23 +27,6 @@ type CompactNotice = {
   [key: string]: unknown;
 };
 type NoticePayload = { count: number; page: number; page_size: number; results: CompactNotice[] };
-type CountBreakdown = { total: number; tender: number; inquiry: number };
-type DashboardPayload = {
-  generated_at: string;
-  metrics: {
-    all_notices: CountBreakdown;
-    new_today: CountBreakdown;
-    analysis_remaining: CountBreakdown;
-    recommended: CountBreakdown;
-    selected: CountBreakdown;
-    submitted: CountBreakdown;
-    near_deadline: CountBreakdown;
-    successful_results: CountBreakdown;
-  };
-  management: { overdue_actions: number; without_responsible: number; direct_active: number };
-  analysis: { basis: string; run_id: string | null; run_status: string | null };
-};
-type SourcePayload = Array<{ name: string; key?: string }> | { results?: Array<{ name: string; key?: string }> };
 type CompactWindow = Window & {
   __pdpPaginationPage?: number;
   __pdpCompactDeadlineStatus?: string;
@@ -53,15 +36,12 @@ type CompactWindow = Window & {
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "/api/v1";
 const PROCUREMENT_API = `${API_BASE}/procurement`;
-const COMPACT_DASHBOARD_PATH = `${PROCUREMENT_API}/ui/dashboard/`;
 const BULK_DISMISS_PATH = `${PROCUREMENT_API}/ui/recommendations/dismiss-bulk/`;
 const DATA_EVENT = "pdp-procurement-compact-notice-data";
 const FILTER_HOST_ID = "pdp-procurement-compact-filter-host";
-const DASHBOARD_HOST_ID = "pdp-procurement-compact-dashboard-host";
 const LONG_TITLE_THRESHOLD = 220;
 const fa = new Intl.NumberFormat("fa-IR");
 const faDate = new Intl.DateTimeFormat("fa-IR-u-ca-persian", { year: "numeric", month: "2-digit", day: "2-digit" });
-const faDateTime = new Intl.DateTimeFormat("fa-IR-u-ca-persian", { dateStyle: "medium", timeStyle: "short" });
 
 function normalize(value: string | null | undefined) {
   return String(value || "").replace(/\s+/g, " ").trim();
@@ -105,44 +85,20 @@ function ensureFilterHost() {
   return host;
 }
 
-function hideLiveDatabaseBanner() {
-  const label = Array.from(document.querySelectorAll("b")).find((node) => normalize(node.textContent) === "داده واقعی");
-  const banner = label?.parentElement as HTMLElement | null;
-  if (banner && normalize(banner.textContent).includes("PostgreSQL")) banner.style.display = "none";
-}
-
-function ensureDashboardHost() {
-  if (getProcurementStableViewState().top !== "dashboard") return null;
-  hideLiveDatabaseBanner();
-  const kpiArticle = Array.from(document.querySelectorAll<HTMLElement>("article")).find((article) =>
-    Array.from(article.querySelectorAll("span")).some((span) => normalize(span.textContent) === "فراخوان جدید"),
-  );
-  const kpiContainer = kpiArticle?.parentElement as HTMLElement | null;
-  if (!kpiContainer) return null;
-  kpiContainer.style.display = "none";
-  const dashboardSection = kpiContainer.closest("section");
-  if (!dashboardSection) return null;
-  const alertHeading = Array.from(dashboardSection.querySelectorAll("h2")).find((heading) => normalize(heading.textContent) === "هشدارهای مدیریتی");
-  const oldGrid = alertHeading?.closest("article")?.parentElement as HTMLElement | null;
-  if (oldGrid) oldGrid.style.display = "none";
-  let host = dashboardSection.querySelector<HTMLElement>(`#${DASHBOARD_HOST_ID}`);
-  if (!host) {
-    host = document.createElement("div");
-    host.id = DASHBOARD_HOST_ID;
-    dashboardSection.insertBefore(host, kpiContainer);
-  }
-  return host;
-}
-
-function ensureSourceOptions(sourceNames: string[]) {
+function ensureSourceOptions(payload: NoticePayload | null) {
   const section = findWorkflowSection();
-  if (!section) return;
+  if (!section || !payload) return;
   const sourceLabel = Array.from(section.querySelectorAll<HTMLLabelElement>("label")).find((label) => normalize(label.textContent).startsWith("منبع"));
   const select = sourceLabel?.querySelector<HTMLSelectElement>("select");
   if (!select) return;
   const existing = new Set(Array.from(select.options).map((option) => option.value));
+  const sourceNames = new Set<string>();
+  payload.results.forEach((item) => {
+    if (item.source_name) sourceNames.add(item.source_name);
+    (item.sources || []).forEach((source) => { if (source.name) sourceNames.add(source.name); });
+  });
   sourceNames.forEach((name) => {
-    if (!name || existing.has(name)) return;
+    if (existing.has(name)) return;
     const option = document.createElement("option");
     option.value = name;
     option.textContent = name;
@@ -261,30 +217,10 @@ async function csrfToken() {
   return String(payload.csrf_token || "");
 }
 
-function DashboardMetric({ label, value }: { label: string; value: CountBreakdown }) {
-  return <div className="pdp-compact-metric"><span>{label}</span><b>{fa.format(value.total)}</b><small><em>مناقصه {fa.format(value.tender)}</em><em>استعلام {fa.format(value.inquiry)}</em></small></div>;
-}
-
-function DashboardBox({ data }: { data: DashboardPayload }) {
-  return <section className="pdp-compact-dashboard-box">
-    <div className="pdp-compact-dashboard-heading"><div><h2>شاخص‌های مدیریتی</h2><small>محاسبه مستقیم سمت سرور؛ تفکیک مناقصه و استعلام</small></div><small>{faDateTime.format(new Date(data.generated_at))}</small></div>
-    <div className="pdp-compact-dashboard-metrics">
-      <DashboardMetric label="کل فراخوان‌ها" value={data.metrics.all_notices}/><DashboardMetric label="فراخوان جدید امروز" value={data.metrics.new_today}/>
-      <DashboardMetric label="تحلیل‌نشده" value={data.metrics.analysis_remaining}/><DashboardMetric label="پیشنهادی" value={data.metrics.recommended}/>
-      <DashboardMetric label="منتخب" value={data.metrics.selected}/><DashboardMetric label="ارسال‌شده" value={data.metrics.submitted}/>
-      <DashboardMetric label="مهلت تا ۷ روز" value={data.metrics.near_deadline}/><DashboardMetric label="نتیجه موفق" value={data.metrics.successful_results}/>
-    </div>
-    <div className="pdp-compact-dashboard-foot"><span>پیگیری عقب‌افتاده: {fa.format(data.management.overdue_actions)}</span><span>بدون مسئول: {fa.format(data.management.without_responsible)}</span><span>ارجاع مستقیم فعال: {fa.format(data.management.direct_active)}</span></div>
-  </section>;
-}
-
 export default function ProcurementCompactWorkspaceStableEnhancement() {
   const guarded = window as CompactWindow;
   const [noticePayload, setNoticePayload] = useState<NoticePayload | null>(null);
-  const [dashboard, setDashboard] = useState<DashboardPayload | null>(null);
-  const [sourceNames, setSourceNames] = useState<string[]>([]);
   const [filterHost, setFilterHost] = useState<HTMLElement | null>(null);
-  const [dashboardHost, setDashboardHost] = useState<HTMLElement | null>(null);
   const [deadlineStatus] = useState(guarded.__pdpCompactDeadlineStatus || "");
   const [publishedOn] = useState(guarded.__pdpCompactPublishedOn || "");
   const [bulkScope, setBulkScope] = useState<"page" | "all">("page");
@@ -292,30 +228,12 @@ export default function ProcurementCompactWorkspaceStableEnhancement() {
   const [message, setMessage] = useState("");
   const [, setViewRevision] = useState(0);
 
-  const refreshDashboard = useCallback(() => {
-    if (getProcurementStableViewState().top !== "dashboard") return;
-    void fetch(COMPACT_DASHBOARD_PATH, { credentials: "include", headers: { Accept: "application/json" }, cache: "no-store" })
-      .then(async (response) => { if (!response.ok) throw new Error(`dashboard-${response.status}`); return await response.json() as DashboardPayload; })
-      .then(setDashboard).catch(() => undefined);
-  }, []);
-
-  useEffect(() => {
-    void fetch(`${PROCUREMENT_API}/sources/`, { credentials: "include", headers: { Accept: "application/json" } })
-      .then(async (response) => response.ok ? await response.json() as SourcePayload : [])
-      .then((payload) => {
-        const rows = Array.isArray(payload) ? payload : (payload.results || []);
-        setSourceNames(rows.map((row) => normalize(row.name)).filter(Boolean));
-      }).catch(() => undefined);
-  }, []);
-
   useEffect(() => {
     let frame = 0;
     const syncDom = () => {
       frame = 0;
-      hideLiveDatabaseBanner();
       setFilterHost(ensureFilterHost());
-      setDashboardHost(ensureDashboardHost());
-      ensureSourceOptions(sourceNames);
+      ensureSourceOptions(noticePayload);
       enhanceRecordCards(noticePayload);
     };
     const scheduleSync = () => {
@@ -330,35 +248,32 @@ export default function ProcurementCompactWorkspaceStableEnhancement() {
       setViewRevision((value) => value + 1);
       setMessage("");
       scheduleSync();
-      if (getProcurementStableViewState().top === "dashboard") refreshDashboard();
     };
     const onSync = (event: Event) => {
       const detail = (event as CustomEvent<ProcurementUiSyncDetail>).detail;
       if (detail?.source === "compact-workspace") return;
       scheduleSync();
-      if (detail?.dashboard || getProcurementStableViewState().top === "dashboard") refreshDashboard();
     };
     window.addEventListener(DATA_EVENT, onData);
     window.addEventListener(PROCUREMENT_STABLE_VIEW_STATE_EVENT, onState);
     window.addEventListener(PROCUREMENT_UI_SYNC_EVENT, onSync);
     scheduleSync();
-    refreshDashboard();
     return () => {
       window.removeEventListener(DATA_EVENT, onData);
       window.removeEventListener(PROCUREMENT_STABLE_VIEW_STATE_EVENT, onState);
       window.removeEventListener(PROCUREMENT_UI_SYNC_EVENT, onSync);
       window.cancelAnimationFrame(frame);
     };
-  }, [noticePayload, sourceNames, refreshDashboard]);
+  }, [noticePayload]);
 
   useEffect(() => {
     const frame = window.requestAnimationFrame(() => {
       setFilterHost(ensureFilterHost());
-      setDashboardHost(ensureDashboardHost());
+      ensureSourceOptions(noticePayload);
       enhanceRecordCards(noticePayload);
     });
     return () => window.cancelAnimationFrame(frame);
-  }, [noticePayload, dashboard]);
+  }, [noticePayload]);
 
   const bulkDismiss = useCallback(async () => {
     const top = activeTopTab();
@@ -400,7 +315,6 @@ export default function ProcurementCompactWorkspaceStableEnhancement() {
     {showBulk && <div className="pdp-compact-bulk-control"><select value={bulkScope} onChange={(event) => setBulkScope(event.target.value as "page" | "all")}><option value="page">همین صفحه</option><option value="all">همه نتایج فیلترشده</option></select><button type="button" disabled={bulkBusy || !noticePayload?.count} onClick={() => void bulkDismiss()}>{bulkBusy ? "در حال حذف..." : "حذف گروهی پیشنهادها"}</button></div>}
     {message && !showBulk && <small className="pdp-compact-message">{message}</small>}
   </>, filterHost) : null;
-  const dashboardPortal = dashboardHost && dashboard ? createPortal(<DashboardBox data={dashboard}/>, dashboardHost) : null;
 
   return <>
     <style>{`
@@ -410,9 +324,8 @@ export default function ProcurementCompactWorkspaceStableEnhancement() {
       .pdp-compact-record p{font-size:12px!important;line-height:1.45!important;margin:1px 0!important}.pdp-compact-record>div:last-child{gap:4px!important;padding-inline-start:7px!important}
       .pdp-compact-badge-group{display:flex;align-items:center;gap:4px;flex-wrap:wrap;margin:3px 0}.pdp-compact-source,.pdp-compact-chip{display:inline-flex;align-items:center;min-height:20px;padding:2px 7px;border-radius:999px;border:1px solid #cbd5e1;background:#f8fafc;color:#334155;font-size:10.5px;font-weight:700;text-decoration:none;white-space:nowrap}.pdp-source-0{border-color:#99f6e4;background:#f0fdfa;color:#0f766e}.pdp-source-1{border-color:#bfdbfe;background:#eff6ff;color:#1d4ed8}.pdp-source-2{border-color:#fde68a;background:#fffbeb;color:#a16207}.pdp-source-count{background:#f1f5f9}.pdp-deadline-date{background:#fff7ed;border-color:#fed7aa;color:#9a3412}
       .pdp-compact-dismiss{width:auto!important;min-height:28px!important;padding:4px 7px!important;font-size:10.5px!important}.pdp-compact-filter-label{display:grid;gap:3px;font-size:11px}.pdp-compact-filter-label select,.pdp-compact-filter-label input{width:100%;min-height:34px;border:1px solid rgba(15,23,42,.16);border-radius:8px;padding:5px 7px;background:white;font:inherit}.pdp-compact-bulk-control{display:flex;align-items:end;gap:5px}.pdp-compact-bulk-control select,.pdp-compact-bulk-control button{min-height:34px;border:1px solid #cbd5e1;border-radius:8px;background:white;padding:5px 7px;font:inherit;font-size:11px}.pdp-compact-bulk-control button{border-color:#fecaca;background:#fff1f2;color:#be123c;font-weight:700}.pdp-compact-message{align-self:end;color:#0f766e;font-weight:700;grid-column:1/-1}
-      .pdp-compact-dashboard-box{background:white;border:1px solid #dbe3ec;border-radius:14px;padding:12px;margin-bottom:12px;box-shadow:0 4px 14px rgba(15,23,42,.04)}.pdp-compact-dashboard-heading{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:9px;flex-wrap:wrap}.pdp-compact-dashboard-heading h2{font-size:17px;margin:0 0 2px}.pdp-compact-dashboard-heading small{color:#64748b;font-size:10.5px}.pdp-compact-dashboard-metrics{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:7px}.pdp-compact-metric{border:1px solid #e2e8f0;border-radius:10px;background:#f8fafc;padding:8px 9px;min-height:74px}.pdp-compact-metric>span{display:block;color:#64748b;font-size:10.5px}.pdp-compact-metric>b{display:block;font-size:20px;line-height:1.25;margin:3px 0}.pdp-compact-metric small{display:flex;gap:4px;flex-wrap:wrap}.pdp-compact-metric em{font-style:normal;font-size:9.5px;background:white;border:1px solid #e2e8f0;border-radius:999px;padding:1px 5px}.pdp-compact-dashboard-foot{display:flex;gap:7px;flex-wrap:wrap;margin-top:8px;padding-top:8px;border-top:1px solid #e2e8f0;color:#475569;font-size:10.5px}.pdp-compact-dashboard-foot span{background:#f8fafc;border-radius:999px;padding:3px 7px}
-      @media(max-width:900px){.pdp-compact-dashboard-metrics{grid-template-columns:repeat(2,minmax(0,1fr))}.pdp-compact-record{grid-template-columns:1fr!important}}
+      @media(max-width:900px){.pdp-compact-record{grid-template-columns:1fr!important}}
     `}</style>
-    {filterPortal}{dashboardPortal}
+    {filterPortal}
   </>;
 }

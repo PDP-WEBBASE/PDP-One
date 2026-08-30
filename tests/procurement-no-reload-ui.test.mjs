@@ -57,15 +57,16 @@ test("ordinary workspace mutations avoid global refresh and use local reconcilia
   assert.match(workspace, /bulkWorkspace/);
 });
 
-test("connectivity recovery is targeted and does not hard reload the procurement workspace", async () => {
+test("connectivity resilience is scoped and never hard reloads the procurement workspace", async () => {
   const v14 = await read("app/procurement/ProcurementWorkspaceV14.tsx");
-  const reloads = v14.match(/window\.location\.reload\s*\(/g) || [];
+  const requestClient = await read("app/procurement/procurementRequestClient.ts");
 
-  assert.equal(reloads.length, 0);
-  assert.match(v14, /fetchFailure/);
-  assert.match(v14, /retryFailedEndpoint/);
-  assert.match(v14, /probeFailedEndpoint/);
-  assert.match(v14, /تلاش مجدد/);
+  assert.doesNotMatch(v14, /window\.location\.reload\s*\(/);
+  assert.doesNotMatch(v14, /window\.fetch\s*=|fetchFailure|retryFailedEndpoint|probeFailedEndpoint/);
+  assert.match(requestClient, /ProcurementRequestClient/);
+  assert.match(requestClient, /CIRCUIT_FAILURE_THRESHOLD/);
+  assert.match(requestClient, /retryTransient/);
+  assert.doesNotMatch(requestClient, /window\.location\.reload\s*\(/);
 });
 
 test("shared UI sync contract supports targeted and broad background reconciliation", async () => {
