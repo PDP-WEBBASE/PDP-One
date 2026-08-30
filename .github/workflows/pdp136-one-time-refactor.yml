@@ -2,14 +2,14 @@ name: PDP136 one-time data owner refactor
 
 on:
   push:
-    branches: [fix/web-api-resilience-performance-v1-20260830]
+    branches:
+      - fix/web-api-resilience-performance-v1-20260830
 
 permissions:
   contents: write
 
 jobs:
   refactor:
-    if: github.actor != 'github-actions[bot]' && contains(github.event.head_commit.message, '[PDP136-REFRACTOR]')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -30,84 +30,91 @@ jobs:
 
           v13_path = Path('app/procurement/ProcurementWorkspaceV13.tsx')
           v13 = v13_path.read_text()
-          v13 = replace_once(
-              v13,
-              'import { procurementDataClient, type ProcurementQueryContext } from "./procurementDataClient";\n',
-              'import { procurementDataClient, type ProcurementQueryContext } from "./procurementDataClient";\nimport { setProcurementSharedDashboard, setProcurementSharedSourceNames } from "./procurementSharedReadState";\n',
-              'v13 shared-state import',
-          )
-          v13 = replace_once(
-              v13,
-              '      if (active) setDashboard(payload);',
-              '      if (active) { setDashboard(payload); setProcurementSharedDashboard(payload); }',
-              'v13 dashboard publish',
-          )
-          v13 = replace_once(
-              v13,
-              '      if (sourceResult.status === "fulfilled") setSources(sourceResult.value); else failures += 1;',
-              '      if (sourceResult.status === "fulfilled") {\n        setSources(sourceResult.value);\n        setProcurementSharedSourceNames(sourceResult.value.map((source) => source.name));\n      } else failures += 1;',
-              'v13 sources publish',
-          )
-          v13_path.write_text(v13)
+          if 'setProcurementSharedDashboard' not in v13:
+              v13 = replace_once(
+                  v13,
+                  'import { procurementDataClient, type ProcurementQueryContext } from "./procurementDataClient";\n',
+                  'import { procurementDataClient, type ProcurementQueryContext } from "./procurementDataClient";\nimport { setProcurementSharedDashboard, setProcurementSharedSourceNames } from "./procurementSharedReadState";\n',
+                  'v13 shared-state import',
+              )
+              v13 = replace_once(
+                  v13,
+                  '      if (active) setDashboard(payload);',
+                  '      if (active) { setDashboard(payload); setProcurementSharedDashboard(payload); }',
+                  'v13 dashboard publish',
+              )
+              v13 = replace_once(
+                  v13,
+                  '      if (sourceResult.status === "fulfilled") setSources(sourceResult.value); else failures += 1;',
+                  '      if (sourceResult.status === "fulfilled") {\n        setSources(sourceResult.value);\n        setProcurementSharedSourceNames(sourceResult.value.map((source) => source.name));\n      } else failures += 1;',
+                  'v13 sources publish',
+              )
+              v13_path.write_text(v13)
 
           compact_path = Path('app/procurement/ProcurementCompactWorkspaceStableEnhancement.tsx')
           compact = compact_path.read_text()
-          compact = replace_once(
-              compact,
-              'import { emitProcurementUiSync, PROCUREMENT_UI_SYNC_EVENT, ProcurementUiSyncDetail } from "./procurementUiSync";\n',
-              'import { emitProcurementUiSync, PROCUREMENT_UI_SYNC_EVENT, ProcurementUiSyncDetail } from "./procurementUiSync";\nimport { getProcurementSharedReadState, subscribeProcurementSharedReadState } from "./procurementSharedReadState";\n',
-              'compact shared-state import',
-          )
-          compact = re.sub(r'type SourcePayload = .*?;\n', '', compact, count=1)
-          compact = replace_once(compact, 'const COMPACT_DASHBOARD_PATH = `${PROCUREMENT_API}/ui/dashboard/`;\n', '', 'compact dashboard const')
-          compact = replace_once(
-              compact,
-              '  const [dashboard, setDashboard] = useState<DashboardPayload | null>(null);\n  const [sourceNames, setSourceNames] = useState<string[]>([]);',
-              '  const [dashboard, setDashboard] = useState<DashboardPayload | null>(() => getProcurementSharedReadState<DashboardPayload>().dashboard);\n  const [sourceNames, setSourceNames] = useState<string[]>(() => getProcurementSharedReadState().sourceNames);',
-              'compact initial snapshots',
-          )
-          pattern = re.compile(r'\n  const refreshDashboard = useCallback\(\(\) => \{.*?\n  \}, \[\]\);\n\n  useEffect\(\(\) => \{\n    void fetch\(`\$\{PROCUREMENT_API\}/sources/`.*?\n  \}, \[\]\);', re.S)
-          replacement = '''
+          if 'subscribeProcurementSharedReadState' not in compact:
+              compact = replace_once(
+                  compact,
+                  'import { emitProcurementUiSync, PROCUREMENT_UI_SYNC_EVENT, ProcurementUiSyncDetail } from "./procurementUiSync";\n',
+                  'import { emitProcurementUiSync, PROCUREMENT_UI_SYNC_EVENT, ProcurementUiSyncDetail } from "./procurementUiSync";\nimport { getProcurementSharedReadState, subscribeProcurementSharedReadState } from "./procurementSharedReadState";\n',
+                  'compact shared-state import',
+              )
+              compact = re.sub(r'type SourcePayload = .*?;\n', '', compact, count=1)
+              compact = replace_once(compact, 'const COMPACT_DASHBOARD_PATH = `${PROCUREMENT_API}/ui/dashboard/`;\n', '', 'compact dashboard const')
+              compact = replace_once(
+                  compact,
+                  '  const [dashboard, setDashboard] = useState<DashboardPayload | null>(null);\n  const [sourceNames, setSourceNames] = useState<string[]>([]);',
+                  '  const [dashboard, setDashboard] = useState<DashboardPayload | null>(() => getProcurementSharedReadState<DashboardPayload>().dashboard);\n  const [sourceNames, setSourceNames] = useState<string[]>(() => getProcurementSharedReadState().sourceNames);',
+                  'compact initial snapshots',
+              )
+              pattern = re.compile(r'\n  const refreshDashboard = useCallback\(\(\) => \{.*?\n  \}, \[\]\);\n\n  useEffect\(\(\) => \{\n    void fetch\(`\$\{PROCUREMENT_API\}/sources/`.*?\n  \}, \[\]\);', re.S)
+              replacement = '''
 
   useEffect(() => subscribeProcurementSharedReadState((shared) => {
     setDashboard(shared.dashboard as DashboardPayload | null);
     setSourceNames(shared.sourceNames);
   }), []);'''
-          compact, count = pattern.subn(replacement, compact, count=1)
-          if count != 1:
-              raise SystemExit(f'compact duplicate fetch removal: expected 1 match, got {count}')
-          compact = replace_once(compact, '      if (getProcurementStableViewState().top === "dashboard") refreshDashboard();\n', '', 'compact state refresh removal')
-          compact = replace_once(compact, '      if (detail?.dashboard || getProcurementStableViewState().top === "dashboard") refreshDashboard();\n', '', 'compact sync refresh removal')
-          compact = replace_once(compact, '    refreshDashboard();\n', '', 'compact mount refresh removal')
-          compact = replace_once(compact, '  }, [noticePayload, sourceNames, refreshDashboard]);', '  }, [noticePayload, sourceNames]);', 'compact dependency removal')
-          if '/ui/dashboard/' in compact or 'fetch(`${PROCUREMENT_API}/sources/' in compact:
-              raise SystemExit('compact still owns dashboard/sources fetch')
-          compact_path.write_text(compact)
+              compact, count = pattern.subn(replacement, compact, count=1)
+              if count != 1:
+                  raise SystemExit(f'compact duplicate fetch removal: expected 1 match, got {count}')
+              compact = replace_once(compact, '      if (getProcurementStableViewState().top === "dashboard") refreshDashboard();\n', '', 'compact state refresh removal')
+              compact = replace_once(compact, '      if (detail?.dashboard || getProcurementStableViewState().top === "dashboard") refreshDashboard();\n', '', 'compact sync refresh removal')
+              compact = replace_once(compact, '    refreshDashboard();\n', '', 'compact mount refresh removal')
+              compact = replace_once(compact, '  }, [noticePayload, sourceNames, refreshDashboard]);', '  }, [noticePayload, sourceNames]);', 'compact dependency removal')
+              if '/ui/dashboard/' in compact or 'fetch(`${PROCUREMENT_API}/sources/' in compact:
+                  raise SystemExit('compact still owns dashboard/sources fetch')
+              compact_path.write_text(compact)
 
           urls_path = Path('backend/procurement/urls.py')
           urls = urls_path.read_text()
-          urls = replace_once(
-              urls,
-              'from .views_management_dashboard import unified_management_dashboard\n',
-              'from .views_management_dashboard import unified_management_dashboard\nfrom .views_notice_feed_read_model import bounded_notice_feed\n',
-              'notice read model import',
-          )
-          urls = replace_once(
-              urls,
-              '    path("ui/notices/", compact_notice_feed_with_dismissals, name="procurement-compact-notice-feed"),',
-              '    path("ui/notices/", bounded_notice_feed, name="procurement-compact-notice-feed"),',
-              'notice route',
-          )
-          urls_path.write_text(urls)
+          if 'from .views_notice_feed_read_model import bounded_notice_feed' not in urls:
+              urls = replace_once(
+                  urls,
+                  'from .views_management_dashboard import unified_management_dashboard\n',
+                  'from .views_management_dashboard import unified_management_dashboard\nfrom .views_notice_feed_read_model import bounded_notice_feed\n',
+                  'notice read model import',
+              )
+              urls = replace_once(
+                  urls,
+                  '    path("ui/notices/", compact_notice_feed_with_dismissals, name="procurement-compact-notice-feed"),',
+                  '    path("ui/notices/", bounded_notice_feed, name="procurement-compact-notice-feed"),',
+                  'notice route',
+              )
+              urls_path.write_text(urls)
 
           assert 'window.fetch =' not in Path('app/procurement/ProcurementWorkspaceV14.tsx').read_text()
           assert 'window.fetch =' not in Path('app/procurement/ProcurementStartupSessionResilience.tsx').read_text()
           PY
-      - name: Commit exact refactor
+      - name: Commit exact refactor if changed
         run: |
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git add app/procurement/ProcurementWorkspaceV13.tsx app/procurement/ProcurementCompactWorkspaceStableEnhancement.tsx backend/procurement/urls.py
           git diff --cached --check
+          if git diff --cached --quiet; then
+            echo "No refactor changes needed"
+            exit 0
+          fi
           git commit -m "Enforce single data owners and bounded notice feed"
           git push origin HEAD:fix/web-api-resilience-performance-v1-20260830
