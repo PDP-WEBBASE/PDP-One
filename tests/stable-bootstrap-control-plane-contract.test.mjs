@@ -60,16 +60,17 @@ test('compatibility classifier fails closed and separates match, safe reconcile,
   assert.match(compatibility, /Migration-stage compatibility manifests are never eligible for automatic Agent reconciliation/);
   assert.match(compatibility, /"Invoke-PDPOneZeroDowntimeRegistryDeployment\.ps1"/);
   assert.match(compatibility, /"Invoke-PDPOneScopedRegistryDeployment\.ps1"/);
+  assert.match(compatibility, /"PDPOne.DeploymentStateCompatibility\.ps1"/);
   assert.match(compatibility, /"Test-PDPOneGhcrCredential\.ps1"/);
   assert.match(compatibility, /"Set-PDPOnePersistentGhcrCredential\.ps1"/);
 });
 
-test('steady state protects all twelve installed bootstrap files', () => {
+test('steady state protects all thirteen installed bootstrap files', () => {
   assert.equal(contract.schema, 'pdp-one.deployment-agent-compatibility.v1');
   assert.equal(contract.protocol_version, 1);
   assert.equal(Object.hasOwn(contract, 'migration_stage'), false);
   assert.equal(Object.hasOwn(contract, 'migration_note'), false);
-  assert.equal(contract.bootstrap_files.length, 12);
+  assert.equal(contract.bootstrap_files.length, 13);
   assert.deepEqual(contract.bootstrap_files.map((entry) => entry.agent_file).sort(), [
     'Deployment-Agent.Standard.ps1',
     'Invoke-PDPOneDeployment.ps1',
@@ -78,6 +79,7 @@ test('steady state protects all twelve installed bootstrap files', () => {
     'Invoke-PDPOneScopedRegistryDeployment.ps1',
     'Invoke-PDPOneExactAgentReconciliation.ps1',
     'PDPOne.Common.ps1',
+    'PDPOne.DeploymentStateCompatibility.ps1',
     'PDPOne.OperationLock.ps1',
     'PDPOne.ReleaseManifest.ps1',
     'Test-PDPOneExactCandidateCompatibility.ps1',
