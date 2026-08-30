@@ -1,0 +1,40 @@
+name: Apply governed V9 filter store patch
+
+on:
+  push:
+    branches:
+      - feat/unified-web-chatgpt-architecture-v1-20260830
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: feat/unified-web-chatgpt-architecture-v1-20260830
+
+      - name: Apply bounded reviewed patch once
+        shell: bash
+        run: |
+          set -euo pipefail
+          patch_path=.pdpone/tmp/v9-filter-store.patch
+          if [ ! -f "$patch_path" ]; then
+            echo "Patch already consumed; no action required."
+            exit 0
+          fi
+          git apply --check "$patch_path"
+          git apply "$patch_path"
+          rm -f "$patch_path"
+          if grep -R -n '__pdpV9' app/procurement/ProcurementWorkspaceV13.tsx app/procurement/ProcurementWebPreviewV9Enhancement.tsx; then
+            echo "Legacy V9 window filter state remains in active owners." >&2
+            exit 1
+          fi
+          git config user.name "PDP One governed automation"
+          git config user.email "actions@users.noreply.github.com"
+          git add app/procurement/ProcurementWorkspaceV13.tsx app/procurement/ProcurementWebPreviewV9Enhancement.tsx app/procurement/procurementV9FilterState.ts "$patch_path"
+          git commit -m "Move V9 filter state out of window globals"
+          git push origin HEAD:feat/unified-web-chatgpt-architecture-v1-20260830
