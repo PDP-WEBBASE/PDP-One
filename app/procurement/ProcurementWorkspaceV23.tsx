@@ -2,9 +2,6 @@
 
 import dynamic from "next/dynamic";
 import ProcurementStartupSessionResilience from "./ProcurementStartupSessionResilience";
-import ProcurementPaginationStableEnhancement from "./ProcurementPaginationStableEnhancement";
-import ProcurementManagementPerformanceEnhancement from "./ProcurementManagementPerformanceEnhancement";
-import ProcurementNavigationReadCache from "./ProcurementNavigationReadCache";
 import ProcurementAnalysisContextInlineEnhancement from "./ProcurementAnalysisContextInlineEnhancement";
 import ProcurementFullTitleEnhancement from "./ProcurementFullTitleEnhancement";
 import ProcurementWorkflowActionsStableEnhancement from "./ProcurementWorkflowActionsStableEnhancement";
@@ -27,9 +24,6 @@ const ProcurementWebPreviewV9Enhancement = dynamic(
 export default function ProcurementWorkspaceV23() {
   return <ProcurementInitialRenderBoundary>
     <ProcurementStartupSessionResilience />
-    <ProcurementPaginationStableEnhancement />
-    <ProcurementManagementPerformanceEnhancement />
-    <ProcurementNavigationReadCache />
     <ProcurementAnalysisContextInlineEnhancement />
     <ProcurementWorkspaceV22 />
     <ProcurementManagementToolsStableEnhancement />

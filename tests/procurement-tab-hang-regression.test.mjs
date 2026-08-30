@@ -7,6 +7,8 @@ const root = process.cwd();
 const read = (relative) => fs.readFileSync(path.join(root, relative), "utf8");
 
 const composition = read("app/procurement/ProcurementWorkspaceV23.tsx");
+const workspace = read("app/procurement/ProcurementWorkspaceV13.tsx");
+const dataClient = read("app/procurement/procurementDataClient.ts");
 const pagination = read("app/procurement/ProcurementPaginationStableEnhancement.tsx");
 const compact = read("app/procurement/ProcurementCompactWorkspaceStableEnhancement.tsx");
 const actions = read("app/procurement/ProcurementWorkflowActionsStableEnhancement.tsx");
@@ -15,12 +17,15 @@ const viewState = read("app/procurement/procurementStableViewState.ts");
 const fullTitle = read("app/procurement/ProcurementFullTitleEnhancement.tsx");
 const workflowMetadata = read("backend/procurement/views_workflow_ui.py");
 
-test("V23 mounts one bounded list controller and no legacy high-volume action controllers", () => {
-  assert.match(composition, /ProcurementPaginationStableEnhancement/);
+test("V23 mounts the React-owned bounded workspace and no legacy high-volume fetch controller", () => {
+  assert.doesNotMatch(composition, /ProcurementPaginationStableEnhancement/);
+  assert.match(composition, /ProcurementWorkspaceV22/);
   assert.match(composition, /ProcurementWorkflowActionsStableEnhancement/);
   assert.match(composition, /ProcurementManagementToolsStableEnhancement/);
   assert.match(composition, /import\("\.\/ProcurementCompactWorkspaceStableEnhancement"\)/);
   assert.match(composition, /ssr:\s*false/);
+  assert.match(workspace, /procurementDataClient\.staleWhileRevalidate/);
+  assert.match(dataClient, /abortAllExcept/);
   assert.doesNotMatch(composition, /ProcurementWorkspaceEnhancements/);
   assert.doesNotMatch(composition, /ProcurementSubmissionResultsEnhancements/);
   assert.doesNotMatch(composition, /ProcurementTabCacheEnhancement/);
@@ -28,35 +33,24 @@ test("V23 mounts one bounded list controller and no legacy high-volume action co
 });
 
 test("top and workflow state comes from captured user intent, never class-name guessing", () => {
-  assert.match(viewState, /PROCUREMENT_STABLE_VIEW_STATE_EVENT/);
-  assert.match(viewState, /document\.addEventListener\("click"/);
-  assert.match(viewState, /TOP_BY_LABEL/);
-  assert.match(viewState, /WORKFLOW_BY_LABEL/);
+  assert.match(workspace, /setProcurementStableViewState\(\{ top: tab, workflow \}\)/);
   assert.doesNotMatch(viewState, /className/);
   assert.doesNotMatch(viewState, /MutationObserver/);
-  for (const source of [pagination, compact, actions]) {
-    assert.match(source, /getProcurementStableViewState/);
-    assert.doesNotMatch(source, /Boolean\(normalize\([^\n]*class/);
-  }
 });
 
 test("list loading is page-bounded, cached, and stale responses are context-checked", () => {
-  assert.match(pagination, /type PageSize = 30 \| 50 \| 100/);
-  assert.match(pagination, /page_size/);
-  assert.match(pagination, /CACHE_TTL_MS/);
-  assert.match(pagination, /stateStillMatches/);
-  assert.match(pagination, /next: null/);
-  assert.match(pagination, /requestAnimationFrame\(emitRefresh\)/);
-  assert.match(pagination, /pdp-procurement-direct-page-data/);
-  assert.doesNotMatch(pagination, /MutationObserver/);
-  assert.doesNotMatch(pagination, /setInterval/);
+  assert.match(workspace, /type PageSize = 30 \| 50 \| 100/);
+  assert.match(workspace, /pageSize:\s*noticePageSize/);
+  assert.match(dataClient, /cacheTtlMs/);
+  assert.match(dataClient, /Stale procurement response discarded/);
+  assert.match(dataClient, /abortAllExcept/);
+  assert.doesNotMatch(dataClient, /MutationObserver/);
+  assert.doesNotMatch(dataClient, /setInterval/);
 });
 
 test("workflow actions are current-page only and never scan the archive", () => {
   assert.match(actions, /WORKFLOW_META_API/);
   assert.match(actions, /slice\(0, 100\)/);
-  assert.match(actions, /pdp-procurement-compact-notice-data/);
-  assert.match(actions, /pdp-procurement-direct-page-data/);
   assert.doesNotMatch(actions, /MutationObserver/);
   assert.doesNotMatch(actions, /setInterval/);
   assert.doesNotMatch(actions, /fetchAll/);
@@ -76,7 +70,6 @@ test("management tools no longer observe or rescan the whole document", () => {
 test("compact and title presentation are event-driven without DOM observation loops", () => {
   assert.match(compact, /pdpCompactSignature/);
   assert.match(compact, /PROCUREMENT_STABLE_VIEW_STATE_EVENT/);
-  assert.match(compact, /pdp-procurement-compact-notice-data/);
   assert.match(compact, /requestAnimationFrame/);
   assert.doesNotMatch(compact, /MutationObserver/);
   assert.doesNotMatch(compact, /setInterval/);
@@ -87,7 +80,8 @@ test("compact and title presentation are event-driven without DOM observation lo
 });
 
 test("compact server feed preserves V13 recent/recommended predicates", () => {
-  assert.match(pagination, /normalizedItem\.first_seen_at\s*=\s*`\$\{publishedDate\}T12:00:00\+03:30`/);
-  assert.match(pagination, /normalizedItem\.is_recommended\s*=\s*true/);
-  assert.match(pagination, /COMPACT_NOTICE_PATH/);
+  assert.match(workspace, /workflowCode\(noticeView\)/);
+  assert.match(workspace, /noticeType:/);
+  assert.match(dataClient, /workflow/);
+  assert.match(dataClient, /\/api\/v1\/procurement\/ui\/notices\//);
 });

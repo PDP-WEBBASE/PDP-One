@@ -1,5 +1,6 @@
 from django.db import transaction
 from rest_framework import mixins
+from rest_framework.pagination import PageNumberPagination
 from rest_framework.viewsets import GenericViewSet
 
 from core.models import AuditEvent
@@ -10,6 +11,12 @@ from .serializers_extraction import ExtractionRunListSerializer, ExtractionRunSe
 from .tasks import run_extraction
 
 
+class ExtractionRunPagination(PageNumberPagination):
+    page_size = 20
+    page_size_query_param = "page_size"
+    max_page_size = 100
+
+
 class ExtractionRunViewSet(
     mixins.CreateModelMixin,
     mixins.RetrieveModelMixin,
@@ -18,6 +25,7 @@ class ExtractionRunViewSet(
 ):
     serializer_class = ExtractionRunSerializer
     permission_classes = [IsManagerOrReadOnly]
+    pagination_class = ExtractionRunPagination
     filterset_fields = ["status", "trigger", "requested_by"]
     ordering_fields = ["created_at", "started_at", "finished_at", "records_new", "records_failed"]
     ordering = ["-created_at"]

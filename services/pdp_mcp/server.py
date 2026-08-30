@@ -2,8 +2,9 @@
 
 The full existing server implementation is preserved byte-for-byte in
 ``server_core.py``. This wrapper registers passive route evidence tools,
-Zero-Loss integrity tools, and adds sanitized Public Edge diagnostics to the
-already-stable deployment status without changing existing tool signatures.
+Zero-Loss integrity tools, unified interaction tools, and adds sanitized Public
+Edge diagnostics to the already-stable deployment status without changing
+existing tool signatures.
 
 Static contract markers retained for existing repository tests:
 from server_core import api, mcp
@@ -44,6 +45,7 @@ redeploy_previous_commit_from_github
 """
 
 import server_core
+from interaction_tools import register_interaction_tools
 from mcp.types import ToolAnnotations
 from public_edge_status import wrap_get_queue_status
 from route_diagnostics_tools import register_route_diagnostics_tools
@@ -52,6 +54,7 @@ server_core.get_queue_status = wrap_get_queue_status(server_core.get_queue_statu
 api = server_core.api
 mcp = server_core.mcp
 register_route_diagnostics_tools(mcp)
+register_interaction_tools(mcp, api)
 
 
 @mcp.tool(

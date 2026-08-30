@@ -29,12 +29,24 @@ from .views_automation import ProcurementAutomationSettingsViewSet
 from .views_bulk_workflow import bulk_remove_workflow_items, compact_notice_feed_with_dismissals
 from .views_case_actions import ProcurementCaseViewSet
 from .views_case_followup import case_follow_up, follow_up_summary, follow_up_users
-from .views_compact_ui import bulk_dismiss_recommendations, compact_dashboard
+from .views_compact_ui import bulk_dismiss_recommendations
 from .views_contract_draft import contract_draft_preview, create_contract_draft_from_case
+from .views_dashboard_read_model import compact_dashboard_read_model
 from .views_direct import DirectOpportunityViewSet, OpportunityContactViewSet, OpportunityFollowUpViewSet, OpportunityResultViewSet
 from .views_documents import ProcurementSubmissionDocumentViewSet
 from .views_extraction import ExtractionRunViewSet
 from .views_extraction_observability import latest_extraction_run
+from .views_interaction_contract import (
+    arm_procurement_write,
+    command_select_notice,
+    confirm_pending_select,
+    disarm_procurement_write,
+    interaction_capabilities,
+    prepare_pending_select,
+    procurement_changes,
+    procurement_revision,
+    query_procurement_notices,
+)
 from .views_management_dashboard import unified_management_dashboard
 from .views_internet_usage import internet_usage_dashboard
 from .views_pagination_metrics import pagination_dashboard_metrics
@@ -67,10 +79,19 @@ urlpatterns = [
     path("", include(router.urls)),
     path("dashboard/", procurement_dashboard, name="procurement-dashboard"),
     path("ui/notices/", compact_notice_feed_with_dismissals, name="procurement-compact-notice-feed"),
-    path("ui/dashboard/", compact_dashboard, name="procurement-compact-dashboard"),
+    path("ui/dashboard/", compact_dashboard_read_model, name="procurement-compact-dashboard"),
     path("ui/workflow-page-metadata/", workflow_page_metadata, name="procurement-workflow-page-metadata"),
     path("ui/recommendations/dismiss-bulk/", bulk_dismiss_recommendations, name="procurement-bulk-dismiss-recommendations"),
     path("ui/workflow/remove-bulk/", bulk_remove_workflow_items, name="procurement-bulk-remove-workflow-items"),
+    path("interaction/capabilities/", interaction_capabilities, name="procurement-interaction-capabilities"),
+    path("interaction/query/notices/", query_procurement_notices, name="procurement-interaction-query-notices"),
+    path("interaction/revision/", procurement_revision, name="procurement-interaction-revision"),
+    path("interaction/changes/", procurement_changes, name="procurement-interaction-changes"),
+    path("interaction/write/arm/", arm_procurement_write, name="procurement-interaction-write-arm"),
+    path("interaction/write/disarm/", disarm_procurement_write, name="procurement-interaction-write-disarm"),
+    path("interaction/pending/select/", prepare_pending_select, name="procurement-interaction-pending-select"),
+    path("interaction/pending/select/confirm/", confirm_pending_select, name="procurement-interaction-pending-select-confirm"),
+    path("interaction/commands/select-notice/", command_select_notice, name="procurement-interaction-command-select-notice"),
     path("pagination-dashboard-metrics/", pagination_dashboard_metrics, name="procurement-pagination-dashboard-metrics"),
     path("management-dashboard/", unified_management_dashboard, name="procurement-management-dashboard"),
     path("internet-usage-dashboard/", internet_usage_dashboard, name="procurement-internet-usage-dashboard"),

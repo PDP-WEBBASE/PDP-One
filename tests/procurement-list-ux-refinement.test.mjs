@@ -11,8 +11,9 @@ const ux = read("app/procurement/ProcurementListUxRefinement.tsx");
 const base = read("app/procurement/ProcurementWorkspaceV13.tsx");
 const pagination = read("app/procurement/ProcurementPaginationStableEnhancement.tsx");
 
-test("refinement mounts last without replacing stable pagination or SSR boundaries", () => {
-  assert.match(composition, /ProcurementPaginationStableEnhancement/);
+test("refinement mounts after the React-owned workspace without restoring the legacy fetch interceptor", () => {
+  assert.doesNotMatch(composition, /ProcurementPaginationStableEnhancement/);
+  assert.match(composition, /ProcurementWorkspaceV22/);
   assert.match(composition, /ProcurementCompactWorkspaceStableEnhancement/);
   assert.match(composition, /ssr:\s*false/);
   assert.match(composition, /ProcurementListUxRefinement/);
@@ -27,18 +28,20 @@ test("all legacy procurement filters remain present and added filters stay bound
   assert.match(ux, /وضعیت مهلت/);
   assert.match(ux, /تاریخ انتشار/);
   assert.match(ux, /پdp|pdp/);
-  assert.match(pagination, /deadline_status/);
-  assert.match(pagination, /published_on/);
+  assert.match(base, /deadline_status/);
+  assert.match(base, /published_from/);
+  assert.match(base, /published_to/);
   assert.match(ux, /setAddedFilterGlobals\("", ""\)/);
 });
 
-test("publication date is presented as Jalali while API keeps Gregorian published_on", () => {
+test("publication date is presented as Jalali while API keeps Gregorian bounds", () => {
   assert.match(ux, /fa-IR|u-ca-persian/);
   assert.match(ux, /gregorianToJalali/);
   assert.match(ux, /jalaliToGregorian/);
   assert.match(ux, /۱۴۰۵\/۰۵\/۲۹/);
   assert.match(ux, /pdp-ux-native-date/);
-  assert.match(pagination, /params\.set\("published_on", filters\.publishedOn\)/);
+  assert.match(base, /published_from/);
+  assert.match(base, /published_to/);
 });
 
 test("source links use requested Setad-Hezareh-ParsNamad order and duplicate source/facts are suppressed", () => {

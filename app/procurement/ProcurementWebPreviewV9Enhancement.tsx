@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { emitProcurementUiSync, PROCUREMENT_UI_SYNC_EVENT } from "./procurementUiSync";
+import { getProcurementV9FilterState, patchProcurementV9FilterState, type ProcurementV9FilterState } from "./procurementV9FilterState";
 import {
   getProcurementStableViewState,
   PROCUREMENT_STABLE_VIEW_STATE_EVENT,
@@ -9,20 +10,6 @@ import {
 } from "./procurementStableViewState";
 
 type Option = { value: string; label: string };
-type V9Window = Window & {
-  __pdpPaginationPage?: number;
-  __pdpStableListCache?: Map<string, unknown>;
-  __pdpV9Sources?: string[];
-  __pdpV9Importance?: string[];
-  __pdpV9Urgency?: string[];
-  __pdpV9DeadlineStatuses?: string[];
-  __pdpV9PublishedFrom?: string;
-  __pdpV9PublishedTo?: string;
-  __pdpV9OpportunityTypes?: string[];
-  __pdpV9ActivityDomains?: string[];
-  __pdpV9Provinces?: string[];
-};
-
 const CLEAR_EVENT = "pdp-procurement-v9-clear-filters";
 const NOTICE_DATA_EVENT = "pdp-procurement-compact-notice-data";
 const DIRECT_DATA_EVENT = "pdp-procurement-direct-page-data";
@@ -134,12 +121,9 @@ function syncPresentation() {
 }
 
 let publishFrame = 0;
-function publish(next: Partial<V9Window>) {
+function publish(next: Partial<ProcurementV9FilterState>) {
+  patchProcurementV9FilterState(next);
   if (typeof window === "undefined") return;
-  const guarded = window as V9Window;
-  Object.assign(guarded, next);
-  guarded.__pdpPaginationPage = 1;
-  guarded.__pdpStableListCache?.clear();
   window.cancelAnimationFrame(publishFrame);
   publishFrame = window.requestAnimationFrame(() => {
     emitProcurementUiSync({ source: "procurement-web-preview-v9", bulkWorkspace: true });
@@ -225,10 +209,6 @@ function JalaliRange({ from, to, onChange }: { from: string; to: string; onChang
   return <label className="pdp-v9-field pdp-v9-date-field"><span>تاریخ انتشار</span><details ref={detailsRef} className="pdp-v9-select pdp-v9-calendar" onToggle={closeOthers}><summary>{display}</summary><div className="pdp-v9-calendar-panel"><header><button type="button" onClick={() => move(32)}>‹</button><b>{faMonth.format(anchor)}</b><button type="button" onClick={() => move(-32)}>›</button></header><div className="pdp-v9-week">{["ش", "ی", "د", "س", "چ", "پ", "ج"].map((day) => <span key={day}>{day}</span>)}</div><div className="pdp-v9-days">{Array.from({ length: leading }).map((_, index) => <i key={`blank-${index}`} />)}{days.map((day) => { const value = iso(day); const selected = value === from || value === to; const ranged = from && to && value > from && value < to; return <button type="button" key={value} className={selected ? "selected" : ranged ? "ranged" : ""} onClick={() => choose(value)}>{fa.format(dateParts(day).day)}</button>; })}</div><footer><button type="button" onClick={() => onChange("", "")}>پاک‌کردن بازه</button></footer></div></details></label>;
 }
 
-function browserState() {
-  return typeof window === "undefined" ? null : window as V9Window;
-}
-
 function storedSelection(key: string, fallback: string[]) {
   if (typeof window === "undefined") return fallback;
   try {
@@ -244,16 +224,16 @@ export function resetProcurementV9NativeFilters() {
 }
 
 export function ProcurementV9NativeFilters({ noticeTab }: { noticeTab: boolean }) {
-  const [sources, setSources] = useState<string[]>(() => browserState()?.__pdpV9Sources || sourceOptions.map((option) => option.value));
-  const [importance, setImportance] = useState<string[]>(() => browserState()?.__pdpV9Importance || importanceOptions.map((option) => option.value));
-  const [urgency, setUrgency] = useState<string[]>(() => browserState()?.__pdpV9Urgency || urgencyOptions.map((option) => option.value));
-  const [deadlines, setDeadlines] = useState<string[]>(() => browserState()?.__pdpV9DeadlineStatuses || deadlineOptions.map((option) => option.value));
-  const [publishedFrom, setPublishedFrom] = useState(() => browserState()?.__pdpV9PublishedFrom || "");
-  const [publishedTo, setPublishedTo] = useState(() => browserState()?.__pdpV9PublishedTo || "");
-  const [provinces, setProvinces] = useState<string[]>(() => browserState()?.__pdpV9Provinces || provinceOptions.map((option) => option.value));
+  const [sources, setSources] = useState<string[]>(() => getProcurementV9FilterState().sources.length ? getProcurementV9FilterState().sources : sourceOptions.map((option) => option.value));
+  const [importance, setImportance] = useState<string[]>(() => getProcurementV9FilterState().importance.length ? getProcurementV9FilterState().importance : importanceOptions.map((option) => option.value));
+  const [urgency, setUrgency] = useState<string[]>(() => getProcurementV9FilterState().urgency.length ? getProcurementV9FilterState().urgency : urgencyOptions.map((option) => option.value));
+  const [deadlines, setDeadlines] = useState<string[]>(() => getProcurementV9FilterState().deadlineStatuses.length ? getProcurementV9FilterState().deadlineStatuses : deadlineOptions.map((option) => option.value));
+  const [publishedFrom, setPublishedFrom] = useState(() => getProcurementV9FilterState().publishedFrom);
+  const [publishedTo, setPublishedTo] = useState(() => getProcurementV9FilterState().publishedTo);
+  const [provinces, setProvinces] = useState<string[]>(() => getProcurementV9FilterState().provinces.length ? getProcurementV9FilterState().provinces : provinceOptions.map((option) => option.value));
 
   useEffect(() => {
-    publish({ __pdpV9Sources: sources, __pdpV9Importance: importance, __pdpV9Urgency: urgency, __pdpV9DeadlineStatuses: deadlines, __pdpV9PublishedFrom: publishedFrom, __pdpV9PublishedTo: publishedTo, __pdpV9Provinces: provinces });
+    publish({ sources, importance, urgency, deadlineStatuses: deadlines, publishedFrom, publishedTo, provinces });
   }, [sources, importance, urgency, deadlines, publishedFrom, publishedTo, provinces]);
 
   useEffect(() => {
@@ -283,11 +263,11 @@ export function ProcurementV9NativeFilters({ noticeTab }: { noticeTab: boolean }
 }
 
 export function ProcurementV9NativeToolbar() {
-  const [opportunities, setOpportunities] = useState<string[]>(() => browserState()?.__pdpV9OpportunityTypes || storedSelection(TYPE_STORAGE_KEY, ["consulting", "epc"]));
-  const [domains, setDomains] = useState<string[]>(() => browserState()?.__pdpV9ActivityDomains || storedSelection(DOMAIN_STORAGE_KEY, activityDomainOptions.map((option) => option.value)));
+  const [opportunities, setOpportunities] = useState<string[]>(() => getProcurementV9FilterState().opportunityTypes.length ? getProcurementV9FilterState().opportunityTypes : storedSelection(TYPE_STORAGE_KEY, ["consulting", "epc"]));
+  const [domains, setDomains] = useState<string[]>(() => getProcurementV9FilterState().activityDomains.length ? getProcurementV9FilterState().activityDomains : storedSelection(DOMAIN_STORAGE_KEY, activityDomainOptions.map((option) => option.value)));
 
   useEffect(() => {
-    publish({ __pdpV9OpportunityTypes: opportunities, __pdpV9ActivityDomains: domains });
+    publish({ opportunityTypes: opportunities, activityDomains: domains });
     localStorage.setItem(TYPE_STORAGE_KEY, JSON.stringify(opportunities));
     localStorage.setItem(DOMAIN_STORAGE_KEY, JSON.stringify(domains));
   }, [opportunities, domains]);

@@ -40,7 +40,7 @@ test("workspace-level client-only presentation has an explicit initial-render bo
   }
 });
 
-test("procurement first paint waits for stable management shell without startup deadlock", () => {
+test("procurement first paint waits for structural shell readiness, never dashboard data success", () => {
   const workspace = fs.readFileSync(path.join(appRoot, "procurement", "ProcurementWorkspaceV23.tsx"), "utf8");
   const boundary = fs.readFileSync(path.join(appRoot, "procurement", "ProcurementInitialRenderBoundary.tsx"), "utf8");
   const management = fs.readFileSync(path.join(appRoot, "procurement", "ProcurementManagementToolsStableEnhancement.tsx"), "utf8");
@@ -48,10 +48,10 @@ test("procurement first paint waits for stable management shell without startup 
   assert.match(workspace, /import ProcurementInitialRenderBoundary/);
   assert.match(workspace, /<ProcurementInitialRenderBoundary>[\s\S]*?<ProcurementWorkspaceV22 \/>[\s\S]*?<\/ProcurementInitialRenderBoundary>/);
   assert.match(boundary, /data-pdp-initial-render-ready/);
-  assert.match(boundary, /\.pdp-compact-dashboard-box/);
+  assert.match(boundary, /#pdp-procurement-compact-dashboard-host/);
   assert.match(boundary, /data-pdp-management-tools-stable-ready/);
-  assert.match(boundary, /if \(!finalDashboard\) return false/);
-  assert.match(boundary, /if \(!managementToolsStable\)/);
+  assert.doesNotMatch(boundary, /querySelector\("\.pdp-compact-dashboard-box"\)/);
+  assert.match(boundary, /if \(!compactDashboardHost \|\| !managementToolsStable\)/);
   assert.match(boundary, /emitProcurementUiSync\(\{ source: "initial-render-boundary", dashboard: true, management: true \}\)/);
   assert.match(boundary, /visibility:\s*ready\s*\?\s*"visible"\s*:\s*"hidden"/);
 

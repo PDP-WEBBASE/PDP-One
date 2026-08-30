@@ -27,7 +27,9 @@ test("selecting a recommended notice is row-local, optimistic and rollback-safe"
   assert.match(handler, /case_stage:\s*"selected"/);
   assert.match(handler, /setNotices/);
   assert.match(handler, /previous/);
-  assert.match(handler, /emitProcurementUiSync/);
+  assert.match(handler, /procurementDataClient\.invalidate\(\)/);
+  assert.match(handler, /setViewRefresh/);
+  assert.match(handler, /setDashboardRefresh/);
   assert.doesNotMatch(handler, /setRefresh/);
   assert.doesNotMatch(handler, /location\.reload/);
 });
@@ -48,7 +50,9 @@ test("ordinary workspace mutations avoid global refresh and use local reconcilia
     assert.doesNotMatch(handler, /location\.reload/);
   }
 
-  assert.match(workspace, /is_recommended\s*&&\s*!stage/);
+  assert.match(workspace, /procurementDataClient\.invalidate/);
+  assert.match(workspace, /setViewRefresh/);
+  assert.match(workspace, /setDashboardRefresh/);
   assert.match(workspace, /PROCUREMENT_UI_SYNC_EVENT/);
   assert.match(workspace, /bulkWorkspace/);
 });
