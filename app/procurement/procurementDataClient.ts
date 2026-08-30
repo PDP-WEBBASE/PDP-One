@@ -192,8 +192,12 @@ export class ProcurementDataClient {
     const params = procurementQueryParams(context);
     const requestUrl = `${this.endpoint}?${params.toString()}`;
 
+    // DataClient owns same-context single-flight. The lower request governor key must include
+    // this generation so a newly started load can never reuse a Promise that belongs to an
+    // earlier aborted generation of the same notice context.
+    const requestGovernorKey = `notice:${key}:generation:${requestGeneration}`;
     const baseRequest = this.requestClient.getJson<ProcurementQueryPayload<T>>(requestUrl, {
-      key: `notice:${key}`,
+      key: requestGovernorKey,
       priority: "interactive",
       signal: controller.signal,
       retryTransient: true,
