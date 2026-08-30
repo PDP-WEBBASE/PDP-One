@@ -9,6 +9,7 @@ from rest_framework.response import Response
 
 from .analysis_run_service import active_run
 from .models import ProcurementCase, ProcurementNotice
+from .models_analysis_runs import ProcurementAnalysisRunItem
 from .models_direct import DirectOpportunity
 from .performance_metrics import instrument_procurement_endpoint
 from .views import NOTICE_RESULT_STAGES, NOTICE_SELECTED_STAGES, NOTICE_SUBMITTED_STAGES
@@ -16,6 +17,14 @@ from .views_recommended import latest_effective_recommended_notice_ids
 
 DASHBOARD_CACHE_KEY = "pdp:procurement:dashboard-read-model:v2"
 DASHBOARD_CACHE_TTL_SECONDS = 20
+
+OPEN_ANALYSIS_ITEM_STATUSES = [
+    ProcurementAnalysisRunItem.Status.PENDING,
+    ProcurementAnalysisRunItem.Status.CLAIMED,
+    ProcurementAnalysisRunItem.Status.SCREENED,
+    ProcurementAnalysisRunItem.Status.WAITING_DEEP_ANALYSIS,
+    ProcurementAnalysisRunItem.Status.RETRY,
+]
 
 
 def _breakdown(values: dict, prefix: str) -> dict[str, int]:
@@ -38,6 +47,38 @@ def _typed_count_fields(prefix: str, field: str, extra_filter: Q | None = None) 
             "pk",
             filter=base & Q(**{field: ProcurementNotice.NoticeType.INQUIRY}),
         ),
+    }
+
+
+def _analysis_remaining(run) -> dict[str, int]:
+    """Return a truthful split with at most one cold-path aggregate.
+
+    Newer runs may persist a by-type split in counters. Older runs do not. In
+    that case one grouped aggregate over the indexed run/status relation is
+    cheaper and more truthful than the former full statistics snapshot, and the
+    result is protected by the dashboard's short shared cache.
+    """
+
+    if run is None:
+        return {"total": 0, "tender": 0, "inquiry": 0}
+
+    counters = run.counters or {}
+    persisted = counters.get("remaining_by_type") or {}
+    tender = int(persisted.get("tender", 0) or 0)
+    inquiry = int(persisted.get("inquiry", 0) or 0)
+    total = int(counters.get("remaining", tender + inquiry) or 0)
+    if tender + inquiry == total and (total == 0 or tender or inquiry):
+        return {"total": total, "tender": tender, "inquiry": inquiry}
+
+    counts = run.items.filter(status__in=OPEN_ANALYSIS_ITEM_STATUSES).aggregate(
+        total=Count("pk"),
+        tender=Count("pk", filter=Q(notice__resolved_notice_type=ProcurementNotice.NoticeType.TENDER)),
+        inquiry=Count("pk", filter=Q(notice__resolved_notice_type=ProcurementNotice.NoticeType.INQUIRY)),
+    )
+    return {
+        "total": int(counts.get("total") or 0),
+        "tender": int(counts.get("tender") or 0),
+        "inquiry": int(counts.get("inquiry") or 0),
     }
 
 
@@ -142,16 +183,7 @@ def _dashboard_payload():
     ).order_by("next_action_due", "id")
 
     run = active_run()
-    counters = (run.counters or {}) if run else {}
-    analysis_remaining = {
-        "total": int(counters.get("remaining", 0) or 0),
-        "tender": int((counters.get("remaining_by_type") or {}).get("tender", 0) or 0),
-        "inquiry": int((counters.get("remaining_by_type") or {}).get("inquiry", 0) or 0),
-    }
-    # Older runs may not persist the by-type split. Preserve the exact total and
-    # avoid a live 80k-row recount on the interactive dashboard path.
-    if analysis_remaining["tender"] + analysis_remaining["inquiry"] == 0 and analysis_remaining["total"]:
-        analysis_remaining["inquiry"] = analysis_remaining["total"]
+    analysis_remaining = _analysis_remaining(run)
 
     return {
         "generated_at": now,
@@ -174,7 +206,7 @@ def _dashboard_payload():
         },
         "active_cases": _active_case_projection(active_cases, direct_case_items),
         "analysis": {
-            "basis": "persisted_run_counters" if run else "no_active_run",
+            "basis": "persisted_run_counters_or_bounded_split" if run else "no_active_run",
             "run_id": str(run.id) if run else None,
             "run_status": run.status if run else None,
         },
