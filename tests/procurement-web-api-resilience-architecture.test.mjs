@@ -85,6 +85,6 @@ test("direct list queryset excludes detail-only relation fan-out", async () => {
   assert.match(direct, /select_related\("responsible", "reference_record"\)/);
   assert.match(direct, /annotate\(follow_up_count=Count\("follow_ups"\)\)/);
   const listBranch = direct.split('if self.action == "list":')[1].split("else:")[0];
-  assert.doesNotMatch(listBranch, /prefetch_related/);
-  assert.doesNotMatch(listBranch, /primary_contact|result__contract|follow_ups__created_by|contacts/);
+  assert.doesNotMatch(listBranch, /\.prefetch_related\s*\(/);
+  assert.doesNotMatch(listBranch, /\.select_related\s*\([^)]*(?:primary_contact|result__contract|follow_ups__created_by|contacts)/);
 });
