@@ -3,6 +3,8 @@
 import { ReactNode, useEffect, useRef, useState } from "react";
 import { emitProcurementUiSync } from "./procurementUiSync";
 
+const MAX_STRUCTURAL_WAIT_MS = 1500;
+
 const metricLabels = [
   "کل فراخوان‌ها",
   "فراخوان جدید امروز",
@@ -43,11 +45,12 @@ export default function ProcurementInitialRenderBoundary({ children }: { childre
     const root = rootRef.current;
     if (!root) return;
 
+    const reveal = () => setReady(true);
     const checkReady = () => {
       const compactDashboardHost = root.querySelector("#pdp-procurement-compact-dashboard-host");
       const managementToolsStable = root.querySelector('[data-pdp-management-tools-stable-ready="1"]');
       if (!compactDashboardHost || !managementToolsStable) return false;
-      setReady(true);
+      reveal();
       return true;
     };
 
@@ -61,9 +64,22 @@ export default function ProcurementInitialRenderBoundary({ children }: { childre
     // One bounded initialization signal per mount. Never emit from the observer/check loop:
     // that would turn structural DOM mutations into repeated dashboard refresh/abort cycles.
     emitProcurementUiSync({ source: "initial-render-boundary", dashboard: true, management: true });
-    if (checkReady()) observer.disconnect();
+    if (checkReady()) {
+      observer.disconnect();
+      return;
+    }
 
-    return () => observer.disconnect();
+    // Availability must win over presentation stabilization. A missing enhancement marker
+    // must never leave the non-interactive approved loading shell over the real application.
+    const fallbackTimer = window.setTimeout(() => {
+      observer.disconnect();
+      reveal();
+    }, MAX_STRUCTURAL_WAIT_MS);
+
+    return () => {
+      observer.disconnect();
+      window.clearTimeout(fallbackTimer);
+    };
   }, []);
 
   return <div ref={rootRef} data-pdp-initial-render-ready={ready ? "1" : "0"} style={{ position: "relative", minHeight: "100vh" }}>
