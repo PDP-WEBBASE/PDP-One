@@ -2,27 +2,30 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import test from "node:test";
 
-const source = fs.readFileSync("app/procurement/ProcurementWorkspaceV14.tsx", "utf8");
+const v14 = fs.readFileSync("app/procurement/ProcurementWorkspaceV14.tsx", "utf8");
+const client = fs.readFileSync("app/procurement/procurementRequestClient.ts", "utf8");
 
-test("transient procurement fetch banner re-probes the exact failed endpoint and only clears the matching failure", () => {
-  assert.match(source, /const FETCH_RECOVERY_ATTEMPTS = 3/);
-  assert.match(source, /const FETCH_RECOVERY_DELAY_MS = 2_500/);
-  assert.match(source, /async function probeFailedEndpoint\(failure: FetchFailure\)/);
-  assert.match(source, /__pdpProcurementNativeFetch/);
-  assert.match(source, /nativeFetch\(failure\.url/);
-  assert.match(source, /response\.ok && \(response\.headers\.get\("content-type"\) \|\| ""\)\.includes\("application\/json"\)/);
-  assert.match(source, /current\?\.url === failure\.url && current\.at === failure\.at \? null : current/);
+test("active V14 cannot own global fetch timeout retry or recovery probing", () => {
+  assert.doesNotMatch(v14, /window\.fetch\s*=/);
+  assert.doesNotMatch(v14, /FETCH_RECOVERY_ATTEMPTS|FETCH_RECOVERY_DELAY_MS|probeFailedEndpoint|recoverBrowserSession/);
+  assert.doesNotMatch(v14, /AbortController|10_000/);
+  assert.doesNotMatch(v14, /window\.location\.reload\s*\(/);
 });
 
-test("fetch recovery remains bounded and persistent endpoint failures keep the warning visible", () => {
-  assert.match(source, /for \(let attempt = 1; attempt <= FETCH_RECOVERY_ATTEMPTS; attempt \+= 1\)/);
-  assert.match(source, /if \(attempt > 1\) await wait\(FETCH_RECOVERY_DELAY_MS\)/);
-  assert.doesNotMatch(source, /setFetchFailure\(null\);/);
+test("scoped request governor has bounded concurrency single-flight and one transient retry", () => {
+  assert.match(client, /const DEFAULT_CONCURRENCY = 3/);
+  assert.match(client, /private readonly inflight = new Map/);
+  assert.match(client, /const maxAttempts = options\.retryTransient === false \? 1 : 2/);
+  assert.match(client, /TRANSIENT_STATUSES = new Set\(\[502, 503, 504\]\)/);
+  assert.match(client, /priority: ProcurementRequestPriority/);
+  assert.doesNotMatch(client, /window\.fetch\s*=/);
+  assert.doesNotMatch(client, /10_000|FETCH_RECOVERY_ATTEMPTS/);
 });
 
-test("manual retry is targeted and no longer reloads the entire procurement workspace", () => {
-  assert.match(source, /const retryFailedEndpoint = async \(\) =>/);
-  assert.match(source, /onClick=\{\(\) => void retryFailedEndpoint\(\)\}/);
-  assert.match(source, /disabled=\{retryingFailure\}/);
-  assert.doesNotMatch(source, /window\.location\.reload\(\)/);
+test("circuit breaker decreases load after repeated endpoint failures", () => {
+  assert.match(client, /CIRCUIT_FAILURE_THRESHOLD = 3/);
+  assert.match(client, /CIRCUIT_OPEN_MS = 30_000/);
+  assert.match(client, /throw new Error\("procurement-circuit-open"\)/);
+  assert.match(client, /this\.recordSuccess\(url\)/);
+  assert.match(client, /this\.recordFailure\(url\)/);
 });
