@@ -8,27 +8,6 @@ export type ProcurementStableViewState = {
 
 export const PROCUREMENT_STABLE_VIEW_STATE_EVENT = "pdp-procurement-stable-view-state";
 
-const TOP_BY_LABEL = new Map<string, ProcurementStableTop>([
-  ["داشبورد مدیریتی", "dashboard"],
-  ["مناقصات", "tenders"],
-  ["استعلامات", "inquiries"],
-  ["ارجاعات مستقیم", "direct"],
-  ["مدیریت زیرسامانه", "management"],
-]);
-
-const WORKFLOW_BY_LABEL = new Map<string, ProcurementStableWorkflow>([
-  ["مناقصات ۳ روز اخیر", "all"],
-  ["استعلامات ۳ روز اخیر", "all"],
-  ["مناقصات اخیر", "all"],
-  ["استعلامات اخیر", "all"],
-  ["کل ارجاعات مستقیم", "all"],
-  ["ارجاعات مستقیم اخیر", "all"],
-  ["پیشنهادی", "recommended"],
-  ["منتخب", "selected"],
-  ["ارسال‌شده", "submitted"],
-  ["نتایج", "results"],
-]);
-
 const TOP_LABELS: Record<ProcurementStableTop, string> = {
   dashboard: "داشبورد مدیریتی",
   tenders: "مناقصات",
@@ -45,16 +24,13 @@ const WORKFLOW_LABELS: Record<ProcurementStableWorkflow, string> = {
   results: "نتایج",
 };
 
-function normalize(value: string | null | undefined) {
-  return String(value || "").replace(/\s+/g, " ").trim();
-}
-
 function defaultState(): ProcurementStableViewState {
   return { top: "dashboard", workflow: "all" };
 }
 
+// Read-only projection of the canonical React workspace state. This module is not
+// an independent navigation owner and never infers state from DOM text/clicks.
 let currentState: ProcurementStableViewState = defaultState();
-let legacyInstallerActive = false;
 
 export function getProcurementStableViewState(): ProcurementStableViewState {
   return { ...currentState };
@@ -72,6 +48,10 @@ export function stableWorkflowLabel(state = getProcurementStableViewState()) {
   return "";
 }
 
+/**
+ * Publish a projection from the canonical ProcurementWorkspace React state.
+ * Only the canonical owner should call this function.
+ */
 export function setProcurementStableViewState(next: ProcurementStableViewState) {
   if (currentState.top === next.top && currentState.workflow === next.workflow) return;
   currentState = { ...next };
@@ -81,26 +61,15 @@ export function setProcurementStableViewState(next: ProcurementStableViewState) 
 }
 
 /**
- * Historical compatibility only. New workspace code publishes explicit React state
- * through setProcurementStableViewState and must not depend on DOM label inference.
+ * Historical compatibility no-op.
+ *
+ * Session #122 used a capture-phase document click listener to infer application
+ * state from Persian button labels. That created a second navigation owner beside
+ * ProcurementWorkspace React state. Keep the export for old callers, but never
+ * install DOM-driven state mutation again.
  */
 export function installProcurementStableViewState() {
-  if (typeof document === "undefined" || legacyInstallerActive) return;
-  legacyInstallerActive = true;
-  document.addEventListener("click", (event) => {
-    const button = event.target instanceof Element ? event.target.closest("button") : null;
-    if (!button) return;
-    const label = normalize(button.textContent);
-    const top = TOP_BY_LABEL.get(label);
-    if (top) {
-      setProcurementStableViewState({ top, workflow: "all" });
-      return;
-    }
-    const workflow = WORKFLOW_BY_LABEL.get(label);
-    if (!workflow) return;
-    if (!["tenders", "inquiries", "direct"].includes(currentState.top)) return;
-    setProcurementStableViewState({ ...currentState, workflow });
-  }, true);
+  return;
 }
 
 export function procurementStableViewContextKey() {
