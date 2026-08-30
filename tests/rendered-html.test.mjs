@@ -32,26 +32,28 @@ test("renders development preview metadata", async () => {
   assert.match(await response.text(), developmentPreviewMeta);
 });
 
-test("routes procurement through V23 while preserving V22 to V13 and stable overlays", async () => {
+test("routes procurement through V23 while preserving the approved presentation layers and React-owned data flow", async () => {
   const page = await readFile(new URL("../app/procurement/page.tsx", import.meta.url), "utf8");
   const versions = new Map();
   for (let version = 13; version <= 23; version += 1) {
     versions.set(version, await readFile(new URL(`../app/procurement/ProcurementWorkspaceV${version}.tsx`, import.meta.url), "utf8"));
   }
-  const pagination = await readFile(new URL("../app/procurement/ProcurementPaginationStableEnhancement.tsx", import.meta.url), "utf8");
+  const dataClient = await readFile(new URL("../app/procurement/procurementDataClient.ts", import.meta.url), "utf8");
   const managementTools = await readFile(new URL("../app/procurement/ProcurementManagementToolsStableEnhancement.tsx", import.meta.url), "utf8");
   assert.match(page, /ProcurementWorkspaceV23/);
   assert.match(versions.get(23), /ProcurementWorkspaceV22/);
-  assert.match(versions.get(23), /ProcurementPaginationStableEnhancement/);
+  assert.doesNotMatch(versions.get(23), /ProcurementPaginationStableEnhancement/);
   assert.match(versions.get(23), /ProcurementManagementToolsStableEnhancement/);
   assert.doesNotMatch(versions.get(23), /ProcurementWorkspaceEnhancements/);
   assert.doesNotMatch(versions.get(23), /ProcurementSubmissionResultsEnhancements/);
   for (let version = 22; version > 13; version -= 1) {
     assert.match(versions.get(version), new RegExp(`ProcurementWorkspaceV${version - 1}`));
   }
-  assert.match(pagination, /COMPACT_NOTICE_PATH/);
-  assert.match(pagination, /workflowCode/);
-  assert.doesNotMatch(pagination, /fetchAll/);
+  assert.match(versions.get(13), /procurementDataClient\.staleWhileRevalidate/);
+  assert.match(dataClient, /\/api\/v1\/procurement\/ui\/notices\//);
+  assert.match(dataClient, /abortAllExcept/);
+  assert.match(dataClient, /Stale procurement response discarded/);
+  assert.doesNotMatch(dataClient, /window\.fetch\s*=/);
   assert.doesNotMatch(versions.get(22), /fetchCompleteRecommended/);
   assert.match(managementTools, /ProcurementAnalysisCenterPanel/);
   assert.match(managementTools, /AutomationControlPanel/);
@@ -69,12 +71,13 @@ test("routes procurement through V23 while preserving V22 to V13 and stable over
   assert.doesNotMatch(versions.get(13), /const extractionHistory\s*=/);
 });
 
-test("loads live procurement collections and performs real writes", async () => {
+test("loads bounded live procurement collections and performs real writes", async () => {
   const source = await readFile(new URL("../app/procurement/ProcurementWorkspaceV13.tsx", import.meta.url), "utf8");
+  const dataClient = await readFile(new URL("../app/procurement/procurementDataClient.ts", import.meta.url), "utf8");
   assert.match(source, /const PROCUREMENT_API = `\$\{API_BASE\}\/procurement`/);
-  assert.match(source, /\$\{PROCUREMENT_API\}\/notices\//);
+  assert.match(dataClient, /\/api\/v1\/procurement\/ui\/notices\//);
   assert.match(source, /\$\{PROCUREMENT_API\}\/direct-opportunities\//);
-  assert.match(source, /\$\{PROCUREMENT_API\}\/dashboard\//);
+  assert.match(source, /\$\{PROCUREMENT_API\}\/ui\/dashboard\//);
   assert.match(source, /\$\{PROCUREMENT_API\}\/extraction-runs\//);
   assert.match(source, /\$\{PROCUREMENT_API\}\/automation-settings\//);
   assert.match(source, /method:\s*"POST"/);
@@ -101,7 +104,8 @@ test("keeps approved V12 structure and compact list enhancements", async () => {
 
 test("does not silently replace API failures with sample procurement data", async () => {
   const source = await readFile(new URL("../app/procurement/ProcurementWorkspaceV13.tsx", import.meta.url), "utf8");
-  assert.match(source, /setMode\(error instanceof Error && error\.message === "unauthorized" \? "unauthorized" : "error"\)/);
+  assert.match(source, /setMode\("error"\)/);
+  assert.match(source, /آخرین داده سالم حفظ شد/);
   assert.match(source, /داده نمونه نمایش داده نمی‌شود/);
   assert.doesNotMatch(source, /fallbackNotices/);
   assert.doesNotMatch(source, /sampleNotices/);
