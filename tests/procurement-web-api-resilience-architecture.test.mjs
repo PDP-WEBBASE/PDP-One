@@ -78,3 +78,13 @@ test("revision sync has one visible-view owner and invalidates scoped read cache
   assert.doesNotMatch(v14, /interaction\/revision\//);
   assert.doesNotMatch(startup, /interaction\/revision\//);
 });
+
+test("direct list queryset excludes detail-only relation fan-out", async () => {
+  const direct = await read("backend/procurement/views_direct.py");
+  assert.match(direct, /if self\.action == "list":/);
+  assert.match(direct, /select_related\("responsible", "reference_record"\)/);
+  assert.match(direct, /annotate\(follow_up_count=Count\("follow_ups"\)\)/);
+  const listBranch = direct.split('if self.action == "list":')[1].split("else:")[0];
+  assert.doesNotMatch(listBranch, /prefetch_related/);
+  assert.doesNotMatch(listBranch, /primary_contact|result__contract|follow_ups__created_by|contacts/);
+});
