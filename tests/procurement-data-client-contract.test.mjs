@@ -28,8 +28,24 @@ test("query key includes all context dimensions needed for deterministic cache o
   }
 });
 
-test("request governor single-flight key is isolated by data-client generation", () => {
-  assert.match(source, /const requestGovernorKey = `notice:\$\{key\}:generation:\$\{requestGeneration\}`/);
-  assert.match(source, /key: requestGovernorKey/);
-  assert.doesNotMatch(source, /key: `notice:\$\{key\}`/);
+test("uncached active notice load enters browser fetch without a nested pre-network governor", () => {
+  assert.doesNotMatch(source, /ProcurementRequestClient/);
+  assert.match(source, /private readonly fetchImpl: typeof fetch/);
+  assert.match(source, /this\.fetchImpl\(requestUrl/);
+  assert.match(source, /private async fetchNoticePayload/);
+});
+
+test("notice retry policy is bounded and abort-aware", () => {
+  assert.match(source, /TRANSIENT_STATUSES = new Set\(\[502, 503, 504\]\)/);
+  assert.match(source, /for \(let attempt = 1; attempt <= 2; attempt \+= 1\)/);
+  assert.match(source, /if \(error instanceof DOMException && error\.name === "AbortError"\) throw error/);
+  assert.match(source, /retryableNetworkError = error instanceof TypeError/);
+  assert.match(source, /await waitForRetry\(RETRY_DELAY_MS, signal\)/);
+});
+
+test("notice owner retains active-view cancellation and generation isolation", () => {
+  assert.match(source, /const existing = this\.inflight\.get\(key\)/);
+  assert.match(source, /this\.controllers\.get\(key\)\?\.abort\(\)/);
+  assert.match(source, /this\.generation\.set\(key, \(this\.generation\.get\(key\) \|\| 0\) \+ 1\)/);
+  assert.match(source, /this\.generation\.get\(key\) !== requestGeneration/);
 });
