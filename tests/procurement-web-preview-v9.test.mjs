@@ -70,9 +70,9 @@ test("V16 applies the shared layout to direct referrals without a separate sugge
   assert.match(workspace, /tab === "direct" && <section data-pdp-shared-notice-layout="direct">/);
   assert.match(workspace, /return "ارجاعات مستقیم اخیر"/);
   assert.match(workspace, /standardViews\.filter\(\(\[view\]\) => view !== "recommended"\)/);
-  assert.match(workspace, /if \(view === "all"\) return recommendedDirectStages\.has\(item\.stage\)/);
+  assert.match(workspace, /function directWorkflowCode\(view: WorkflowView\)[\s\S]*view === "all" \? "recommended" : view/);
+  assert.match(workspace, /params\.set\("workflow_view", directWorkflowCode\(directView\)\)/);
   assert.match(stableView, /\["ارجاعات مستقیم اخیر", "all"\]/);
-  assert.match(pagination, /state\.workflow === "all" \|\| state\.workflow === "recommended"/);
   assert.match(actions, /state\.workflow === "all"/);
   assert.match(directApi, /DirectOpportunity\.Stage\.NEW/);
 });
