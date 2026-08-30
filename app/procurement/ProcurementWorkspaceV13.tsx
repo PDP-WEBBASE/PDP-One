@@ -9,6 +9,7 @@ import {
   resetProcurementV9NativeFilters,
 } from "./ProcurementWebPreviewV9Enhancement";
 import { procurementDataClient, type ProcurementQueryContext } from "./procurementDataClient";
+import { getProcurementV9FilterState } from "./procurementV9FilterState";
 import { setProcurementStableViewState } from "./procurementStableViewState";
 import { emitProcurementUiSync, PROCUREMENT_UI_SYNC_EVENT, ProcurementUiSyncDetail } from "./procurementUiSync";
 import styles from "./workspace-v4.module.css";
@@ -150,18 +151,6 @@ type ScheduleState = {
 
 type DetailItem = { kind: "notice"; item: ApiNotice } | { kind: "direct"; item: ApiDirectOpportunity } | null;
 type DirectCacheEntry = { payload: { count: number; results: ApiDirectOpportunity[] }; fetchedAt: number };
-type V9FilterWindow = Window & {
-  __pdpV9Sources?: string[];
-  __pdpV9Importance?: string[];
-  __pdpV9Urgency?: string[];
-  __pdpV9DeadlineStatuses?: string[];
-  __pdpV9PublishedFrom?: string;
-  __pdpV9PublishedTo?: string;
-  __pdpV9OpportunityTypes?: string[];
-  __pdpV9ActivityDomains?: string[];
-  __pdpV9Provinces?: string[];
-};
-
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "/api/v1";
 const PROCUREMENT_API = `${API_BASE}/procurement`;
 const fa = new Intl.NumberFormat("fa-IR");
@@ -315,18 +304,17 @@ function scheduleFromAutomation(current: ScheduleState, settings: ApiAutomationS
 }
 
 function advancedFilters() {
-  if (typeof window === "undefined") return {};
-  const guarded = window as V9FilterWindow;
+  const filters = getProcurementV9FilterState();
   return {
-    sources: guarded.__pdpV9Sources || [],
-    provinces: guarded.__pdpV9Provinces || [],
-    importance: guarded.__pdpV9Importance || [],
-    urgency: guarded.__pdpV9Urgency || [],
-    deadlineStatuses: guarded.__pdpV9DeadlineStatuses || [],
-    publishedFrom: guarded.__pdpV9PublishedFrom || "",
-    publishedTo: guarded.__pdpV9PublishedTo || "",
-    opportunityTypes: guarded.__pdpV9OpportunityTypes || [],
-    activityDomains: guarded.__pdpV9ActivityDomains || [],
+    sources: filters.sources,
+    provinces: filters.provinces,
+    importance: filters.importance,
+    urgency: filters.urgency,
+    deadlineStatuses: filters.deadlineStatuses,
+    publishedFrom: filters.publishedFrom,
+    publishedTo: filters.publishedTo,
+    opportunityTypes: filters.opportunityTypes,
+    activityDomains: filters.activityDomains,
   };
 }
 
