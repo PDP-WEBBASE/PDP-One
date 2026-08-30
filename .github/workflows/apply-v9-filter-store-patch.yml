@@ -26,6 +26,7 @@ jobs:
             echo "Patch already consumed; no action required."
             exit 0
           fi
+          sed -i 's/@@ -0,0 +1,55 @@/@@ -0,0 +1,53 @@/' "$patch_path"
           git apply --check "$patch_path"
           git apply "$patch_path"
           rm -f "$patch_path"
