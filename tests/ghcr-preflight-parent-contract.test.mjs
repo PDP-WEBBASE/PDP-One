@@ -12,7 +12,8 @@ test("GHCR preflight failures preserve parent exit-code/report handling on Windo
   assert.match(catchBlock, /Write-Output \$report\.error/);
   assert.match(catchBlock, /exit 1/);
 
-  assert.match(managed, /\$credentialOutput\s*=\s*@\(& powershell\.exe[\s\S]*?Test-PDPOneGhcrCredential/);
+  assert.match(managed, /\$credentialPreflightScript\s*=\s*Join-Path \$PSScriptRoot "Test-PDPOneGhcrCredential\.ps1"/);
+  assert.match(managed, /\$credentialOutput\s*=\s*@\(& powershell\.exe[\s\S]*?-File \$credentialPreflightScript/);
   assert.match(managed, /\$credentialExitCode\s*=\s*\$LASTEXITCODE/);
   assert.match(managed, /if \(\$credentialExitCode -ne 0\)[\s\S]*?\$failureReportPath/);
   assert.match(managed, /stage = "ghcr-credential-preflight"/);
