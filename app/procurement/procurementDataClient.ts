@@ -1,5 +1,3 @@
-import { ProcurementRequestClient } from "./procurementRequestClient";
-
 export type ProcurementNoticeType = "tender" | "inquiry";
 export type ProcurementWorkflow = "recent" | "recommended" | "selected" | "submitted" | "results";
 
@@ -37,6 +35,8 @@ export type ProcurementDataClientOptions = {
   cacheTtlMs?: number;
   fetchImpl?: typeof fetch;
   now?: () => number;
+  // Retained for constructor compatibility. Notice ownership is active-view scoped and
+  // abortAllExcept keeps the notice path at one current context rather than a shared queue.
   concurrency?: number;
 };
 
@@ -47,6 +47,8 @@ const WORKFLOW_ALLOWLIST = new Set<ProcurementWorkflow>([
   "submitted",
   "results",
 ]);
+const TRANSIENT_STATUSES = new Set([502, 503, 504]);
+const RETRY_DELAY_MS = 750;
 
 export function normalizeProcurementWorkflow(value: string): ProcurementWorkflow {
   return WORKFLOW_ALLOWLIST.has(value as ProcurementWorkflow)
@@ -97,11 +99,26 @@ export function procurementQueryParams(context: ProcurementQueryContext) {
   return params;
 }
 
+function abortError() {
+  return new DOMException("Request aborted", "AbortError");
+}
+
+function waitForRetry(milliseconds: number, signal: AbortSignal) {
+  if (signal.aborted) return Promise.reject(abortError());
+  return new Promise<void>((resolve, reject) => {
+    const timer = globalThis.setTimeout(resolve, milliseconds);
+    signal.addEventListener("abort", () => {
+      globalThis.clearTimeout(timer);
+      reject(abortError());
+    }, { once: true });
+  });
+}
+
 export class ProcurementDataClient {
   private readonly endpoint: string;
   private readonly cacheTtlMs: number;
   private readonly now: () => number;
-  private readonly requestClient: ProcurementRequestClient;
+  private readonly fetchImpl: typeof fetch;
   private readonly cache = new Map<string, ProcurementCacheEntry>();
   private readonly inflight = new Map<string, Promise<ProcurementQueryPayload>>();
   private readonly controllers = new Map<string, AbortController>();
@@ -111,11 +128,7 @@ export class ProcurementDataClient {
     this.endpoint = options.endpoint || "/api/v1/procurement/ui/notices/";
     this.cacheTtlMs = options.cacheTtlMs ?? 60_000;
     this.now = options.now || Date.now;
-    this.requestClient = new ProcurementRequestClient({
-      concurrency: options.concurrency ?? 3,
-      fetchImpl: options.fetchImpl,
-      now: this.now,
-    });
+    this.fetchImpl = options.fetchImpl || fetch;
   }
 
   getCached<T = unknown>(context: ProcurementQueryContext): ProcurementLoadResult<T> | null {
@@ -181,6 +194,37 @@ export class ProcurementDataClient {
     this.generation.set(key, (this.generation.get(key) || 0) + 1);
   }
 
+  private async fetchNoticePayload<T>(requestUrl: string, signal: AbortSignal): Promise<ProcurementQueryPayload<T>> {
+    let lastError: unknown;
+    for (let attempt = 1; attempt <= 2; attempt += 1) {
+      if (signal.aborted) throw abortError();
+      try {
+        const response = await this.fetchImpl(requestUrl, {
+          method: "GET",
+          credentials: "include",
+          headers: { Accept: "application/json" },
+          signal,
+        });
+        if (TRANSIENT_STATUSES.has(response.status) && attempt < 2) {
+          await waitForRetry(RETRY_DELAY_MS, signal);
+          continue;
+        }
+        if (!response.ok) throw new Error(`procurement-http-${response.status}`);
+        return await response.json() as ProcurementQueryPayload<T>;
+      } catch (error) {
+        if (error instanceof DOMException && error.name === "AbortError") throw error;
+        lastError = error;
+        const retryableNetworkError = error instanceof TypeError;
+        if (attempt < 2 && retryableNetworkError) {
+          await waitForRetry(RETRY_DELAY_MS, signal);
+          continue;
+        }
+        throw error;
+      }
+    }
+    throw lastError instanceof Error ? lastError : new Error("procurement-request-failed");
+  }
+
   private fetchKey<T>(key: string, context: ProcurementQueryContext): Promise<ProcurementQueryPayload<T>> {
     const existing = this.inflight.get(key) as Promise<ProcurementQueryPayload<T>> | undefined;
     if (existing) return existing;
@@ -192,16 +236,11 @@ export class ProcurementDataClient {
     const params = procurementQueryParams(context);
     const requestUrl = `${this.endpoint}?${params.toString()}`;
 
-    // DataClient owns same-context single-flight. The lower request governor key must include
-    // this generation so a newly started load can never reuse a Promise that belongs to an
-    // earlier aborted generation of the same notice context.
-    const requestGovernorKey = `notice:${key}:generation:${requestGeneration}`;
-    const baseRequest = this.requestClient.getJson<ProcurementQueryPayload<T>>(requestUrl, {
-      key: requestGovernorKey,
-      priority: "interactive",
-      signal: controller.signal,
-      retryTransient: true,
-    }).then((payload) => {
+    // ProcurementDataClient is the single owner of notice reads. An uncached active-view
+    // load enters browser fetch directly; it cannot be rejected by a second queued/circuit
+    // governor before a Network request exists. Context single-flight, active-view abort,
+    // stale-generation rejection and one bounded transient retry remain enforced here.
+    const baseRequest = this.fetchNoticePayload<T>(requestUrl, controller.signal).then((payload) => {
       if (this.generation.get(key) !== requestGeneration) {
         throw new DOMException("Stale procurement response discarded", "AbortError");
       }
