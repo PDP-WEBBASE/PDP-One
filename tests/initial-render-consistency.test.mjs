@@ -51,9 +51,20 @@ test("procurement first paint waits for structural shell readiness, never dashbo
   assert.match(boundary, /#pdp-procurement-compact-dashboard-host/);
   assert.match(boundary, /data-pdp-management-tools-stable-ready/);
   assert.doesNotMatch(boundary, /querySelector\("\.pdp-compact-dashboard-box"\)/);
-  assert.match(boundary, /if \(!compactDashboardHost \|\| !managementToolsStable\)/);
+  assert.match(boundary, /if \(!compactDashboardHost \|\| !managementToolsStable\) return false/);
   assert.match(boundary, /emitProcurementUiSync\(\{ source: "initial-render-boundary", dashboard: true, management: true \}\)/);
   assert.match(boundary, /visibility:\s*ready\s*\?\s*"visible"\s*:\s*"hidden"/);
+
+  const initialSyncCalls = boundary.match(/emitProcurementUiSync\(\{ source: "initial-render-boundary", dashboard: true, management: true \}\)/g) || [];
+  assert.equal(initialSyncCalls.length, 1, "initial-render boundary must emit at most one dashboard/management initialization sync per mount");
+  const checkReadyBlock = boundary.match(/const checkReady = \(\) => \{[\s\S]*?\n    \};/)?.[0] || "";
+  assert.ok(checkReadyBlock, "expected a checkReady block");
+  assert.doesNotMatch(checkReadyBlock, /emitProcurementUiSync/, "readiness checks and MutationObserver callbacks must never emit refresh events");
+  assert.match(
+    boundary,
+    /observer\.observe\([\s\S]*?emitProcurementUiSync\(\{ source: "initial-render-boundary", dashboard: true, management: true \}\)/,
+    "observer must be armed before the single bounded initialization sync so synchronous structural changes cannot be missed",
+  );
 
   assert.match(management, /STABLE_READY_ATTRIBUTE\s*=\s*"data-pdp-management-tools-stable-ready"/);
   assert.match(management, /if \(!root \|\| !nav\) return false/);

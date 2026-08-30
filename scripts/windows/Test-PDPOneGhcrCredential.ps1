@@ -112,7 +112,11 @@ try {
     $report.error = [string]$_.Exception.Message
     $report.checked_at = [DateTime]::UtcNow.ToString("o")
     $report | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $healthPath -Encoding UTF8
-    Write-Error $report.error
+    # This helper is invoked by a fail-closed parent that inspects LASTEXITCODE.
+    # Do not write expected preflight failures to the Error stream: Windows
+    # PowerShell 5.1 can promote redirected native/child stderr to a terminating
+    # error before the parent records the exit code and durable deployment report.
+    Write-Output $report.error
     exit 1
 } finally {
     if ($loggedIn) { [void](Invoke-PDPOneDockerQuiet -Arguments @("logout", "ghcr.io")) }

@@ -46,19 +46,23 @@ export default function ProcurementInitialRenderBoundary({ children }: { childre
     const checkReady = () => {
       const compactDashboardHost = root.querySelector("#pdp-procurement-compact-dashboard-host");
       const managementToolsStable = root.querySelector('[data-pdp-management-tools-stable-ready="1"]');
-      if (!compactDashboardHost || !managementToolsStable) {
-        emitProcurementUiSync({ source: "initial-render-boundary", dashboard: true, management: true });
-        return false;
-      }
+      if (!compactDashboardHost || !managementToolsStable) return false;
       setReady(true);
       return true;
     };
 
     if (checkReady()) return;
+
     const observer = new MutationObserver(() => {
       if (checkReady()) observer.disconnect();
     });
     observer.observe(root, { childList: true, subtree: true, attributes: true, attributeFilter: ["data-pdp-management-tools-stable-ready"] });
+
+    // One bounded initialization signal per mount. Never emit from the observer/check loop:
+    // that would turn structural DOM mutations into repeated dashboard refresh/abort cycles.
+    emitProcurementUiSync({ source: "initial-render-boundary", dashboard: true, management: true });
+    if (checkReady()) observer.disconnect();
+
     return () => observer.disconnect();
   }, []);
 

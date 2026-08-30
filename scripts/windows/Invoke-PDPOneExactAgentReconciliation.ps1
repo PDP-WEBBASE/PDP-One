@@ -21,7 +21,10 @@ $ExpectedAgentFiles = @(
     "PDPOne.Common.ps1",
     "PDPOne.OperationLock.ps1",
     "PDPOne.ReleaseManifest.ps1",
-    "Test-PDPOneExactCandidateCompatibility.ps1"
+    "PDPOne.DeploymentStateCompatibility.ps1",
+    "Test-PDPOneExactCandidateCompatibility.ps1",
+    "Test-PDPOneGhcrCredential.ps1",
+    "Set-PDPOnePersistentGhcrCredential.ps1"
 )
 $secretPath = Join-Path $AgentRoot "secrets\github-token.dpapi"
 $stageRoot = Join-Path $AgentRoot ("downloads\exact-agent-reconcile-" + $DeploymentId)
