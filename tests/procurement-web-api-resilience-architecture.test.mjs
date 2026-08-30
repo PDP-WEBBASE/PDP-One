@@ -51,3 +51,30 @@ test("request governor is bounded single-flight and circuit protected", async ()
   assert.match(client, /maxAttempts = options\.retryTransient === false \? 1 : 2/);
   assert.doesNotMatch(client, /window\.fetch\s*=/);
 });
+
+test("management failures are degraded state, never silent empty-state replacement", async () => {
+  const workspace = await read("app/procurement/ProcurementWorkspaceV13.tsx");
+  assert.match(workspace, /Promise\.allSettled/);
+  assert.match(workspace, /if \(sourceResult\.status === "fulfilled"\) setSources\(sourceResult\.value\); else failures \+= 1/);
+  assert.match(workspace, /if \(runResult\.status === "fulfilled"\) setExtractionRuns\(runResult\.value\); else failures \+= 1/);
+  assert.match(workspace, /بخشی از اطلاعات مدیریت زیرسامانه موقتاً بارگذاری نشد/);
+  assert.doesNotMatch(workspace, /else\s+setSources\(\[\]\)/);
+  assert.doesNotMatch(workspace, /else\s+setExtractionRuns\(\[\]\)/);
+});
+
+test("revision sync has one visible-view owner and invalidates scoped read caches", async () => {
+  const [workspace, compact, v14, startup] = await Promise.all([
+    read("app/procurement/ProcurementWorkspaceV13.tsx"),
+    read("app/procurement/ProcurementCompactWorkspaceStableEnhancement.tsx"),
+    read("app/procurement/ProcurementWorkspaceV14.tsx"),
+    read("app/procurement/ProcurementStartupSessionResilience.tsx"),
+  ]);
+  const revisionCalls = workspace.match(/interaction\/revision\//g) || [];
+  assert.equal(revisionCalls.length, 1);
+  assert.match(workspace, /document\.visibilityState !== "visible"/);
+  assert.match(workspace, /procurementDataClient\.invalidate\(\)/);
+  assert.match(workspace, /directCache\.current\.clear\(\)/);
+  assert.doesNotMatch(compact, /interaction\/revision\//);
+  assert.doesNotMatch(v14, /interaction\/revision\//);
+  assert.doesNotMatch(startup, /interaction\/revision\//);
+});
