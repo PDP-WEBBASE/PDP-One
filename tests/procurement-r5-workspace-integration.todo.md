@@ -1,1 +1,0 @@
-R5 integration checkpoint: directWorkflowSemantics.ts defines the canonical unfiltered Direct recent projection. ProcurementWorkspaceV13 integration is pending within this same workstream before final acceptance; no deployment/closure may treat this note as evidence of completion.
