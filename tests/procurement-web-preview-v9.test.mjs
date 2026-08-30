@@ -6,6 +6,8 @@ const ui = readFileSync("app/procurement/ProcurementWebPreviewV9Enhancement.tsx"
 const composition = readFileSync("app/procurement/ProcurementWorkspaceV23.tsx", "utf8");
 const workspace = readFileSync("app/procurement/ProcurementWorkspaceV13.tsx", "utf8");
 const pagination = readFileSync("app/procurement/ProcurementPaginationStableEnhancement.tsx", "utf8");
+const filterState = readFileSync("app/procurement/procurementV9FilterState.ts", "utf8");
+const directSemantics = readFileSync("app/procurement/directWorkflowSemantics.ts", "utf8");
 const compactApi = readFileSync("backend/procurement/views_compact_ui.py", "utf8");
 const directApi = readFileSync("backend/procurement/views_direct.py", "utf8");
 const stableView = readFileSync("app/procurement/procurementStableViewState.ts", "utf8");
@@ -44,18 +46,20 @@ test("V9 exposes the approved opportunity labels without title-keyword inference
   assert.doesNotMatch(ui, /title\.includes|construction_only|recommended_for_pursuit/);
 });
 
-test("V9 multi-select filters preserve canonical source names and selected-label rules", () => {
+test("V9 multi-select presentation is preserved while canonical workspace owns query serialization", () => {
   for (const label of ["ستاد ایران", "هزاره", "پارس‌نماد", "اهمیت", "فوریت", "وضعیت مهلت"]) assert.match(ui, new RegExp(label));
   assert.match(ui, /مورد انتخاب شده/);
   assert.match(ui, /namesAlways/);
-  assert.match(pagination, /params\.append\("source_name"/);
-  assert.match(pagination, /params\.append\("importance"/);
-  assert.match(pagination, /params\.append\("urgency"/);
-  assert.match(pagination, /params\.append\("business_opportunity_type"/);
+  assert.match(filterState, /visible \"همه\" state is no API restriction/);
+  assert.match(workspace, /source_name: extra\.sources/);
+  assert.match(workspace, /importance: extra\.importance/);
+  assert.match(workspace, /urgency: extra\.urgency/);
+  assert.match(workspace, /business_opportunity_type: extra\.opportunityTypes/);
   assert.match(compactApi, /business_opportunity_type__in/);
   assert.match(directApi, /business_opportunity_type__in/);
   assert.match(compactApi, /_multi_query_values/);
   assert.match(directApi, /params\.getlist\("importance"\)/);
+  assert.doesNotMatch(pagination, /params\.append|window\.fetch\s*=/);
 });
 
 test("the approved notice presentation is one shared layout for tenders and inquiries", () => {
@@ -66,33 +70,35 @@ test("the approved notice presentation is one shared layout for tenders and inqu
   assert.match(ui, /pdp-v9-select-all/);
 });
 
-test("V16 applies the shared layout to direct referrals without a separate suggested tab", () => {
+test("V16 shared Direct presentation is retained while recent and recommended semantics are decoupled", () => {
   assert.match(workspace, /tab === "direct" && <section data-pdp-shared-notice-layout="direct">/);
   assert.match(workspace, /return "ارجاعات مستقیم اخیر"/);
   assert.match(workspace, /standardViews\.filter\(\(\[view\]\) => view !== "recommended"\)/);
-  assert.match(workspace, /function directWorkflowCode\(view: WorkflowView\)[\s\S]*view === "all" \? "recommended" : view/);
-  assert.match(workspace, /params\.set\("workflow_view", directWorkflowCode\(directView\)\)/);
-  assert.match(stableView, /\["ارجاعات مستقیم اخیر", "all"\]/);
+  assert.match(stableView, /if \(state\.top === "direct"\) return "ارجاعات مستقیم اخیر"/);
+  assert.match(directSemantics, /return view === "all" \? "" : view/);
+  assert.doesNotMatch(pagination, /workflow_view/);
   assert.match(actions, /state\.workflow === "all"/);
   assert.match(directApi, /DirectOpportunity\.Stage\.NEW/);
 });
 
-test("V16 wires activity-domain classification and keeps bulk geometry fixed", () => {
-  assert.match(pagination, /__pdpV9ActivityDomains/);
-  assert.match(pagination, /params\.append\("activity_domain"/);
+test("V16 wires activity-domain classification through canonical filter state and keeps bulk geometry fixed", () => {
+  assert.match(filterState, /activityDomains/);
+  assert.match(workspace, /activity_domain: extra\.activityDomains/);
   assert.match(compactApi, /activity_domain_source/);
   assert.match(directApi, /activity_domain_query\("domain"/);
   assert.match(bulk, /width:32px;height:32px/);
   assert.doesNotMatch(bulk, /<small className="pdp-v2-bulk-message"/);
 });
 
-test("publication filtering uses an interactive Persian calendar range and Gregorian API bounds", () => {
+test("publication filtering uses an interactive Persian calendar range and canonical Gregorian API bounds", () => {
   assert.match(ui, /u-ca-persian/);
   assert.match(ui, /pdp-v9-calendar-panel/);
   assert.match(ui, /publishedFrom/);
   assert.match(ui, /publishedTo/);
-  assert.match(pagination, /published_from/);
-  assert.match(pagination, /published_to/);
+  assert.match(filterState, /publishedFrom/);
+  assert.match(filterState, /publishedTo/);
+  assert.match(workspace, /published_from: extra\.publishedFrom/);
+  assert.match(workspace, /published_to: extra\.publishedTo/);
   assert.match(compactApi, /published_date__gte/);
   assert.match(compactApi, /published_date__lte/);
 });
