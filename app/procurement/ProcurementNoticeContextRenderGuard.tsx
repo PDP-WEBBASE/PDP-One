@@ -30,6 +30,16 @@ export default function ProcurementNoticeContextRenderGuard() {
         return;
       }
 
+      if (detail.phase === "cache-hit") {
+        // A cache hit belongs to the currently requested context and is intentionally
+        // renderable immediately. It supersedes any guard left by an older cold/aborted
+        // context while the same-context background revalidation continues independently.
+        if (revealFrame) cancelAnimationFrame(revealFrame);
+        pendingKey.current = "";
+        setPending(null);
+        return;
+      }
+
       if (detail.key !== pendingKey.current) return;
 
       if (detail.phase === "success") {
@@ -50,7 +60,8 @@ export default function ProcurementNoticeContextRenderGuard() {
       }
 
       // An aborted request normally means navigation moved to a newer context. Keep the
-      // previous context hidden until that newer context emits its own success/error event.
+      // previous context hidden until that newer context emits cold-start/cache-hit and then
+      // success/error according to its own cache/network state.
     };
 
     window.addEventListener(PROCUREMENT_NOTICE_CONTEXT_LIFECYCLE_EVENT, onLifecycle);
