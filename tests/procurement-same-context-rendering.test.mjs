@@ -11,7 +11,7 @@ test("cold notice contexts publish lifecycle ownership while same-context cache 
   assert.match(dataClient, /if \(!cached\) \{\s*emitNoticeContextLifecycle\(context, "cold-start"\)/s);
   assert.match(dataClient, /emitNoticeContextLifecycle\(context, "success"\)/);
   assert.match(dataClient, /aborted \? "aborted" : "error"/);
-  assert.match(dataClient, /void this\.load<T>\(context\)[\s\S]*return cached;/);
+  assert.match(dataClient, /emitNoticeContextLifecycle\(context, "cache-hit"\);[\s\S]*void this\.load<T>\(context\)[\s\S]*return cached;/);
 });
 
 test("render guard is presentation-only and never becomes a navigation or network owner", () => {
@@ -31,6 +31,13 @@ test("cold transition hides previous notice payload until the new context settle
   assert.match(guard, /requestAnimationFrame/);
   assert.match(guard, /detail\.phase === "error"/);
   assert.match(guard, /داده تب قبلی عمداً نمایش داده نمی‌شود/);
+});
+
+test("same-context cache hit releases any older cold or aborted guard before background refresh", () => {
+  assert.match(dataClient, /"cold-start" \| "cache-hit" \| "success" \| "error" \| "aborted"/);
+  assert.match(guard, /detail\.phase === "cache-hit"/);
+  assert.match(guard, /pendingKey\.current = "";\s*setPending\(null\);/s);
+  assert.ok(guard.indexOf('detail.phase === "cache-hit"') < guard.indexOf("detail.key !== pendingKey.current"));
 });
 
 test("guard is integrated after the canonical workspace and does not touch direct referrals", () => {
