@@ -40,7 +40,7 @@ export type ProcurementDataClientOptions = {
   concurrency?: number;
 };
 
-export type ProcurementNoticeContextLifecyclePhase = "cold-start" | "success" | "error" | "aborted";
+export type ProcurementNoticeContextLifecyclePhase = "cold-start" | "cache-hit" | "success" | "error" | "aborted";
 export type ProcurementNoticeContextLifecycleDetail = {
   key: string;
   noticeType: ProcurementNoticeType;
@@ -199,6 +199,10 @@ export class ProcurementDataClient {
         throw error;
       }
     }
+    // Same-context cached data is valid for immediate stale-while-revalidate rendering.
+    // Publish this presentation signal before the background refresh so any guard left by
+    // an older cold/aborted context is released without becoming a second data owner.
+    emitNoticeContextLifecycle(context, "cache-hit");
     void this.load<T>(context)
       .then((fresh) => onRefresh?.(fresh))
       .catch(() => undefined);
