@@ -1,3 +1,5 @@
+import { isRecentNoticeStableView } from "./procurementStableViewState";
+
 export type ProcurementV9FilterState = {
   sources: string[];
   importance: string[];
@@ -50,14 +52,15 @@ function querySelection(values: string[], universe: readonly string[]) {
 }
 
 function copy(current: ProcurementV9FilterState): ProcurementV9FilterState {
+  const recentNotice = isRecentNoticeStableView();
   return {
     ...current,
     sources: querySelection(current.sources, FILTER_UNIVERSES.sources),
     importance: querySelection(current.importance, FILTER_UNIVERSES.importance),
     urgency: querySelection(current.urgency, FILTER_UNIVERSES.urgency),
     deadlineStatuses: querySelection(current.deadlineStatuses, FILTER_UNIVERSES.deadlineStatuses),
-    opportunityTypes: querySelection(current.opportunityTypes, FILTER_UNIVERSES.opportunityTypes),
-    activityDomains: querySelection(current.activityDomains, FILTER_UNIVERSES.activityDomains),
+    opportunityTypes: recentNotice ? [] : querySelection(current.opportunityTypes, FILTER_UNIVERSES.opportunityTypes),
+    activityDomains: recentNotice ? [] : querySelection(current.activityDomains, FILTER_UNIVERSES.activityDomains),
     provinces: querySelection(current.provinces, FILTER_UNIVERSES.provinces),
   };
 }
