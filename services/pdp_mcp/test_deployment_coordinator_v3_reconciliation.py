@@ -85,7 +85,13 @@ class CoordinatorV3ReconciliationTests(unittest.TestCase):
         promotion.configure_queue_root(deployment_queue.QUEUE_ROOT)
         self._temporary.cleanup()
 
-    def _write_v3_evidence(self, *, health_ticket_id: str = TICKET_ID, runtime_accepted: bool = True) -> None:
+    def _write_v3_evidence(
+        self,
+        *,
+        health_ticket_id: str = TICKET_ID,
+        runtime_accepted: bool = True,
+        deployment_state: str = "acceptance",
+    ) -> None:
         deployment_record = {
             "schema": "pdp-one.promotion-request.v3",
             "client_request_id": DEPLOYMENT_CLIENT,
@@ -94,7 +100,7 @@ class CoordinatorV3ReconciliationTests(unittest.TestCase):
             "commit_sha": SHA_A,
             "deployment_id": DEPLOYMENT_ID,
             "ticket_id": TICKET_ID,
-            "state": "pre_merge",
+            "state": deployment_state,
             "terminal_status": "succeeded",
         }
         health_record = {
@@ -142,6 +148,13 @@ class CoordinatorV3ReconciliationTests(unittest.TestCase):
         )
         self.assertEqual(accepted["acceptance"]["deployment_request_id"], DEPLOYMENT_CLIENT)
         self.assertEqual(accepted["acceptance"]["health_request_id"], HEALTH_CLIENT)
+
+    def test_pre_merge_deployment_request_remains_supported(self) -> None:
+        self._write_v3_evidence(deployment_state="pre_merge")
+        accepted = reconciliation._record_candidate_acceptance_with_v3(
+            "v3-reconcile", self.candidate_id, SHA_A, DEPLOYMENT_CLIENT, DEPLOYMENT_ID, HEALTH_CLIENT, "healthy"
+        )
+        self.assertEqual(accepted["state"], "pre_merge")
 
     def test_mismatched_health_ticket_fails_closed_without_history_synthesis(self) -> None:
         self._write_v3_evidence(health_ticket_id="66666666-6666-4666-8666-666666666666")
