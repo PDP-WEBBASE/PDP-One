@@ -70,6 +70,20 @@ test("the approved notice presentation is one shared layout for tenders and inqu
   assert.match(ui, /pdp-v9-select-all/);
 });
 
+test("recent tender and inquiry views hide and ignore classification controls only in recent", () => {
+  assert.match(stableView, /isRecentNoticeStableView/);
+  assert.match(stableView, /state\.top === "tenders" \|\| state\.top === "inquiries"/);
+  assert.match(stableView, /state\.workflow === "all"/);
+  assert.match(stableView, /data-pdp-recent-notice-view/);
+  assert.match(stableView, /\.pdp-v9-toolbar \.pdp-v9-field\{display:none!important\}/);
+  assert.match(filterState, /const recentNotice = isRecentNoticeStableView\(\)/);
+  assert.match(filterState, /opportunityTypes: recentNotice \? \[\] : querySelection/);
+  assert.match(filterState, /activityDomains: recentNotice \? \[\] : querySelection/);
+  assert.match(workspace, /business_opportunity_type: extra\.opportunityTypes/);
+  assert.match(workspace, /activity_domain: extra\.activityDomains/);
+  assert.match(workspace, /tab === "direct"[\s\S]*ProcurementV9NativeToolbar/);
+});
+
 test("V16 shared Direct presentation is retained while recent and recommended semantics are decoupled", () => {
   assert.match(workspace, /tab === "direct" && <section data-pdp-shared-notice-layout="direct">/);
   assert.match(workspace, /return "ارجاعات مستقیم اخیر"/);
