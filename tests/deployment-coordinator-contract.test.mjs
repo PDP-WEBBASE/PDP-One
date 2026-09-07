@@ -71,6 +71,18 @@ test("coordinator tools are registered without weakening stable CI identities", 
   assert.match(ci, /^    name: Windows PowerShell 5\.1 compatibility$/m);
 });
 
+test("Promotion V3 acceptance reconciliation is exact, health-bound and fail-closed", async () => {
+  const server = await load("../services/pdp_mcp/server.py");
+  assert.match(server, /Deployment request evidence is missing from coordinator history/);
+  assert.match(server, /pdp-one\.promotion-request\.v3/);
+  assert.match(server, /pdp-one\.promotion-health-request\.v3/);
+  assert.match(server, /pdp-one\.promotion-ticket\.v3/);
+  assert.match(server, /runtime_accepted/);
+  assert.match(server, /promotion_ticket_id/);
+  assert.match(server, /evidence_source[^\n]*promotion-v3/);
+  assert.doesNotMatch(server, /subprocess|os\.system|shell\s*=/);
+});
+
 test("the persistent MCP dispatcher promotes signed requests without an active chat", async () => {
   const coordinator = await load("../services/pdp_mcp/deployment_coordinator.py");
   assert.match(coordinator, /def _dispatcher_loop\(\)/);
