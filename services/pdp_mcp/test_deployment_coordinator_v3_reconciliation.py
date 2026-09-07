@@ -6,9 +6,9 @@ import unittest
 from pathlib import Path
 
 import deployment_coordinator as coordinator
-import deployment_coordinator_v3_reconciliation as reconciliation
 import deployment_queue
 import promotion_control_v3 as promotion
+import server as reconciliation
 
 
 SHA_A = "a" * 40
@@ -57,7 +57,7 @@ class CoordinatorV3ReconciliationTests(unittest.TestCase):
         self.item = coordinator.register_workstream(
             workstream_id="v3-reconcile",
             branch="fix/v3-reconcile",
-            changed_paths=["services/pdp_mcp/deployment_coordinator_v3_reconciliation.py"],
+            changed_paths=["services/pdp_mcp/server.py"],
             surfaces=["candidate-acceptance"],
             commit_sha=SHA_A,
             pull_request=210,
@@ -126,14 +126,8 @@ class CoordinatorV3ReconciliationTests(unittest.TestCase):
 
     def test_client_request_reconciles_exact_v3_evidence_and_reaches_pre_merge(self) -> None:
         self._write_v3_evidence()
-        accepted = reconciliation.record_candidate_acceptance_with_v3(
-            "v3-reconcile",
-            self.candidate_id,
-            SHA_A,
-            DEPLOYMENT_CLIENT,
-            DEPLOYMENT_ID,
-            HEALTH_CLIENT,
-            "healthy",
+        accepted = reconciliation._record_candidate_acceptance_with_v3(
+            "v3-reconcile", self.candidate_id, SHA_A, DEPLOYMENT_CLIENT, DEPLOYMENT_ID, HEALTH_CLIENT, "healthy"
         )
         self.assertEqual(accepted["state"], "pre_merge")
         self.assertEqual(accepted["acceptance"]["deployment_request_id"], DEPLOYMENT_CLIENT)
@@ -143,14 +137,8 @@ class CoordinatorV3ReconciliationTests(unittest.TestCase):
 
     def test_agent_request_is_canonicalized_to_v3_client_request(self) -> None:
         self._write_v3_evidence()
-        accepted = reconciliation.record_candidate_acceptance_with_v3(
-            "v3-reconcile",
-            self.candidate_id,
-            SHA_A,
-            DEPLOYMENT_AGENT,
-            DEPLOYMENT_ID,
-            HEALTH_AGENT,
-            "healthy",
+        accepted = reconciliation._record_candidate_acceptance_with_v3(
+            "v3-reconcile", self.candidate_id, SHA_A, DEPLOYMENT_AGENT, DEPLOYMENT_ID, HEALTH_AGENT, "healthy"
         )
         self.assertEqual(accepted["acceptance"]["deployment_request_id"], DEPLOYMENT_CLIENT)
         self.assertEqual(accepted["acceptance"]["health_request_id"], HEALTH_CLIENT)
@@ -158,28 +146,16 @@ class CoordinatorV3ReconciliationTests(unittest.TestCase):
     def test_mismatched_health_ticket_fails_closed_without_history_synthesis(self) -> None:
         self._write_v3_evidence(health_ticket_id="66666666-6666-4666-8666-666666666666")
         with self.assertRaisesRegex(ValueError, "do not share one exact ticket"):
-            reconciliation.record_candidate_acceptance_with_v3(
-                "v3-reconcile",
-                self.candidate_id,
-                SHA_A,
-                DEPLOYMENT_CLIENT,
-                DEPLOYMENT_ID,
-                HEALTH_CLIENT,
-                "healthy",
+            reconciliation._record_candidate_acceptance_with_v3(
+                "v3-reconcile", self.candidate_id, SHA_A, DEPLOYMENT_CLIENT, DEPLOYMENT_ID, HEALTH_CLIENT, "healthy"
             )
         self.assertFalse((coordinator.HISTORY / f"{DEPLOYMENT_CLIENT}.json").exists())
 
     def test_non_accepted_v3_ticket_fails_closed(self) -> None:
         self._write_v3_evidence(runtime_accepted=False)
         with self.assertRaisesRegex(ValueError, "not runtime accepted"):
-            reconciliation.record_candidate_acceptance_with_v3(
-                "v3-reconcile",
-                self.candidate_id,
-                SHA_A,
-                DEPLOYMENT_CLIENT,
-                DEPLOYMENT_ID,
-                HEALTH_CLIENT,
-                "healthy",
+            reconciliation._record_candidate_acceptance_with_v3(
+                "v3-reconcile", self.candidate_id, SHA_A, DEPLOYMENT_CLIENT, DEPLOYMENT_ID, HEALTH_CLIENT, "healthy"
             )
         self.assertFalse((coordinator.HISTORY / f"{DEPLOYMENT_CLIENT}.json").exists())
 
