@@ -26,8 +26,11 @@ test("pagination compatibility layer is not a second Data Owner and never patche
 test("visible all-selection is normalized to no API restriction", () => {
   assert.match(filters, /All selected = omit parameter|visible \"همه\" state is no API restriction/);
   assert.match(filters, /return sameSelection\(values, universe\) \? \[\] : \[\.\.\.values\]/);
-  for (const key of ["sources", "importance", "urgency", "deadlineStatuses", "opportunityTypes", "activityDomains", "provinces"]) {
+  for (const key of ["sources", "importance", "urgency", "deadlineStatuses", "provinces"]) {
     assert.match(filters, new RegExp(`${key}: querySelection\\(current\\.${key}, FILTER_UNIVERSES\\.${key}\\)`));
+  }
+  for (const key of ["opportunityTypes", "activityDomains"]) {
+    assert.match(filters, new RegExp(`${key}: recentNotice \\? \\[\\] : querySelection\\(current\\.${key}, FILTER_UNIVERSES\\.${key}\\)`));
   }
 });
 
