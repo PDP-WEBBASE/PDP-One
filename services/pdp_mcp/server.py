@@ -56,6 +56,7 @@ from public_edge_status import wrap_get_queue_status
 from route_diagnostics_tools import register_route_diagnostics_tools
 
 _MISSING_COORDINATOR_HISTORY = "Deployment request evidence is missing from coordinator history."
+_SUCCESSFUL_V3_DEPLOYMENT_STATES = {"acceptance", "pre_merge", "merged"}
 _SUCCESSFUL_V3_TICKET_STATES = {"pre_merge", "merged"}
 _ORIGINAL_RECORD_CANDIDATE_ACCEPTANCE = deployment_coordinator.record_candidate_acceptance
 
@@ -114,7 +115,7 @@ def _validated_v3_acceptance_evidence(
             raise ValueError(f"Promotion V3 {label} evidence does not match the exact candidate.")
     if deployment_record.get("terminal_status") != "succeeded":
         raise ValueError("Promotion V3 deployment did not complete successfully.")
-    if str(deployment_record.get("state")) not in _SUCCESSFUL_V3_TICKET_STATES:
+    if str(deployment_record.get("state")) not in _SUCCESSFUL_V3_DEPLOYMENT_STATES:
         raise ValueError("Promotion V3 deployment has not reached an accepted lifecycle state.")
     if health_record.get("terminal_status") != "succeeded" or health_record.get("state") != "succeeded":
         raise ValueError("Promotion V3 independent health did not complete successfully.")
