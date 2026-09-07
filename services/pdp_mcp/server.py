@@ -45,11 +45,13 @@ redeploy_previous_commit_from_github
 """
 
 import server_core
+from deployment_coordinator_v3_reconciliation import install as install_deployment_coordinator_v3_reconciliation
 from interaction_tools import register_interaction_tools
 from mcp.types import ToolAnnotations
 from public_edge_status import wrap_get_queue_status
 from route_diagnostics_tools import register_route_diagnostics_tools
 
+install_deployment_coordinator_v3_reconciliation()
 server_core.get_queue_status = wrap_get_queue_status(server_core.get_queue_status)
 api = server_core.api
 mcp = server_core.mcp
