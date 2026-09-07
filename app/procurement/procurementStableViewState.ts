@@ -8,6 +8,9 @@ export type ProcurementStableViewState = {
 
 export const PROCUREMENT_STABLE_VIEW_STATE_EVENT = "pdp-procurement-stable-view-state";
 
+const RECENT_NOTICE_ATTRIBUTE = "data-pdp-recent-notice-view";
+const RECENT_NOTICE_STYLE_ID = "pdp-recent-notice-classification-style";
+
 const TOP_LABELS: Record<ProcurementStableTop, string> = {
   dashboard: "داشبورد مدیریتی",
   tenders: "مناقصات",
@@ -36,6 +39,24 @@ export function getProcurementStableViewState(): ProcurementStableViewState {
   return { ...currentState };
 }
 
+export function isRecentNoticeStableView(state = getProcurementStableViewState()) {
+  return (state.top === "tenders" || state.top === "inquiries") && state.workflow === "all";
+}
+
+function syncRecentNoticePresentation(state: ProcurementStableViewState) {
+  if (typeof document === "undefined") return;
+
+  if (!document.getElementById(RECENT_NOTICE_STYLE_ID)) {
+    const style = document.createElement("style");
+    style.id = RECENT_NOTICE_STYLE_ID;
+    style.textContent = `html[${RECENT_NOTICE_ATTRIBUTE}="true"] .pdp-v9-toolbar .pdp-v9-field{display:none!important}`;
+    document.head.appendChild(style);
+  }
+
+  if (isRecentNoticeStableView(state)) document.documentElement.setAttribute(RECENT_NOTICE_ATTRIBUTE, "true");
+  else document.documentElement.removeAttribute(RECENT_NOTICE_ATTRIBUTE);
+}
+
 export function stableTopLabel(top = getProcurementStableViewState().top) {
   return TOP_LABELS[top];
 }
@@ -53,8 +74,12 @@ export function stableWorkflowLabel(state = getProcurementStableViewState()) {
  * Only the canonical owner should call this function.
  */
 export function setProcurementStableViewState(next: ProcurementStableViewState) {
-  if (currentState.top === next.top && currentState.workflow === next.workflow) return;
+  if (currentState.top === next.top && currentState.workflow === next.workflow) {
+    syncRecentNoticePresentation(next);
+    return;
+  }
   currentState = { ...next };
+  syncRecentNoticePresentation(next);
   if (typeof window !== "undefined") {
     window.dispatchEvent(new CustomEvent<ProcurementStableViewState>(PROCUREMENT_STABLE_VIEW_STATE_EVENT, { detail: { ...next } }));
   }
