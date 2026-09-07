@@ -9,6 +9,7 @@ import ProcurementManagementToolsStableEnhancement from "./ProcurementManagement
 import ProcurementListUxRefinement from "./ProcurementListUxRefinement";
 import ProcurementCardLayoutBulkRemoveV2 from "./ProcurementCardLayoutBulkRemoveV2";
 import ProcurementInitialRenderBoundary from "./ProcurementInitialRenderBoundary";
+import ProcurementNoticeContextRenderGuard from "./ProcurementNoticeContextRenderGuard";
 import ProcurementWorkspaceV22 from "./ProcurementWorkspaceV22";
 
 const ProcurementCompactWorkspaceStableEnhancement = dynamic(
@@ -26,6 +27,7 @@ export default function ProcurementWorkspaceV23() {
     <ProcurementStartupSessionResilience />
     <ProcurementAnalysisContextInlineEnhancement />
     <ProcurementWorkspaceV22 />
+    <ProcurementNoticeContextRenderGuard />
     <ProcurementManagementToolsStableEnhancement />
     <ProcurementWorkflowActionsStableEnhancement />
     <ProcurementCompactWorkspaceStableEnhancement />

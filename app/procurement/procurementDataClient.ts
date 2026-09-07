@@ -40,6 +40,18 @@ export type ProcurementDataClientOptions = {
   concurrency?: number;
 };
 
+export type ProcurementNoticeContextLifecyclePhase = "cold-start" | "cache-hit" | "success" | "error" | "aborted";
+export type ProcurementNoticeContextLifecycleDetail = {
+  key: string;
+  noticeType: ProcurementNoticeType;
+  workflow: ProcurementWorkflow;
+  page: number;
+  pageSize: number;
+  phase: ProcurementNoticeContextLifecyclePhase;
+};
+
+export const PROCUREMENT_NOTICE_CONTEXT_LIFECYCLE_EVENT = "pdp-procurement-notice-context-lifecycle";
+
 const WORKFLOW_ALLOWLIST = new Set<ProcurementWorkflow>([
   "recent",
   "recommended",
@@ -77,6 +89,25 @@ export function procurementQueryKey(context: ProcurementQueryContext) {
     sort: context.sort || "",
     filters: normalizedFilterEntries(context.filters),
   });
+}
+
+function emitNoticeContextLifecycle(
+  context: ProcurementQueryContext,
+  phase: ProcurementNoticeContextLifecyclePhase,
+) {
+  if (typeof window === "undefined") return;
+  const detail: ProcurementNoticeContextLifecycleDetail = {
+    key: procurementQueryKey(context),
+    noticeType: context.noticeType,
+    workflow: normalizeProcurementWorkflow(context.workflow),
+    page: Math.max(1, context.page),
+    pageSize: Math.max(1, context.pageSize),
+    phase,
+  };
+  window.dispatchEvent(new CustomEvent<ProcurementNoticeContextLifecycleDetail>(
+    PROCUREMENT_NOTICE_CONTEXT_LIFECYCLE_EVENT,
+    { detail },
+  ));
 }
 
 function appendQueryValue(params: URLSearchParams, key: string, value: unknown) {
@@ -156,7 +187,22 @@ export class ProcurementDataClient {
     onRefresh?: (result: ProcurementLoadResult<T>) => void,
   ): Promise<ProcurementLoadResult<T>> {
     const cached = this.getCached<T>(context);
-    if (!cached) return this.load<T>(context);
+    if (!cached) {
+      emitNoticeContextLifecycle(context, "cold-start");
+      try {
+        const fresh = await this.load<T>(context);
+        emitNoticeContextLifecycle(context, "success");
+        return fresh;
+      } catch (error) {
+        const aborted = error instanceof DOMException && error.name === "AbortError";
+        emitNoticeContextLifecycle(context, aborted ? "aborted" : "error");
+        throw error;
+      }
+    }
+    // Same-context cached data is valid for immediate stale-while-revalidate rendering.
+    // Publish this presentation signal before the background refresh so any guard left by
+    // an older cold/aborted context is released without becoming a second data owner.
+    emitNoticeContextLifecycle(context, "cache-hit");
     void this.load<T>(context)
       .then((fresh) => onRefresh?.(fresh))
       .catch(() => undefined);
