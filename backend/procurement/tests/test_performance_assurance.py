@@ -59,3 +59,38 @@ class PerformanceAssuranceFrameworkTests(APITestCase):
         client = APIClient()
         response = client.get("/api/v1/procurement/performance-assurance/")
         self.assertIn(response.status_code, {401, 403})
+
+
+    def test_notice_metrics_are_split_by_type_and_workflow(self):
+        response = self.client.get(
+            "/api/v1/procurement/ui/notices/",
+            {"notice_type": "tender", "workflow": "selected", "page": 1, "page_size": 30},
+        )
+        self.assertEqual(response.status_code, 200)
+        snapshot = performance_assurance_snapshot(compact=True)
+        key = "procurement.ui.notices.v2.tender.selected"
+        self.assertIn(key, snapshot["metrics"])
+        self.assertEqual(snapshot["metrics"][key]["risk"], "hot_path")
+        self.assertGreaterEqual(snapshot["metrics"][key]["sample_count"], 1)
+
+    def test_notice_metric_dimensions_are_bounded(self):
+        response = self.client.get(
+            "/api/v1/procurement/ui/notices/",
+            {"notice_type": "unexpected", "workflow": "unexpected-value"},
+        )
+        self.assertEqual(response.status_code, 200)
+        snapshot = performance_assurance_snapshot(compact=True)
+        self.assertIn("procurement.ui.notices.v2.all.recent", snapshot["metrics"])
+        self.assertNotIn("unexpected-value", " ".join(snapshot["metrics"].keys()))
+
+    def test_direct_metrics_are_split_by_workflow(self):
+        response = self.client.get(
+            "/api/v1/procurement/direct-opportunities/",
+            {"workflow_view": "selected"},
+        )
+        self.assertEqual(response.status_code, 200)
+        snapshot = performance_assurance_snapshot(compact=True)
+        key = "procurement.ui.direct.list.selected"
+        self.assertIn(key, snapshot["metrics"])
+        self.assertEqual(snapshot["metrics"][key]["risk"], "hot_path")
+        self.assertGreaterEqual(snapshot["metrics"][key]["sample_count"], 1)
