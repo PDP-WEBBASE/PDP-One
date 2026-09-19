@@ -12,7 +12,7 @@ from procurement.analysis_throughput import (
 
 
 class HyperTurboV3PolicyTests(SimpleTestCase):
-    def test_high_backlog_targets_30k_with_40k_design_capacity(self):
+    def test_high_backlog_starts_v31_at_first_stable_ramp_stage(self):
         policy = adaptive_throughput_policy(50000)
 
         self.assertEqual(policy["mode"], "hyper_turbo_v3")
@@ -21,8 +21,10 @@ class HyperTurboV3PolicyTests(SimpleTestCase):
         self.assertEqual(policy["claim_window_target_per_lane"], 1000)
         self.assertEqual(policy["per_lane_hourly_ceiling"], 1000)
         self.assertEqual(policy["micro_batch_size"], 50)
-        self.assertEqual(policy["max_packages_per_lane"], 20)
-        self.assertEqual(policy["planned_capacity_per_hour"], 40000)
+        self.assertEqual(policy["max_packages_per_lane"], 3)
+        self.assertEqual(policy["planned_capacity_per_hour"], 6000)
+        self.assertEqual(policy["ramp_target_per_hour"], 5000)
+        self.assertEqual(policy["lease_stability_band"], "stable")
         self.assertEqual(policy["target_per_hour"], 30000)
         self.assertEqual(policy["rolling_sla_target_per_hour"], TARGET_SLA_PER_HOUR)
         self.assertEqual(policy["design_capacity_per_hour"], DESIGN_CAPACITY_PER_HOUR)
@@ -48,7 +50,9 @@ class HyperTurboV3PolicyTests(SimpleTestCase):
 
         self.assertEqual(policy["desired_lanes"], 28)
         self.assertEqual(policy["claim_window_target_per_lane"], 750)
-        self.assertEqual(policy["max_packages_per_lane"], 15)
+        self.assertEqual(policy["max_packages_per_lane"], 4)
+        self.assertEqual(policy["planned_capacity_per_hour"], 5600)
+        self.assertEqual(policy["ramp_target_per_hour"], 5000)
         self.assertEqual(policy["target_per_hour"], 7000)
 
     def test_near_empty_queue_reduces_lanes_without_overclaim(self):
@@ -69,8 +73,10 @@ class HyperTurboV3PolicyTests(SimpleTestCase):
         self.assertEqual(policy["micro_batch_size"], SAFE_PACKAGE_SIZE)
         self.assertEqual(policy["claim_reservation_size"], SAFE_CLAIM_LIMIT)
         self.assertEqual(policy["per_lane_hourly_ceiling"], PER_LANE_HOURLY_CEILING)
-        self.assertEqual(policy["max_packages_per_lane"], 10)
-        self.assertEqual(policy["planned_capacity_per_hour"], 20000)
+        self.assertEqual(policy["max_packages_per_lane"], 3)
+        self.assertEqual(policy["planned_capacity_per_hour"], 6000)
+        self.assertEqual(policy["ramp_target_per_hour"], 5000)
+        self.assertEqual(policy["lease_stability_band"], "degraded")
 
     def test_rolling_sla_states_use_valid_import_rate(self):
         self.assertEqual(adaptive_throughput_policy(50000, recent_completed=34000)["sla_state"], "green")
