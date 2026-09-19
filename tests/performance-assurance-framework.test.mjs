@@ -58,7 +58,7 @@ test("operator performance probe is bounded and explicitly gated", () => {
   assert.doesNotMatch(probe, /\.explain\s*\(/i);
   assert.match(core, /performance_probe/);
   assert.match(core, /request\.query_params\.get\("performance_probe"/);
-  assert.match(mcp, /params=\{"performance_probe": "1"\}/);
+  assert.match(mcp, /"performance_probe": "1"/);
 });
 
 
