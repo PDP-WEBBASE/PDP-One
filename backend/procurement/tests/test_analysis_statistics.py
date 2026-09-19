@@ -78,7 +78,9 @@ class ProcurementAnalysisStatisticsTests(TestCase):
         self.assertEqual(stats["active_run"]["completed"], {"tender": 1, "inquiry": 0, "total": 1})
         self.assertEqual(stats["active_run"]["retry"], {"tender": 0, "inquiry": 1, "total": 1})
         self.assertEqual(stats["active_run"]["retry_diagnostics"]["claim_lease_expired"], 1)
-        self.assertEqual(stats["claim_policy"]["safe_claim_limit"], 50)
+        self.assertEqual(stats["claim_policy"]["safe_claim_limit"], 250)
+        self.assertEqual(stats["claim_policy"]["claim_reservation_limit"], 250)
+        self.assertEqual(stats["claim_policy"]["semantic_slice_size"], 50)
         self.assertTrue(stats["claim_policy"]["one_active_package_per_worker"])
 
         self.client.force_login(self.user)
