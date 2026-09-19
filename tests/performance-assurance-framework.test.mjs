@@ -58,5 +58,36 @@ test("operator performance probe is bounded and explicitly gated", () => {
   assert.doesNotMatch(probe, /\.explain\s*\(/i);
   assert.match(core, /performance_probe/);
   assert.match(core, /request\.query_params\.get\("performance_probe"/);
-  assert.match(mcp, /params=\{"performance_probe": "1"\}/);
+  assert.match(mcp, /"performance_probe": "1"/);
+});
+
+
+test("Inquiry Recommended DB diagnostic is read-only and sanitized", () => {
+  const diagnostic = read("backend/procurement/performance_db_diagnostic.py");
+  const core = read("backend/core/views.py");
+  const mcp = read("services/pdp_mcp/server_core.py");
+  assert.match(diagnostic, /DIAGNOSTIC_PAGE_SIZE = 50/);
+  assert.match(diagnostic, /DIAGNOSTIC_CACHE_TTL_SECONDS = 10 \* 60/);
+  assert.match(diagnostic, /analyze=False/);
+  assert.doesNotMatch(diagnostic, /analyze=True/);
+  assert.match(diagnostic, /sql_text_recorded/);
+  assert.match(diagnostic, /sql_params_recorded/);
+  assert.match(diagnostic, /business_payload_recorded/);
+  assert.match(diagnostic, /pg_stat_activity/);
+  assert.match(diagnostic, /pg_stat_user_tables/);
+  assert.match(core, /performance_db_diagnostic/);
+  assert.match(mcp, /performance_db_diagnostic/);
+});
+
+
+test("analysis draft planner statistics policy is bounded and PostgreSQL-specific", () => {
+  const migration = read("backend/procurement/migrations/0028_analysis_draft_planner_statistics.py");
+  assert.match(migration, /vendor != "postgresql"/);
+  assert.match(migration, /autovacuum_analyze_scale_factor = 0\.02/);
+  assert.match(migration, /autovacuum_analyze_threshold = 500/);
+  assert.match(migration, /ANALYZE \{TABLE\}/);
+  assert.match(migration, /RESET \(/);
+  assert.doesNotMatch(migration, /CREATE\s+INDEX/i);
+  assert.doesNotMatch(migration, /DELETE\s+FROM/i);
+  assert.doesNotMatch(migration, /TRUNCATE/i);
 });

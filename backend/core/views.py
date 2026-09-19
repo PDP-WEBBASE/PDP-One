@@ -89,6 +89,19 @@ def system_status(request):
                 "safe_error": exc.__class__.__name__,
             }
 
+    performance_db_diagnostic = None
+    if str(request.query_params.get("performance_db_diagnostic", "")).strip() == "1":
+        try:
+            from procurement.performance_db_diagnostic import collect_inquiry_recommended_db_diagnostic
+
+            performance_db_diagnostic = collect_inquiry_recommended_db_diagnostic(request.user)
+        except Exception as exc:
+            performance_db_diagnostic = {
+                "schema": "pdp-one.inquiry-recommended-db-diagnostic.v1",
+                "status": "unavailable",
+                "safe_error": exc.__class__.__name__,
+            }
+
     return Response({
         "service": "PDP One",
         "database": "connected",
@@ -101,6 +114,7 @@ def system_status(request):
         "connector_acceptance": connector_acceptance,
         "performance_assurance": performance_assurance,
         "performance_probe": performance_probe,
+        "performance_db_diagnostic": performance_db_diagnostic,
     })
 
 
