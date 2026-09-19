@@ -7,7 +7,21 @@ from .views_bulk_workflow import VIEW_DISMISS_WORKFLOWS, _user_dismissed_notice_
 from .views_compact_ui import CompactNoticeSerializer, _compact_notice_queryset, _page_parameters
 
 
-@instrument_procurement_endpoint("procurement.ui.notices.v2")
+NOTICE_METRIC_TYPES = {"tender", "inquiry"}
+NOTICE_METRIC_WORKFLOWS = {"recent", "recommended", "selected", "submitted", "results"}
+
+
+def _notice_feed_metric_name(request, *args, **kwargs):
+    notice_type = str(request.query_params.get("notice_type", "")).strip().lower()
+    if notice_type not in NOTICE_METRIC_TYPES:
+        notice_type = "all"
+    workflow = str(request.query_params.get("workflow", "recent")).strip().lower() or "recent"
+    if workflow not in NOTICE_METRIC_WORKFLOWS:
+        workflow = "recent"
+    return f"procurement.ui.notices.v2.{notice_type}.{workflow}"
+
+
+@instrument_procurement_endpoint(_notice_feed_metric_name)
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def bounded_notice_feed(request):
