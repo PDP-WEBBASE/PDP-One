@@ -433,8 +433,7 @@ async function updateDirectToSelected(item: DirectRow, button: HTMLButtonElement
       body: JSON.stringify({ stage: "selected" }),
     });
     if (!response.ok) throw new Error("انتخاب ارجاع مستقیم انجام نشد.");
-    clearStableListCache();
-    emitProcurementUiSync({ source: "procurement-list-ux", directId: item.id, dashboard: true, bulkWorkspace: true });
+    emitProcurementUiSync({ source: "procurement-list-ux", directId: item.id, dashboard: true });
   } catch (error) {
     window.alert(error instanceof Error ? error.message : "انتخاب ارجاع مستقیم انجام نشد.");
     button.disabled = false;

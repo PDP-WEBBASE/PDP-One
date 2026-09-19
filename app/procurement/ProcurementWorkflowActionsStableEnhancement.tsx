@@ -46,9 +46,6 @@ type ResultTarget = {
   kindLabel: string;
 };
 
-type StableWindow = Window & {
-  __pdpStableListCache?: Map<string, unknown>;
-};
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "/api/v1";
 const PROCUREMENT_API = `${API_BASE}/procurement`;
@@ -143,9 +140,8 @@ async function responseMessage(response: Response, fallback: string) {
   }
 }
 
-function invalidateAndRefresh(detail: { noticeId?: string; directId?: string; dashboard?: boolean } = {}) {
-  (window as StableWindow).__pdpStableListCache?.clear();
-  emitProcurementUiSync({ source: "stable-workflow-actions", bulkWorkspace: true, ...detail });
+function emitTargetedSync(detail: { noticeId?: string; directId?: string; dashboard?: boolean } = {}) {
+  emitProcurementUiSync({ source: "stable-workflow-actions", ...detail });
 }
 
 export default function ProcurementWorkflowActionsStableEnhancement() {
@@ -243,7 +239,7 @@ export default function ProcurementWorkflowActionsStableEnhancement() {
       const token = await csrfToken();
       const response = await fetch(`${CASES_API}/${meta.id}/`, { method: "DELETE", credentials: "include", headers: { "X-CSRFToken": token, Accept: "application/json" } });
       if (!response.ok) throw new Error(await responseMessage(response, "حذف از منتخب انجام نشد."));
-      invalidateAndRefresh({ noticeId, dashboard: true });
+      emitTargetedSync({ noticeId, dashboard: true });
     } catch (error) {
       window.alert(error instanceof Error ? error.message : "حذف از منتخب انجام نشد.");
     }
@@ -258,7 +254,7 @@ export default function ProcurementWorkflowActionsStableEnhancement() {
         body: JSON.stringify({ stage }),
       });
       if (!response.ok) throw new Error(await responseMessage(response, "تغییر مرحله ارجاع مستقیم انجام نشد."));
-      invalidateAndRefresh({ directId: item.id, dashboard: true });
+      emitTargetedSync({ directId: item.id, dashboard: true });
     } catch (error) {
       window.alert(error instanceof Error ? error.message : "تغییر مرحله ارجاع مستقیم انجام نشد.");
     }
@@ -274,7 +270,7 @@ export default function ProcurementWorkflowActionsStableEnhancement() {
         body: JSON.stringify({ reason: "حذف از فهرست پیشنهادی توسط کاربر" }),
       });
       if (!response.ok) throw new Error(await responseMessage(response, "حذف از فهرست پیشنهادی انجام نشد."));
-      invalidateAndRefresh({ noticeId: item.id, dashboard: true });
+      emitTargetedSync({ noticeId: item.id, dashboard: true });
     } catch (error) {
       window.alert(error instanceof Error ? error.message : "حذف از فهرست پیشنهادی انجام نشد.");
     }
@@ -387,7 +383,7 @@ export default function ProcurementWorkflowActionsStableEnhancement() {
         body: JSON.stringify({ stage: "submitted" }),
       });
       if (!stageResponse.ok) throw new Error(await responseMessage(stageResponse, "انتقال مورد به ارسال‌شده انجام نشد."));
-      invalidateAndRefresh({ noticeId: uploadTarget.noticeId, directId: uploadTarget.owner === "direct" ? uploadTarget.id : undefined, dashboard: true });
+      emitTargetedSync({ noticeId: uploadTarget.noticeId, directId: uploadTarget.owner === "direct" ? uploadTarget.id : undefined, dashboard: true });
       window.alert(files.length ? `${files.length} فایل ذخیره شد و مورد به «ارسال‌شده» منتقل شد.` : "مورد بدون فایل پیوست به «ارسال‌شده» منتقل شد.");
       setUploadTarget(null);
       setFiles([]);
@@ -417,7 +413,7 @@ export default function ProcurementWorkflowActionsStableEnhancement() {
           body: JSON.stringify({ opportunity: resultTarget.id, outcome: resultOutcome, reason: resultReason.trim(), notes: resultNotes.trim() }),
         });
       if (!response.ok) throw new Error(await responseMessage(response, "ثبت نتیجه انجام نشد."));
-      invalidateAndRefresh({ noticeId: resultTarget.noticeId, directId: resultTarget.owner === "direct" ? resultTarget.id : undefined, dashboard: true });
+      emitTargetedSync({ noticeId: resultTarget.noticeId, directId: resultTarget.owner === "direct" ? resultTarget.id : undefined, dashboard: true });
       setResultTarget(null);
       setResultReason("");
       setResultNotes("");

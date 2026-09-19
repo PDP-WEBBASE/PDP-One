@@ -27,9 +27,11 @@ test("selecting a recommended notice is row-local, optimistic and rollback-safe"
   assert.match(handler, /case_stage:\s*"selected"/);
   assert.match(handler, /setNotices/);
   assert.match(handler, /previous/);
-  assert.match(handler, /procurementDataClient\.invalidate\(\)/);
-  assert.match(handler, /setViewRefresh/);
-  assert.match(handler, /setDashboardRefresh/);
+  assert.match(handler, /emitProcurementUiSync/);
+  assert.match(handler, /noticeId:item\.id/);
+  assert.doesNotMatch(handler, /procurementDataClient\.invalidate\(\)/);
+  assert.doesNotMatch(handler, /setViewRefresh/);
+  assert.doesNotMatch(handler, /setDashboardRefresh/);
   assert.doesNotMatch(handler, /setRefresh/);
   assert.doesNotMatch(handler, /location\.reload/);
 });
@@ -55,6 +57,30 @@ test("ordinary workspace mutations avoid global refresh and use local reconcilia
   assert.match(workspace, /setDashboardRefresh/);
   assert.match(workspace, /PROCUREMENT_UI_SYNC_EVENT/);
   assert.match(workspace, /bulkWorkspace/);
+});
+
+test("single-record workflow actions never request bulk workspace reconciliation", async () => {
+  const stableActions = await read("app/procurement/ProcurementWorkflowActionsStableEnhancement.tsx");
+  const listUx = await read("app/procurement/ProcurementListUxRefinement.tsx");
+
+  assert.match(stableActions, /emitTargetedSync/);
+  assert.doesNotMatch(stableActions, /stable-workflow-actions",\s*bulkWorkspace:\s*true/);
+  assert.doesNotMatch(listUx, /directId:\s*item\.id,\s*dashboard:\s*true,\s*bulkWorkspace:\s*true/);
+});
+
+test("targeted entity sync reconciles one record without resetting the current list", async () => {
+  const workspace = await read("app/procurement/ProcurementWorkspaceV13.tsx");
+  const start = workspace.indexOf("const handleSync =");
+  const end = workspace.indexOf("window.addEventListener(PROCUREMENT_UI_SYNC_EVENT", start);
+  assert.ok(start >= 0 && end > start, "targeted sync handler must exist");
+  const handler = workspace.slice(start, end);
+
+  assert.match(handler, /fetchRecord<ApiNotice>/);
+  assert.match(handler, /fetchRecord<ApiDirectOpportunity>/);
+  assert.match(handler, /noticeMatchesWorkflow/);
+  assert.match(handler, /directMatchesWorkflow/);
+  assert.doesNotMatch(handler, /sync\.noticeId[\s\S]*setViewRefresh/);
+  assert.doesNotMatch(handler, /sync\.directId[\s\S]*setDirectRefresh/);
 });
 
 test("connectivity resilience is scoped and never hard reloads the procurement workspace", async () => {
