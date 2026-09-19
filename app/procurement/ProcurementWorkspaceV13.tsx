@@ -326,12 +326,53 @@ function PaginationControls({ page, pageSize, count, loading, onPage, onPageSize
   onPage: (page: number) => void; onPageSize: (size: PageSize) => void;
 }) {
   const pages = Math.max(1, Math.ceil(count / pageSize));
-  return <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:10,flexWrap:"wrap",marginTop:10,padding:"8px 10px",border:"1px solid #e2e8f0",borderRadius:10,background:"#f8fafc"}}>
-    <span>{loading ? "در حال به‌روزرسانی..." : `${fa.format(count)} رکورد · صفحه ${fa.format(page)} از ${fa.format(pages)}`}</span>
-    <div style={{display:"flex",alignItems:"center",gap:7}}>
-      <label style={{display:"flex",alignItems:"center",gap:5}}>تعداد<select value={pageSize} onChange={(event) => onPageSize(Number(event.target.value) as PageSize)}><option value={30}>۳۰</option><option value={50}>۵۰</option><option value={100}>۱۰۰</option></select></label>
-      <button type="button" disabled={loading || page <= 1} onClick={() => onPage(page - 1)}>صفحه قبل</button>
-      <button type="button" disabled={loading || page >= pages} onClick={() => onPage(page + 1)}>صفحه بعد</button>
+  const [jumpPage, setJumpPage] = useState("");
+  const [jumpInvalid, setJumpInvalid] = useState(false);
+
+  const pageTokens = useMemo<(number | "ellipsis")[]>(() => {
+    if (pages <= 7) return Array.from({ length: pages }, (_, index) => index + 1);
+    const tokens: (number | "ellipsis")[] = [1];
+    const start = Math.max(2, page - 2);
+    const end = Math.min(pages - 1, page + 2);
+    if (start > 2) tokens.push("ellipsis");
+    for (let value = start; value <= end; value += 1) tokens.push(value);
+    if (end < pages - 1) tokens.push("ellipsis");
+    tokens.push(pages);
+    return tokens;
+  }, [page, pages]);
+
+  function submitJump(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const target = Number(jumpPage);
+    if (!jumpPage.trim() || !Number.isInteger(target) || target < 1 || target > pages) {
+      setJumpInvalid(true);
+      return;
+    }
+    setJumpInvalid(false);
+    onPage(target);
+  }
+
+  const navButtonStyle: CSSProperties = { height:34, minWidth:34, padding:"0 10px", border:"1px solid #c9d5d9", background:"#fff", color:"#183943", borderRadius:9, font:"inherit", fontSize:12, cursor:"pointer" };
+  const activePageStyle: CSSProperties = { ...navButtonStyle, background:"#145563", color:"#fff", borderColor:"#145563", fontWeight:700 };
+  const groupStyle: CSSProperties = { display:"flex", alignItems:"center", gap:6, background:"#fff", border:"1px solid #d8e0e3", borderRadius:10, padding:"4px 6px" };
+
+  return <div style={{display:"grid",gridTemplateColumns:"auto 1fr auto",alignItems:"center",gap:12,marginTop:10,padding:"10px 12px",border:"1px solid #dde5e8",borderRadius:14,background:"#f3f5f6"}}>
+    <span style={{fontSize:12,color:"#28434b",whiteSpace:"nowrap"}}>{loading ? "در حال به‌روزرسانی..." : `${fa.format(count)} رکورد · صفحه ${fa.format(page)} از ${fa.format(pages)}`}</span>
+    <div style={{display:"flex",alignItems:"center",justifyContent:"center",gap:5,flexWrap:"wrap"}}>
+      <button type="button" style={{...navButtonStyle,minWidth:72,fontWeight:700,opacity:loading || page <= 1 ? .45 : 1}} disabled={loading || page <= 1} onClick={() => onPage(page - 1)}>صفحه قبل</button>
+      {pageTokens.map((token, index) => token === "ellipsis"
+        ? <span key={`ellipsis-${index}`} aria-hidden="true" style={{display:"inline-flex",alignItems:"center",justifyContent:"center",width:20,color:"#6f7d84",fontSize:12}}>…</span>
+        : <button key={token} type="button" aria-current={token === page ? "page" : undefined} aria-label={`صفحه ${fa.format(token)}`} style={token === page ? activePageStyle : navButtonStyle} disabled={loading} onClick={() => onPage(token)}>{fa.format(token)}</button>
+      )}
+      <button type="button" style={{...navButtonStyle,minWidth:72,fontWeight:700,opacity:loading || page >= pages ? .45 : 1}} disabled={loading || page >= pages} onClick={() => onPage(page + 1)}>صفحه بعد</button>
+    </div>
+    <div style={{display:"flex",alignItems:"center",gap:7,justifyContent:"flex-start",flexWrap:"wrap"}}>
+      <label style={groupStyle}><span style={{fontSize:12,color:"#28434b"}}>تعداد</span><select style={{height:30,border:"1px solid #d0d9dc",borderRadius:8,background:"#fff",padding:"0 7px",font:"inherit",fontSize:12,color:"#244d56"}} value={pageSize} onChange={(event) => onPageSize(Number(event.target.value) as PageSize)}><option value={30}>۳۰</option><option value={50}>۵۰</option><option value={100}>۱۰۰</option></select></label>
+      <form style={groupStyle} onSubmit={submitJump}>
+        <span style={{fontSize:12,color:"#28434b",whiteSpace:"nowrap"}}>برو به صفحه</span>
+        <input aria-label="شماره صفحه مقصد" type="number" min={1} max={pages} inputMode="numeric" value={jumpPage} onChange={(event) => { setJumpPage(event.target.value); setJumpInvalid(false); }} placeholder="مثلاً ۵" style={{width:68,height:30,border:`1px solid ${jumpInvalid ? "#d66a5f" : "#d0d9dc"}`,borderRadius:8,background:jumpInvalid ? "#fff6f5" : "#fff",padding:"0 7px",font:"inherit",fontSize:12,color:"#244d56",textAlign:"center"}} />
+        <button type="submit" style={{...navButtonStyle,height:30,minWidth:40,padding:"0 8px",background:"#edf2f3",fontWeight:700}} disabled={loading}>برو</button>
+      </form>
     </div>
   </div>;
 }
