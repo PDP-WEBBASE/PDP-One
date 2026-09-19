@@ -18,6 +18,7 @@ from .models_direct import (
 from .activity_domains import activity_domain_query
 from .permissions_extraction import IsManagerOrReadOnly
 from .opportunity_types import normalize_requested_business_opportunity_types
+from .performance_metrics import instrument_procurement_endpoint
 from .serializers_direct import (
     DirectOpportunityDetailSerializer,
     DirectOpportunityListSerializer,
@@ -73,6 +74,10 @@ class DirectOpportunityViewSet(
         "probability_percent", "id",
     ]
     ordering = ["-last_activity_at", "-id"]
+
+    @instrument_procurement_endpoint("procurement.ui.direct.list")
+    def list(self, request, *args, **kwargs):
+        return super().list(request, *args, **kwargs)
 
     def get_queryset(self):
         base_queryset = DirectOpportunity.objects.filter(soft_deleted_at__isnull=True)

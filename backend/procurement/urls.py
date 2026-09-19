@@ -52,6 +52,7 @@ from .views_notice_feed_read_model import bounded_notice_feed
 from .views_pagination_metadata import exact_notice_pagination_metadata
 from .views_internet_usage import internet_usage_dashboard
 from .views_pagination_metrics import pagination_dashboard_metrics
+from .views_performance_assurance import performance_assurance_report
 from .views_recommended import AIRecommendedNoticeViewSet
 from .views_review import AIReviewDraftViewSet, analysis_review_summary_view, review_analysis_draft, select_reviewed_analysis_draft
 from .views_workflow_ui import workflow_page_metadata
@@ -96,6 +97,7 @@ urlpatterns = [
     path("interaction/pending/select/confirm/", confirm_pending_select, name="procurement-interaction-pending-select-confirm"),
     path("interaction/commands/select-notice/", command_select_notice, name="procurement-interaction-command-select-notice"),
     path("pagination-dashboard-metrics/", pagination_dashboard_metrics, name="procurement-pagination-dashboard-metrics"),
+    path("performance-assurance/", performance_assurance_report, name="procurement-performance-assurance"),
     path("management-dashboard/", unified_management_dashboard, name="procurement-management-dashboard"),
     path("internet-usage-dashboard/", internet_usage_dashboard, name="procurement-internet-usage-dashboard"),
     path("cases/follow-up/users/", follow_up_users, name="case-follow-up-users"),
