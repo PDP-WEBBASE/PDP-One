@@ -53,6 +53,15 @@ DIRECT_ACTIVE_STAGES = [
     DirectOpportunity.Stage.SUBMITTED,
 ]
 
+DIRECT_METRIC_WORKFLOWS = {"all", "recommended", "selected", "submitted", "results", "active"}
+
+
+def _direct_list_metric_name(request, *args, **kwargs):
+    workflow = str(request.query_params.get("workflow_view", "")).strip().lower() or "all"
+    if workflow not in DIRECT_METRIC_WORKFLOWS:
+        workflow = "all"
+    return f"procurement.ui.direct.list.{workflow}"
+
 
 class DirectOpportunityViewSet(
     mixins.CreateModelMixin,
@@ -75,7 +84,7 @@ class DirectOpportunityViewSet(
     ]
     ordering = ["-last_activity_at", "-id"]
 
-    @instrument_procurement_endpoint("procurement.ui.direct.list")
+    @instrument_procurement_endpoint(_direct_list_metric_name)
     def list(self, request, *args, **kwargs):
         return super().list(request, *args, **kwargs)
 
