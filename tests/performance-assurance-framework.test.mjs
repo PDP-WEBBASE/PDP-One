@@ -33,3 +33,14 @@ test("direct opportunity list participates in hot-path telemetry", () => {
   const source = read("backend/procurement/views_direct.py");
   assert.match(source, /procurement\.ui\.direct\.list/);
 });
+
+
+test("bounded subview attribution uses whitelisted dimensions", () => {
+  const notice = read("backend/procurement/views_notice_feed_read_model.py");
+  const direct = read("backend/procurement/views_direct.py");
+  assert.match(notice, /NOTICE_METRIC_TYPES/);
+  assert.match(notice, /NOTICE_METRIC_WORKFLOWS/);
+  assert.match(notice, /procurement\.ui\.notices\.v2\.\{notice_type\}\.\{workflow\}/);
+  assert.match(direct, /DIRECT_METRIC_WORKFLOWS/);
+  assert.match(direct, /procurement\.ui\.direct\.list\.\{workflow\}/);
+});
