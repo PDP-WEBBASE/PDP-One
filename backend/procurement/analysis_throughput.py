@@ -28,6 +28,10 @@ TARGET_SLA_PER_HOUR = 30000
 DESIGN_CAPACITY_PER_HOUR = 40000
 GUARDED_SLA_PER_HOUR = 33000
 RECOVERY_FLOOR_PER_HOUR = 24000
+LEASE_STABLE_RATIO = 0.05
+LEASE_CAUTION_RATIO = 0.10
+LEASE_RECOVERY_RATIO = 0.20
+RAMP_STAGES_PER_HOUR = (5000, 10000, 15000, 20000, 25000, 30000)
 MIN_OPERATIONAL_SLA_PER_HOUR = TARGET_SLA_PER_HOUR
 PREFERRED_SUSTAINED_MIN_PER_HOUR = TARGET_SLA_PER_HOUR
 PREFERRED_SUSTAINED_MAX_PER_HOUR = GUARDED_SLA_PER_HOUR
@@ -330,19 +334,34 @@ def adaptive_throughput_policy(
     sample = completed + lease_expired
     lease_expiry_ratio = (lease_expired / sample) if sample else 0.0
     backpressure = "normal"
-    multiplier = 1.0
-    if lease_expired >= SAFE_PACKAGE_SIZE and (completed == 0 or lease_expiry_ratio > 0.10):
+    lease_stability_band = "stable"
+    if sample >= SAFE_PACKAGE_SIZE and lease_expiry_ratio >= LEASE_RECOVERY_RATIO:
         backpressure = "degraded"
-        multiplier = 0.5
-    elif sample >= SAFE_PACKAGE_SIZE and lease_expiry_ratio > 0.03:
+        lease_stability_band = "degraded"
+        ramp_target = 5000
+    elif sample >= SAFE_PACKAGE_SIZE and lease_expiry_ratio >= LEASE_CAUTION_RATIO:
+        backpressure = "recovery"
+        lease_stability_band = "recovery"
+        ramp_target = 10000
+    elif sample >= SAFE_PACKAGE_SIZE and lease_expiry_ratio >= LEASE_STABLE_RATIO:
         backpressure = "caution"
-        multiplier = 0.75
+        lease_stability_band = "caution"
+        ramp_target = 15000
+    else:
+        ramp_target = DESIGN_CAPACITY_PER_HOUR
+        for stage in RAMP_STAGES_PER_HOUR:
+            if completed < stage:
+                ramp_target = stage
+                break
 
-    packages_per_lane = (
-        max(1, min(MAX_PACKAGES_PER_LANE, ceil(base_packages * multiplier)))
-        if base_packages
-        else 0
-    )
+    if desired_lanes and base_packages:
+        packages_for_ramp = max(
+            1,
+            ceil(ramp_target / (desired_lanes * SAFE_PACKAGE_SIZE)),
+        )
+        packages_per_lane = min(MAX_PACKAGES_PER_LANE, base_packages, packages_for_ramp)
+    else:
+        packages_per_lane = 0
     planned_capacity = desired_lanes * SAFE_PACKAGE_SIZE * packages_per_lane
 
     if remaining < TARGET_SLA_PER_HOUR:
@@ -380,6 +399,10 @@ def adaptive_throughput_policy(
         "sla_state": sla_state,
         "backpressure": backpressure,
         "recent_lease_expiry_ratio": round(lease_expiry_ratio, 4),
+        "lease_stability_band": lease_stability_band,
+        "lease_stable_target_ratio": LEASE_STABLE_RATIO,
+        "ramp_stages_per_hour": list(RAMP_STAGES_PER_HOUR),
+        "ramp_target_per_hour": ramp_target,
         "claim_contract": "one active micro-batch per worker; import/checkpoint successfully before the next micro-batch",
         "window_contract": "runtime-authorized per-lane hourly work window; never one giant semantic prompt",
         "analysis_strategy": "semantic_micro_batches_with_continuous_import_checkpoint",
