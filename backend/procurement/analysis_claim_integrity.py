@@ -256,6 +256,13 @@ def import_result_records(
         .prefetch_related("notice__source_links__source_notice")
         .filter(run_id=run_id, pk__in=requested_item_ids)
     }
+    active_workers_to_renew = sorted(
+        {
+            str(item.claimed_by)
+            for item in item_map.values()
+            if item.claimed_by and item.claim_expires_at and item.claim_expires_at >= timezone.now()
+        }
+    )
 
     filtered_results: list[dict] = []
     changed_indexes: list[int] = []
@@ -353,7 +360,28 @@ def import_result_records(
             update_fields=["counts", "report", "checkpoint", "status", "updated_at"]
         )
 
-    if rebased_count or changed_indexes:
+    counts_for_renewal = dict(import_record.counts or {})
+    import_error_total = sum(
+        int(counts_for_renewal.get(key, 0) or 0)
+        for key in ("rejected", "invalid_hash", "invalid_context", "error")
+    )
+    renewed_workers: list[dict] = []
+    if (
+        not dry_run
+        and int(counts_for_renewal.get("imported", 0) or 0) > 0
+        and import_error_total == 0
+    ):
+        for worker_id in active_workers_to_renew:
+            renewal = _original_renew_worker_claim(
+                str(run_id),
+                worker_id=worker_id,
+                lease_seconds=adaptive.ACTIVE_RESERVATION_LEASE_SECONDS,
+                actor=actor,
+            )
+            if int(renewal.get("renewed_items", 0) or 0) > 0:
+                renewed_workers.append(renewal)
+
+    if rebased_count or changed_indexes or renewed_workers:
         AuditEvent.objects.create(
             actor=actor,
             action="procurement.analysis_run.claim_integrity_reconcile",
@@ -365,6 +393,14 @@ def import_result_records(
                 "claim_basis_schema": CLAIM_BASIS_SCHEMA,
                 "draft_only": True,
                 "integrity_weakened": False,
+                "rolling_lease_renewals": [
+                    {
+                        "worker_id": row.get("worker_id"),
+                        "renewed_items": int(row.get("renewed_items", 0) or 0),
+                        "claim_expires_at": row.get("claim_expires_at"),
+                    }
+                    for row in renewed_workers
+                ],
             },
         )
 
