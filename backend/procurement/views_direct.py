@@ -56,8 +56,9 @@ DIRECT_ACTIVE_STAGES = [
 DIRECT_METRIC_WORKFLOWS = {"all", "recommended", "selected", "submitted", "results", "active"}
 
 
-def _direct_list_metric_name(request, *args, **kwargs):
-    params = getattr(request, "query_params", getattr(request, "GET", {}))
+def _direct_list_metric_name(view_or_request, request=None, *args, **kwargs):
+    request_obj = request if request is not None else view_or_request
+    params = getattr(request_obj, "query_params", getattr(request_obj, "GET", {}))
     workflow = str(params.get("workflow_view", "")).strip().lower() or "all"
     if workflow not in DIRECT_METRIC_WORKFLOWS:
         workflow = "all"
