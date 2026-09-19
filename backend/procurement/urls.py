@@ -48,7 +48,8 @@ from .views_interaction_contract import (
     query_procurement_notices,
 )
 from .views_management_dashboard import unified_management_dashboard
-from .views_notice_feed_read_model import bounded_notice_feed, exact_notice_pagination_metadata
+from .views_notice_feed_read_model import bounded_notice_feed
+from .views_pagination_metadata import exact_notice_pagination_metadata
 from .views_internet_usage import internet_usage_dashboard
 from .views_pagination_metrics import pagination_dashboard_metrics
 from .views_recommended import AIRecommendedNoticeViewSet
