@@ -76,6 +76,19 @@ def system_status(request):
             "status": "unavailable",
             "safe_error": exc.__class__.__name__,
         }
+    performance_probe = None
+    if str(request.query_params.get("performance_probe", "")).strip() == "1":
+        try:
+            from procurement.performance_probe import collect_operator_performance_probe
+
+            performance_probe = collect_operator_performance_probe(request.user)
+        except Exception as exc:
+            performance_probe = {
+                "schema": "pdp-one.performance-operator-probe.v1",
+                "status": "unavailable",
+                "safe_error": exc.__class__.__name__,
+            }
+
     return Response({
         "service": "PDP One",
         "database": "connected",
@@ -87,6 +100,7 @@ def system_status(request):
         "general_analysis_reports": general_analysis_drafts,
         "connector_acceptance": connector_acceptance,
         "performance_assurance": performance_assurance,
+        "performance_probe": performance_probe,
     })
 
 

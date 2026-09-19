@@ -64,7 +64,7 @@ register_deployment_coordinator_tools(mcp)
     annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, openWorldHint=False, idempotentHint=True),
 )
 async def get_system_status() -> dict:
-    return await api("GET", "system-status/")
+    return await api("GET", "system-status/", params={"performance_probe": "1"})
 
 
 @mcp.tool(

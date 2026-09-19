@@ -75,7 +75,14 @@ class DatabaseQueryStats:
 
 
 def _budget(metric_name: str) -> dict[str, Any]:
-    return dict(PERFORMANCE_BUDGETS.get(metric_name, DEFAULT_BUDGET))
+    exact = PERFORMANCE_BUDGETS.get(metric_name)
+    if exact is not None:
+        return dict(exact)
+    # Safe bounded subview metric names inherit the parent path budget.
+    for parent, budget in PERFORMANCE_BUDGETS.items():
+        if metric_name.startswith(f"{parent}."):
+            return dict(budget)
+    return dict(DEFAULT_BUDGET)
 
 
 def _severity(metric_name: str, duration_ms: float) -> str:
@@ -208,39 +215,49 @@ def performance_assurance_snapshot(*, compact: bool = False) -> dict[str, Any]:
     }
 
 
-def instrument_procurement_endpoint(metric_name: str):
-    """Attach safe latency/query telemetry without logging SQL or business data."""
+def instrument_procurement_endpoint(metric_name):
+    """Attach safe latency/query telemetry without logging SQL or business data.
+
+    metric_name may be a static string or a resolver receiving the original
+    view args/kwargs. Dynamic resolvers must return only bounded low-cardinality
+    names derived from whitelisted request dimensions.
+    """
 
     def decorator(view_func):
         from functools import wraps
 
         @wraps(view_func)
         def wrapped(*args, **kwargs):
+            resolved_metric_name = (
+                str(metric_name(*args, **kwargs))
+                if callable(metric_name)
+                else str(metric_name)
+            )
             stats = DatabaseQueryStats()
             started = perf_counter()
             with connection.execute_wrapper(stats):
                 response = view_func(*args, **kwargs)
             duration_ms = (perf_counter() - started) * 1000.0
-            severity = _severity(metric_name, duration_ms)
+            severity = _severity(resolved_metric_name, duration_ms)
             status_code = int(getattr(response, "status_code", 200) or 200)
             _record_sample(
-                metric_name,
+                resolved_metric_name,
                 duration_ms=duration_ms,
                 db_ms=stats.duration_ms,
                 query_count=stats.count,
                 status_code=status_code,
             )
             response["Server-Timing"] = (
-                f'pdp;dur={duration_ms:.1f};desc="{metric_name}", '
+                f'pdp;dur={duration_ms:.1f};desc="{resolved_metric_name}", '
                 f'db;dur={stats.duration_ms:.1f}'
             )
             response["X-PDP-Query-Count"] = str(stats.count)
             response["X-PDP-Latency-Class"] = severity
-            response["X-PDP-Performance-Risk"] = str(_budget(metric_name)["risk"])
+            response["X-PDP-Performance-Risk"] = str(_budget(resolved_metric_name)["risk"])
             if severity in {"warning", "critical"}:
                 logger.warning(
                     "procurement_endpoint_latency metric=%s duration_ms=%.1f db_ms=%.1f query_count=%d severity=%s",
-                    metric_name,
+                    resolved_metric_name,
                     duration_ms,
                     stats.duration_ms,
                     stats.count,
