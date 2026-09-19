@@ -28,6 +28,8 @@ REANALYSIS_RECONCILE_INTERVAL = timedelta(minutes=10)
 SAFE_CLAIM_LIMIT = 250
 SEMANTIC_SLICE_SIZE = 50
 GLOBAL_ACTIVE_CLAIM_CAP = 10000
+ACTIVE_RESERVATION_LEASE_SECONDS = 90 * 60
+HARD_RESERVATION_MAX_AGE_SECONDS = 4 * 60 * 60
 
 
 def _admission_since(run: ProcurementAnalysisRun):
@@ -170,7 +172,7 @@ def renew_worker_claim(
     run_id: str,
     *,
     worker_id: str,
-    lease_seconds: int = 3600,
+    lease_seconds: int = ACTIVE_RESERVATION_LEASE_SECONDS,
     actor: str = "adaptive-analysis",
 ) -> dict:
     """Extend only the caller worker's still-active reserved claim window."""
@@ -178,12 +180,14 @@ def renew_worker_claim(
     run = ProcurementAnalysisRun.objects.select_for_update().get(pk=run_id)
     now = timezone.now()
     worker_key = worker_id[:120]
-    extension_seconds = max(60, min(int(lease_seconds), 3600))
+    extension_seconds = max(60, min(int(lease_seconds), ACTIVE_RESERVATION_LEASE_SECONDS))
     new_expiry = now + timedelta(seconds=extension_seconds)
+    hard_age_cutoff = now - timedelta(seconds=HARD_RESERVATION_MAX_AGE_SECONDS)
     active = run.items.filter(
         status=ProcurementAnalysisRunItem.Status.CLAIMED,
         claimed_by=worker_key,
         claim_expires_at__gte=now,
+        claimed_at__gte=hard_age_cutoff,
     )
     renewed = active.update(claim_expires_at=new_expiry, updated_at=now)
     if renewed:
@@ -208,6 +212,7 @@ def renew_worker_claim(
         "lease_seconds": extension_seconds,
         "claim_expires_at": new_expiry.isoformat() if renewed else None,
         "expired_claims_resurrected": False,
+        "hard_reservation_max_age_seconds": HARD_RESERVATION_MAX_AGE_SECONDS,
     }
 
 
@@ -233,7 +238,7 @@ def claim_newest_run_items(
     *,
     worker_id: str,
     limit: int = SAFE_CLAIM_LIMIT,
-    lease_seconds: int = 3600,
+    lease_seconds: int = ACTIVE_RESERVATION_LEASE_SECONDS,
 ) -> list[ProcurementAnalysisRunItem]:
     """Reserve up to 250 items, returning only the next 50-item semantic slice.
 
@@ -299,7 +304,9 @@ def claim_newest_run_items(
         queryset = queryset.select_for_update()
 
     reserved = list(queryset[:requested_limit])
-    expires = now + timedelta(seconds=max(60, min(int(lease_seconds), 3600)))
+    expires = now + timedelta(
+        seconds=max(60, min(int(lease_seconds), ACTIVE_RESERVATION_LEASE_SECONDS))
+    )
     for item in reserved:
         item.new_claim_token()
         item.status = ProcurementAnalysisRunItem.Status.CLAIMED
@@ -334,6 +341,9 @@ def claim_newest_run_items(
             "claim_reservation_size": SAFE_CLAIM_LIMIT,
             "semantic_micro_batch_size": SEMANTIC_SLICE_SIZE,
             "global_active_claim_cap": GLOBAL_ACTIVE_CLAIM_CAP,
+            "active_reservation_lease_seconds": ACTIVE_RESERVATION_LEASE_SECONDS,
+            "hard_reservation_max_age_seconds": HARD_RESERVATION_MAX_AGE_SECONDS,
+            "claim_cycle_mode": "just_in_time_round_robin",
         }
         run.save(update_fields=["status", "heartbeat_at", "metadata", "updated_at"])
 
