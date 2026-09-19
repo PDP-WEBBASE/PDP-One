@@ -84,14 +84,14 @@ def register_procurement_analysis_tools(mcp, api: ApiCall) -> None:
         return await api("POST", f"procurement/analysis/runs/{run_id}/cancel/", json={})
 
     @mcp.tool(
-        description="Reserve up to 250 backend-governed procurement items for one logical worker while returning only the next bounded semantic slice. Repeated calls after successful import continue the same reservation until it is exhausted.",
+        description="Reserve up to 250 backend-governed procurement items just-in-time for one logical worker while returning only the next bounded semantic slice. Active V3.1 reservations use a rolling 90-minute lease and retain one claim token until the reservation is exhausted.",
         annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, openWorldHint=False, idempotentHint=False),
     )
     async def claim_procurement_analysis_work(
         run_id: str,
         worker_id: str = "chatgpt-connected-app",
         limit: int = 250,
-        lease_seconds: int = 3600,
+        lease_seconds: int = 5400,
     ) -> dict:
         return await api(
             "POST",
@@ -99,25 +99,25 @@ def register_procurement_analysis_tools(mcp, api: ApiCall) -> None:
             json={
                 "worker_id": worker_id[:120],
                 "limit": max(1, min(int(limit), 250)),
-                "lease_seconds": max(60, min(int(lease_seconds), 3600)),
+                "lease_seconds": max(60, min(int(lease_seconds), 5400)),
             },
         )
 
     @mcp.tool(
-        description="Renew only the still-active procurement analysis claim owned by this worker. Expired claims are never resurrected and no new work is claimed.",
+        description="Renew only the still-active procurement analysis reservation owned by this worker, up to the V3.1 rolling 90-minute lease. Expired claims are never resurrected and no new work is claimed.",
         annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, openWorldHint=False, idempotentHint=False),
     )
     async def renew_procurement_analysis_claim(
         run_id: str,
         worker_id: str = "chatgpt-connected-app",
-        lease_seconds: int = 3600,
+        lease_seconds: int = 5400,
     ) -> dict:
         return await api(
             "POST",
             f"procurement/analysis/runs/{run_id}/claim/",
             json={
                 "worker_id": worker_id[:120],
-                "lease_seconds": max(60, min(int(lease_seconds), 3600)),
+                "lease_seconds": max(60, min(int(lease_seconds), 5400)),
                 "renew_only": True,
             },
         )
