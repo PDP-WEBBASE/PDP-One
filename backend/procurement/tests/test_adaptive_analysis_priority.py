@@ -118,7 +118,7 @@ class AdaptiveAnalysisPriorityTests(TestCase):
         self.assertEqual(len(first), 1)
         self.assertEqual(second, [])
 
-    def test_large_claim_reserves_500_but_returns_only_50_for_semantic_analysis(self):
+    def test_large_claim_reserves_250_but_returns_only_50_for_semantic_analysis(self):
         now = timezone.now()
         for index in range(SAFE_CLAIM_LIMIT + 10):
             self._notice(f"فراخوان {index}", now + timedelta(seconds=index))
@@ -126,7 +126,7 @@ class AdaptiveAnalysisPriorityTests(TestCase):
 
         claimed = claim_newest_run_items(str(run.id), worker_id="bounded-worker", limit=500)
 
-        self.assertEqual(SAFE_CLAIM_LIMIT, 500)
+        self.assertEqual(SAFE_CLAIM_LIMIT, 250)
         self.assertEqual(SEMANTIC_SLICE_SIZE, 50)
         self.assertEqual(len(claimed), SEMANTIC_SLICE_SIZE)
         self.assertEqual(
