@@ -46,9 +46,6 @@ type ResultTarget = {
   kindLabel: string;
 };
 
-type StableWindow = Window & {
-  __pdpStableListCache?: Map<string, unknown>;
-};
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "/api/v1";
 const PROCUREMENT_API = `${API_BASE}/procurement`;
