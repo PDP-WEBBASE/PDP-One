@@ -51,7 +51,7 @@ class PerformanceAssuranceFrameworkTests(APITestCase):
         self.assertEqual(response["X-PDP-Performance-Risk"], "hot_path")
         snapshot = performance_assurance_snapshot(compact=True)
         self.assertGreaterEqual(
-            snapshot["metrics"]["procurement.ui.direct.list"]["sample_count"],
+            snapshot["metrics"]["procurement.ui.direct.list.all"]["sample_count"],
             1,
         )
 
