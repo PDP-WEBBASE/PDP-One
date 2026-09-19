@@ -22,12 +22,12 @@ from .models_analysis_runs import ProcurementAnalysisRun, ProcurementAnalysisRun
 
 ADMISSION_OVERLAP = timedelta(minutes=10)
 REANALYSIS_RECONCILE_INTERVAL = timedelta(minutes=10)
-# A worker reserves a larger operational window, but ChatGPT only receives one
-# bounded semantic slice at a time. This reduces claim/scheduler overhead without
-# turning 500 records into one model prompt.
-SAFE_CLAIM_LIMIT = 500
+# Hyper Turbo V3 fixes each logical worker reservation at 250 items while
+# returning only one bounded 50-item semantic slice at a time. Forty logical
+# workers may therefore hold at most 10,000 active items across the run.
+SAFE_CLAIM_LIMIT = 250
 SEMANTIC_SLICE_SIZE = 50
-GLOBAL_ACTIVE_CLAIM_CAP = 4000
+GLOBAL_ACTIVE_CLAIM_CAP = 10000
 
 
 def _admission_since(run: ProcurementAnalysisRun):
@@ -235,13 +235,12 @@ def claim_newest_run_items(
     limit: int = SAFE_CLAIM_LIMIT,
     lease_seconds: int = 3600,
 ) -> list[ProcurementAnalysisRunItem]:
-    """Reserve up to 500 items, returning only the next 50-item semantic slice.
+    """Reserve up to 250 items, returning only the next 50-item semantic slice.
 
-    The first call for an idle worker reserves an operational window of up to
-    SAFE_CLAIM_LIMIT items. Only SEMANTIC_SLICE_SIZE items are returned to ChatGPT.
-    After those results are imported/checkpointed, the next call returns the next
-    still-claimed slice from the same reservation. This preserves semantic quality
-    while reducing repeated claim-allocation overhead.
+    The first call for an idle logical worker reserves the fixed Hyper Turbo V3
+    operational window of up to SAFE_CLAIM_LIMIT items. Only SEMANTIC_SLICE_SIZE
+    items are returned to ChatGPT. After successful import/checkpoint, the next
+    call returns the next still-claimed slice from the same reservation.
     """
 
     run = ProcurementAnalysisRun.objects.select_for_update().select_related("context_snapshot").get(pk=run_id)
@@ -330,7 +329,7 @@ def claim_newest_run_items(
         run.heartbeat_at = now
         run.metadata = {
             **(run.metadata or {}),
-            "throughput_controller": "adaptive-packages-v2",
+            "throughput_controller": "hyper-turbo-v3-30k",
             "safe_package_size": SEMANTIC_SLICE_SIZE,
             "claim_reservation_size": SAFE_CLAIM_LIMIT,
             "semantic_micro_batch_size": SEMANTIC_SLICE_SIZE,
