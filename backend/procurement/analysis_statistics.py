@@ -5,7 +5,13 @@ from typing import Any
 from django.db.models import BooleanField, Case, Count, F, OuterRef, Subquery, Value, When
 from django.utils import timezone
 
-from .analysis_run_adaptive import GLOBAL_ACTIVE_CLAIM_CAP, SAFE_CLAIM_LIMIT, SEMANTIC_SLICE_SIZE
+from .analysis_run_adaptive import (
+    ACTIVE_RESERVATION_LEASE_SECONDS,
+    GLOBAL_ACTIVE_CLAIM_CAP,
+    HARD_RESERVATION_MAX_AGE_SECONDS,
+    SAFE_CLAIM_LIMIT,
+    SEMANTIC_SLICE_SIZE,
+)
 from .analysis_run_service import active_run
 from .analysis_throughput import analysis_throughput_snapshot
 from .models import ProcurementNotice
@@ -100,6 +106,9 @@ def procurement_analysis_statistics(run: ProcurementAnalysisRun | None = None) -
             "claim_reservation_limit": SAFE_CLAIM_LIMIT,
             "semantic_slice_size": SEMANTIC_SLICE_SIZE,
             "global_active_claim_cap": GLOBAL_ACTIVE_CLAIM_CAP,
+            "active_reservation_lease_seconds": ACTIVE_RESERVATION_LEASE_SECONDS,
+            "hard_reservation_max_age_seconds": HARD_RESERVATION_MAX_AGE_SECONDS,
+            "claim_cycle_mode": "just_in_time_round_robin",
             "one_active_package_per_worker": True,
             "sequential_packages_after_successful_import": True,
             "capacity_scales_by_package_cycles_not_claim_size": True,

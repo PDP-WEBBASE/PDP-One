@@ -131,6 +131,48 @@ class AnalysisClaimIntegrityTests(TestCase):
         self.assertIsNone(self.item.claim_token)
         self.assertEqual(NoticeAnalysisDraft.objects.filter(notice=self.notice).count(), 0)
 
+    def test_successful_import_renews_remaining_worker_reservation(self):
+        now = timezone.now()
+        other_notice = ProcurementNotice.objects.create(
+            resolved_notice_type=ProcurementNotice.NoticeType.TENDER,
+            type_resolution_status=ProcurementNotice.TypeResolutionStatus.RESOLVED,
+            title="فراخوان دوم برای تمدید رزرو",
+            description="خدمات مشاوره و طراحی",
+            employer_name="کارفرمای آزمون",
+            province="تهران",
+            processing_status=ProcurementNotice.ProcessingStatus.READY_FOR_ANALYSIS,
+            first_seen_at=now,
+            last_seen_at=now,
+        )
+        other_item = ProcurementAnalysisRunItem.objects.create(
+            run=self.run,
+            notice=other_notice,
+            notice_content_hash=analysis_run_service.notice_basis_hash(other_notice),
+            context_hash=self.run.context_snapshot.content_hash,
+            status=ProcurementAnalysisRunItem.Status.CLAIMED,
+            claimed_by="claim-integrity-test",
+            claimed_at=now,
+            claim_expires_at=now + timedelta(minutes=5),
+            attempts=1,
+            sequence=2,
+            shard_number=1,
+        )
+        other_item.new_claim_token()
+        other_item.save(update_fields=["claim_token", "updated_at"])
+        old_expiry = other_item.claim_expires_at
+
+        record = analysis_run_service.import_result_records(
+            run_id=str(self.run.id),
+            results=[self.result_payload()],
+            actor=self.user.username,
+            dry_run=False,
+        )
+
+        self.assertEqual(record.counts["imported"], 1)
+        other_item.refresh_from_db()
+        self.assertEqual(other_item.status, ProcurementAnalysisRunItem.Status.CLAIMED)
+        self.assertGreater(other_item.claim_expires_at, old_expiry + timedelta(hours=1))
+
     def test_recent_throughput_exposes_exact_error_buckets_and_sampled_classes(self):
         ProcurementAnalysisImport.objects.create(
             run=self.run,

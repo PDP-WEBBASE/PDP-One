@@ -93,8 +93,9 @@ class AnalysisThroughputControllerTests(TestCase):
             self.assertEqual(policy["claim_reservation_size"], 250)
             self.assertEqual(policy["claim_window_target_per_lane"], 1000)
             self.assertEqual(policy["per_lane_hourly_ceiling"], 1000)
-            self.assertEqual(policy["max_packages_per_lane"], 20)
-            self.assertEqual(policy["planned_capacity_per_hour"], 40000)
+            self.assertEqual(policy["max_packages_per_lane"], 3)
+            self.assertEqual(policy["planned_capacity_per_hour"], 6000)
+            self.assertEqual(policy["ramp_target_per_hour"], 5000)
 
     def test_backpressure_reduces_package_cycles_when_recent_leases_expire(self):
         policy = adaptive_throughput_policy(
@@ -104,10 +105,65 @@ class AnalysisThroughputControllerTests(TestCase):
         )
 
         self.assertEqual(policy["backpressure"], "degraded")
-        self.assertEqual(policy["max_packages_per_lane"], 10)
-        self.assertEqual(policy["planned_capacity_per_hour"], 20000)
+        self.assertEqual(policy["lease_stability_band"], "degraded")
+        self.assertEqual(policy["ramp_target_per_hour"], 5000)
+        self.assertEqual(policy["max_packages_per_lane"], 3)
+        self.assertEqual(policy["planned_capacity_per_hour"], 6000)
         self.assertEqual(policy["package_size"], 50)
         self.assertEqual(policy["claim_reservation_size"], 250)
+
+    def test_stable_lease_ratio_ramps_capacity_by_observed_imports(self):
+        first_stage = adaptive_throughput_policy(
+            50000,
+            recent_completed=2500,
+            recent_lease_expired=0,
+        )
+        second_stage = adaptive_throughput_policy(
+            50000,
+            recent_completed=6000,
+            recent_lease_expired=0,
+        )
+        full_stage = adaptive_throughput_policy(
+            50000,
+            recent_completed=31000,
+            recent_lease_expired=0,
+        )
+
+        self.assertEqual(first_stage["lease_stability_band"], "stable")
+        self.assertEqual(first_stage["ramp_target_per_hour"], 5000)
+        self.assertEqual(first_stage["planned_capacity_per_hour"], 6000)
+        self.assertEqual(second_stage["ramp_target_per_hour"], 10000)
+        self.assertEqual(second_stage["planned_capacity_per_hour"], 10000)
+        self.assertEqual(full_stage["ramp_target_per_hour"], 40000)
+        self.assertEqual(full_stage["planned_capacity_per_hour"], 40000)
+
+    def test_renewal_is_capped_at_90_minutes_and_hard_age_blocks_old_reservation(self):
+        self._notice("فراخوان برای lease نود دقیقه")
+        run = self._active_reanalysis_run()
+        claimed = claim_newest_run_items(
+            str(run.id),
+            worker_id="lease-v31-worker",
+            limit=1,
+            lease_seconds=99999,
+        )
+        self.assertEqual(len(claimed), 1)
+        claimed[0].refresh_from_db()
+        self.assertLessEqual(
+            claimed[0].claim_expires_at,
+            timezone.now() + timedelta(seconds=5405),
+        )
+
+        run.items.filter(pk=claimed[0].pk).update(
+            claimed_at=timezone.now() - timedelta(hours=5),
+            claim_expires_at=timezone.now() + timedelta(minutes=30),
+        )
+        renewal = renew_worker_claim(
+            str(run.id),
+            worker_id="lease-v31-worker",
+            lease_seconds=99999,
+        )
+        self.assertEqual(renewal["renewed_items"], 0)
+        self.assertEqual(renewal["hard_reservation_max_age_seconds"], 14400)
 
     def test_exact_current_draft_skips_redundant_explicit_reanalysis_before_claim(self):
         notice = self._notice("فراخوان دارای تحلیل معتبر")
