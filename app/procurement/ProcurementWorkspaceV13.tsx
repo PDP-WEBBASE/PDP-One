@@ -409,6 +409,7 @@ export default function ProcurementWorkspaceV13() {
   const [username, setUsername] = useState("");
   const [notices, setNotices] = useState<ApiNotice[]>([]);
   const [noticeCount, setNoticeCount] = useState(0);
+  const [noticeExactCount, setNoticeExactCount] = useState<number | null>(null);
   const [noticePage, setNoticePage] = useState(1);
   const [noticePageSize, setNoticePageSize] = useState<PageSize>(50);
   const [noticeLoading, setNoticeLoading] = useState(false);
@@ -546,6 +547,54 @@ export default function ProcurementWorkspaceV13() {
     }).finally(() => { if (active) setNoticeLoading(false); });
     return () => { active = false; procurementDataClient.abort(context); };
   }, [mode, tab, noticeView, noticePage, noticePageSize, debouncedSearch, sourceFilter, provinceFilter, importanceFilter, urgencyFilter, viewRefresh]);
+
+  useEffect(() => {
+    if (mode !== "live" || (tab !== "tenders" && tab !== "inquiries")) {
+      setNoticeExactCount(null);
+      return;
+    }
+    setNoticeExactCount(null);
+  }, [mode, tab, noticeView, debouncedSearch, sourceFilter, provinceFilter, importanceFilter, urgencyFilter, viewRefresh]);
+
+  useEffect(() => {
+    if (mode !== "live" || (tab !== "tenders" && tab !== "inquiries") || noticeLoading) return;
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => {
+      const extra = advancedFilters();
+      const params = new URLSearchParams();
+      params.set("notice_type", tab === "tenders" ? "tender" : "inquiry");
+      params.set("workflow", workflowCode(noticeView));
+      if (debouncedSearch) params.set("search", debouncedSearch);
+      appendRepeated(params, "source_name", extra.sources.length ? extra.sources : (sourceFilter ? [sourceFilter] : []));
+      appendRepeated(params, "province", extra.provinces.length ? extra.provinces : (provinceFilter ? [provinceFilter] : []));
+      appendRepeated(params, "importance", extra.importance.length ? extra.importance : (importanceFilter ? [importanceFilter] : []));
+      appendRepeated(params, "urgency", extra.urgency.length ? extra.urgency : (urgencyFilter ? [urgencyFilter] : []));
+      appendRepeated(params, "deadline_status", extra.deadlineStatuses);
+      if (extra.publishedFrom) params.set("published_from", extra.publishedFrom);
+      if (extra.publishedTo) params.set("published_to", extra.publishedTo);
+      appendRepeated(params, "business_opportunity_type", extra.opportunityTypes);
+      appendRepeated(params, "activity_domain", extra.activityDomains);
+
+      void fetch(`${PROCUREMENT_API}/ui/notices/pagination-metadata/?${params.toString()}`, {
+        credentials: "include",
+        headers: { Accept: "application/json" },
+        signal: controller.signal,
+      }).then(async (response) => {
+        if (!response.ok) throw new Error(`pagination-metadata-${response.status}`);
+        return await response.json() as { total_count?: number };
+      }).then((payload) => {
+        if (!controller.signal.aborted && Number.isFinite(Number(payload.total_count))) {
+          setNoticeExactCount(Math.max(0, Number(payload.total_count)));
+        }
+      }).catch((error) => {
+        if (error instanceof DOMException && error.name === "AbortError") return;
+      });
+    }, 0);
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+    };
+  }, [mode, tab, noticeView, debouncedSearch, sourceFilter, provinceFilter, importanceFilter, urgencyFilter, viewRefresh, noticeLoading]);
 
   useEffect(() => {
     if (mode !== "live" || tab !== "direct") return;
@@ -944,7 +993,7 @@ export default function ProcurementWorkspaceV13() {
           <div><div className={styles.recordTop}><small><b>ردیف {fa.format((noticePage-1)*noticePageSize+index+1)}</b>{item.reference_code && noticeView !== "all" && noticeView !== "recommended" && <> · <span className={styles.codeBadge}>{item.reference_code}</span></>} · انتشار {formatDate(item.published_date)}</small><div style={{display:"flex",gap:5,alignItems:"center",marginInlineStart:"auto",flexWrap:"wrap"}}>{item.source_url || item.detail_url ? <a href={item.detail_url || item.source_url} target="_blank" rel="noreferrer" style={sourceBadgeStyle}>{item.source_name || "منبع"}</a> : <span style={sourceBadgeStyle}>{item.source_name || "منبع نامشخص"}</span>}<span style={{...importanceBadgeBase,...importanceStyles[item.importance]}}>اهمیت {item.importance_label || importanceLabels[item.importance]}</span><span className={`${styles.urgency} ${styles[u.tone]}`}>{u.label}</span><button className={styles.secondaryButton} style={compactViewStyle} onClick={() => setDetail({kind:"notice",item})}>مشاهده</button></div></div><h3 style={{margin:"4px 0 2px",fontSize:17}}>{item.title}</h3><p>{item.employer_name || "کارفرما نامشخص"}</p><div className={styles.facts} style={{marginTop:5,gap:5}}>{item.province && <span>{item.province}</span>}<span>{u.remaining}</span><span>پردازش: {item.processing_status_label}</span>{(item.submission_document_count || 0) > 0 && <span>{fa.format(item.submission_document_count || 0)} سند</span>}</div></div>
           <div className={styles.decision} style={compactDecisionStyle}><span className={styles.stage}>{item.case_stage_label || (item.is_recommended ? "پیشنهادی" : allLabel(tab))}</span><dl style={{margin:0}}><div style={{padding:"2px 0"}}><dt>مسئول</dt><dd>{item.case_responsible_username || "تعیین نشده"}</dd></div></dl>{!item.case_stage && <div className={styles.actions}><button className={styles.primaryButton} style={{padding:"6px 9px"}} disabled={selecting} onClick={() => selectNotice(item)}>{selecting ? "در حال ثبت..." : "انتخاب"}</button></div>}</div>
         </article>; }) : <div className={styles.empty}>{noticeLoading ? "در حال دریافت این صفحه..." : "رکورد واقعی مطابق این فیلتر وجود ندارد."}</div>}</div>
-        <PaginationControls page={noticePage} pageSize={noticePageSize} count={noticeCount} loading={noticeLoading} onPage={setNoticePage} onPageSize={(size) => { setNoticePageSize(size); setNoticePage(1); }} />
+        <PaginationControls page={noticePage} pageSize={noticePageSize} count={noticeExactCount ?? noticeCount} loading={noticeLoading || noticeExactCount === null} onPage={setNoticePage} onPageSize={(size) => { setNoticePageSize(size); setNoticePage(1); }} />
       </section>}
 
       {tab === "direct" && <section data-pdp-shared-notice-layout="direct">
