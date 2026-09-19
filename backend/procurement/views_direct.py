@@ -57,7 +57,8 @@ DIRECT_METRIC_WORKFLOWS = {"all", "recommended", "selected", "submitted", "resul
 
 
 def _direct_list_metric_name(request, *args, **kwargs):
-    workflow = str(request.query_params.get("workflow_view", "")).strip().lower() or "all"
+    params = getattr(request, "query_params", getattr(request, "GET", {}))
+    workflow = str(params.get("workflow_view", "")).strip().lower() or "all"
     if workflow not in DIRECT_METRIC_WORKFLOWS:
         workflow = "all"
     return f"procurement.ui.direct.list.{workflow}"
