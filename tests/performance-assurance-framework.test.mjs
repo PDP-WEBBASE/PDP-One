@@ -60,3 +60,21 @@ test("operator performance probe is bounded and explicitly gated", () => {
   assert.match(core, /request\.query_params\.get\("performance_probe"/);
   assert.match(mcp, /params=\{"performance_probe": "1"\}/);
 });
+
+
+test("Inquiry Recommended DB diagnostic is read-only and sanitized", () => {
+  const diagnostic = read("backend/procurement/performance_db_diagnostic.py");
+  const core = read("backend/core/views.py");
+  const mcp = read("services/pdp_mcp/server_core.py");
+  assert.match(diagnostic, /DIAGNOSTIC_PAGE_SIZE = 50/);
+  assert.match(diagnostic, /DIAGNOSTIC_CACHE_TTL_SECONDS = 10 \* 60/);
+  assert.match(diagnostic, /analyze=False/);
+  assert.doesNotMatch(diagnostic, /analyze=True/);
+  assert.match(diagnostic, /sql_text_recorded/);
+  assert.match(diagnostic, /sql_params_recorded/);
+  assert.match(diagnostic, /business_payload_recorded/);
+  assert.match(diagnostic, /pg_stat_activity/);
+  assert.match(diagnostic, /pg_stat_user_tables/);
+  assert.match(core, /performance_db_diagnostic/);
+  assert.match(mcp, /performance_db_diagnostic/);
+});
