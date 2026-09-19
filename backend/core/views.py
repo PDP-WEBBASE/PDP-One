@@ -66,6 +66,16 @@ def system_status(request):
 
     procurement_analysis = analysis_review_summary()
     general_analysis_drafts = AnalysisReport.objects.count()
+    try:
+        from procurement.performance_metrics import performance_assurance_snapshot
+
+        performance_assurance = performance_assurance_snapshot(compact=True)
+    except Exception as exc:
+        performance_assurance = {
+            "schema": "pdp-one.performance-assurance.v1",
+            "status": "unavailable",
+            "safe_error": exc.__class__.__name__,
+        }
     return Response({
         "service": "PDP One",
         "database": "connected",
@@ -76,6 +86,7 @@ def system_status(request):
         "analysis_review": procurement_analysis,
         "general_analysis_reports": general_analysis_drafts,
         "connector_acceptance": connector_acceptance,
+        "performance_assurance": performance_assurance,
     })
 
 
