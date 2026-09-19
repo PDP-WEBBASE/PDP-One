@@ -20,7 +20,7 @@ CACHE_INDEX_KEY = "pdp:performance-assurance:v1:metric-index"
 # Risk-based budgets: targets guide engineering; only the severe threshold is
 # intended to act as a hard promotion signal for critical interactive paths.
 PERFORMANCE_BUDGETS: dict[str, dict[str, Any]] = {
-    "procurement.ui.revision": {
+    "procurement.interaction.revision.v1": {
         "risk": "hot_path",
         "target_ms": 250.0,
         "warning_ms": 750.0,
