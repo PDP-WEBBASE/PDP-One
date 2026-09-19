@@ -94,3 +94,35 @@ class PerformanceAssuranceFrameworkTests(APITestCase):
         self.assertIn(key, snapshot["metrics"])
         self.assertEqual(snapshot["metrics"][key]["risk"], "hot_path")
         self.assertGreaterEqual(snapshot["metrics"][key]["sample_count"], 1)
+
+
+    def test_operator_probe_is_bounded_and_cached(self):
+        from procurement.performance_probe import collect_operator_performance_probe
+
+        first = collect_operator_performance_probe(self.user, force=True)
+        self.assertEqual(first["schema"], "pdp-one.performance-operator-probe.v1")
+        self.assertFalse(first["stress_test"])
+        self.assertFalse(first["exact_count_used"])
+        self.assertFalse(first["sql_text_recorded"])
+        self.assertFalse(first["business_payload_recorded"])
+        self.assertEqual(first["page_size"], 50)
+        self.assertEqual(first["summary"]["measured_paths"], 18)
+        paths = {item["path"] for item in first["measurements"]}
+        self.assertIn("notices.tender.recent", paths)
+        self.assertIn("notices.inquiry.selected", paths)
+        self.assertIn("direct.selected", paths)
+        self.assertIn("dashboard.cold", paths)
+        self.assertIn("dashboard.warm", paths)
+
+        second = collect_operator_performance_probe(self.user)
+        self.assertTrue(second["cache_hit"])
+
+    def test_system_status_probe_is_explicitly_gated(self):
+        normal = self.client.get("/api/v1/system-status/")
+        self.assertEqual(normal.status_code, 200)
+        self.assertIsNone(normal.json()["performance_probe"])
+
+        probed = self.client.get("/api/v1/system-status/", {"performance_probe": "1"})
+        self.assertEqual(probed.status_code, 200)
+        payload = probed.json()["performance_probe"]
+        self.assertEqual(payload["schema"], "pdp-one.performance-operator-probe.v1")
