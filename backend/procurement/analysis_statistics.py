@@ -96,7 +96,7 @@ def procurement_analysis_statistics(run: ProcurementAnalysisRun | None = None) -
         "throughput": None,
         "claim_policy": {
             "priority_policy": "newest_first",
-            "safe_claim_limit": SEMANTIC_SLICE_SIZE,
+            "safe_claim_limit": SAFE_CLAIM_LIMIT,
             "claim_reservation_limit": SAFE_CLAIM_LIMIT,
             "semantic_slice_size": SEMANTIC_SLICE_SIZE,
             "global_active_claim_cap": GLOBAL_ACTIVE_CLAIM_CAP,
