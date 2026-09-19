@@ -93,8 +93,9 @@ class AnalysisThroughputControllerTests(TestCase):
             self.assertEqual(policy["claim_reservation_size"], 250)
             self.assertEqual(policy["claim_window_target_per_lane"], 1000)
             self.assertEqual(policy["per_lane_hourly_ceiling"], 1000)
-            self.assertEqual(policy["max_packages_per_lane"], 20)
-            self.assertEqual(policy["planned_capacity_per_hour"], 40000)
+            self.assertEqual(policy["max_packages_per_lane"], 3)
+            self.assertEqual(policy["planned_capacity_per_hour"], 6000)
+            self.assertEqual(policy["ramp_target_per_hour"], 5000)
 
     def test_backpressure_reduces_package_cycles_when_recent_leases_expire(self):
         policy = adaptive_throughput_policy(
