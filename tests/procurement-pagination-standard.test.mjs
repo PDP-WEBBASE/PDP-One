@@ -21,3 +21,11 @@ test("shared pagination preserves page size and supports compact manual jump", (
   assert.match(workspace, /submitJump/);
   assert.doesNotMatch(workspace, /شماره صفحه را به‌صورت عدد صحیح وارد کنید/);
 });
+
+
+test("notice exact pagination metadata is asynchronous and separate from the bounded hot path", () => {
+  assert.match(workspace, /pagination-metadata/);
+  assert.match(workspace, /noticeExactCount/);
+  assert.match(workspace, /noticeLoading\) return/);
+  assert.match(workspace, /count=\{noticeExactCount \?\? noticeCount\}/);
+});

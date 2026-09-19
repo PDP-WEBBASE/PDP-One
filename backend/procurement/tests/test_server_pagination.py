@@ -161,3 +161,47 @@ class RecommendedNoticePaginationTests(TestCase):
         self.assertEqual(response.data["count"], 55)
         self.assertEqual(len(response.data["results"]), 30)
         self.assertIsNotNone(response.data["next"])
+
+
+class ExactPaginationMetadataTests(TestCase):
+    def setUp(self):
+        User = get_user_model()
+        self.user = User.objects.create_user(username="exact-pagination-user", password="test-pass-123")
+        self.client = APIClient()
+        self.client.force_authenticate(self.user)
+        self.now = timezone.now()
+
+    def create_notice(self, index):
+        return ProcurementNotice.objects.create(
+            resolved_notice_type=ProcurementNotice.NoticeType.TENDER,
+            title=f"فراخوان دقیق {index:03d}",
+            employer_name="کارفرمای تست",
+            province="تهران",
+            published_date=timezone.localdate(),
+            first_seen_at=self.now - timedelta(minutes=index),
+            last_seen_at=self.now - timedelta(minutes=index),
+        )
+
+    def test_exact_metadata_returns_full_total_independent_of_page(self):
+        for index in range(201):
+            self.create_notice(index)
+
+        bounded = self.client.get(
+            "/api/v1/procurement/ui/notices/?notice_type=tender&workflow=recent&page=1&page_size=50"
+        )
+        self.assertEqual(bounded.status_code, 200)
+        self.assertFalse(bounded.data["count_is_exact"])
+        self.assertEqual(bounded.data["count"], 51)
+
+        exact = self.client.get(
+            "/api/v1/procurement/ui/notices/pagination-metadata/?notice_type=tender&workflow=recent"
+        )
+        self.assertEqual(exact.status_code, 200)
+        self.assertTrue(exact.data["count_is_exact"])
+        self.assertEqual(exact.data["total_count"], 201)
+
+        exact_again = self.client.get(
+            "/api/v1/procurement/ui/notices/pagination-metadata/?notice_type=tender&workflow=recent&page=4&page_size=100"
+        )
+        self.assertEqual(exact_again.status_code, 200)
+        self.assertEqual(exact_again.data["total_count"], 201)
