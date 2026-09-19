@@ -78,3 +78,16 @@ test("Inquiry Recommended DB diagnostic is read-only and sanitized", () => {
   assert.match(core, /performance_db_diagnostic/);
   assert.match(mcp, /performance_db_diagnostic/);
 });
+
+
+test("analysis draft planner statistics policy is bounded and PostgreSQL-specific", () => {
+  const migration = read("backend/procurement/migrations/0028_analysis_draft_planner_statistics.py");
+  assert.match(migration, /vendor != "postgresql"/);
+  assert.match(migration, /autovacuum_analyze_scale_factor = 0\.02/);
+  assert.match(migration, /autovacuum_analyze_threshold = 500/);
+  assert.match(migration, /ANALYZE \{TABLE\}/);
+  assert.match(migration, /RESET \(/);
+  assert.doesNotMatch(migration, /CREATE\s+INDEX/i);
+  assert.doesNotMatch(migration, /DELETE\s+FROM/i);
+  assert.doesNotMatch(migration, /TRUNCATE/i);
+});
