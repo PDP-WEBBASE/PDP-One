@@ -237,6 +237,22 @@ function workflowCode(view: WorkflowView) {
   return view === "all" ? "recent" : view;
 }
 
+function noticeMatchesWorkflow(item: ApiNotice, view: WorkflowView) {
+  if (view === "all") return true;
+  if (view === "recommended") return item.is_recommended && !item.case_stage;
+  if (view === "selected") return selectedNoticeStages.has(item.case_stage || "");
+  if (view === "submitted") return submittedNoticeStages.has(item.case_stage || "");
+  return resultNoticeStages.has(item.case_stage || "");
+}
+
+function directMatchesWorkflow(item: ApiDirectOpportunity, view: WorkflowView) {
+  if (view === "all") return true;
+  if (view === "recommended") return recommendedDirectStages.has(item.stage);
+  if (view === "selected") return selectedDirectStages.has(item.stage);
+  if (view === "submitted") return item.stage === "submitted";
+  return resultDirectStages.has(item.stage);
+}
+
 function sameOriginPath(value: string) {
   const url = new URL(value, window.location.origin);
   return `${url.pathname}${url.search}`;
@@ -597,19 +613,35 @@ export default function ProcurementWorkspaceV13() {
         setViewRefresh((value) => value + 1);
       }
       if (sync.noticeId && sync.source !== "workspace-v13") {
-        procurementDataClient.invalidate();
-        setViewRefresh((value) => value + 1);
+        const noticeId = sync.noticeId;
+        void fetchRecord<ApiNotice>(`${PROCUREMENT_API}/notices/${noticeId}/`).then((updated) => {
+          const existed = notices.some((item) => item.id === noticeId);
+          if (!existed) return;
+          const keep = noticeMatchesWorkflow(updated, noticeView);
+          setNotices((current) => keep
+            ? current.map((item) => item.id === noticeId ? updated : item)
+            : current.filter((item) => item.id !== noticeId));
+          if (!keep) setNoticeCount((count) => Math.max(0, count - 1));
+        }).catch(() => {});
       }
       if (sync.directId && sync.source !== "workspace-v13") {
-        directCache.current.clear();
-        setDirectRefresh((value) => value + 1);
+        const directId = sync.directId;
+        void fetchRecord<ApiDirectOpportunity>(`${PROCUREMENT_API}/direct-opportunities/${directId}/`).then((updated) => {
+          const existed = directReferrals.some((item) => item.id === directId);
+          if (!existed) return;
+          const keep = directMatchesWorkflow(updated, directView);
+          setDirectReferrals((current) => keep
+            ? current.map((item) => item.id === directId ? updated : item)
+            : current.filter((item) => item.id !== directId));
+          if (!keep) setDirectCount((count) => Math.max(0, count - 1));
+        }).catch(() => {});
       }
       if (sync.dashboard) setDashboardRefresh((value) => value + 1);
       if (sync.management) updateManagement();
     };
     window.addEventListener(PROCUREMENT_UI_SYNC_EVENT, handleSync);
     return () => window.removeEventListener(PROCUREMENT_UI_SYNC_EVENT, handleSync);
-  }, [tab]);
+  }, [tab, noticeView, directView, notices, directReferrals]);
 
   useEffect(() => {
     if (mode !== "live") return;
@@ -813,19 +845,30 @@ export default function ProcurementWorkspaceV13() {
   async function selectNotice(item: ApiNotice) {
     if (selectingNoticeIds.has(item.id) || item.case_stage) return;
     const previous = item;
+    const previousIndex = notices.findIndex((candidate) => candidate.id === item.id);
+    const removeFromCurrent = noticeView === "recommended";
     setSelectingNoticeIds((current) => new Set(current).add(item.id));
-    setNotices((current) => current.map((candidate) => candidate.id === item.id ? { ...candidate, case_stage:"selected", case_stage_label:"منتخب" } : candidate));
+    setNotices((current) => removeFromCurrent
+      ? current.filter((candidate) => candidate.id !== item.id)
+      : current.map((candidate) => candidate.id === item.id ? { ...candidate, case_stage:"selected", case_stage_label:"منتخب" } : candidate));
+    if (removeFromCurrent) setNoticeCount((count) => Math.max(0, count - 1));
     try {
       const token = await csrfToken();
       const response = await fetch(`${PROCUREMENT_API}/cases/`, { method:"POST", credentials:"include", headers:{"Content-Type":"application/json","X-CSRFToken":token,Accept:"application/json"}, body:JSON.stringify({notice:item.id,stage:"selected"}) });
       const payload = await response.json() as { stage?: string; stage_label?: string; detail?: string; [key: string]: unknown };
       if (!response.ok) throw new Error(payload.detail || Object.values(payload).flat().join(" ") || "انتخاب پرونده انجام نشد.");
       notify("فراخوان به پرونده‌های منتخب اضافه شد.");
-      procurementDataClient.invalidate();
-      setViewRefresh((value) => value + 1);
-      setDashboardRefresh((value) => value + 1);
+      emitProcurementUiSync({ source:"workspace-v13", noticeId:item.id, dashboard:true });
     } catch (error) {
-      setNotices((current) => current.map((candidate) => candidate.id === previous.id ? previous : candidate));
+      setNotices((current) => {
+        if (current.some((candidate) => candidate.id === previous.id)) {
+          return current.map((candidate) => candidate.id === previous.id ? previous : candidate);
+        }
+        const restored = [...current];
+        restored.splice(Math.max(0, Math.min(previousIndex, restored.length)), 0, previous);
+        return restored;
+      });
+      if (removeFromCurrent) setNoticeCount((count) => count + 1);
       notify(error instanceof Error ? error.message : "انتخاب پرونده انجام نشد.");
     } finally {
       setSelectingNoticeIds((current) => { const next = new Set(current); next.delete(item.id); return next; });
