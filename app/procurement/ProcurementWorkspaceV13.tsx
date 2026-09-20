@@ -474,16 +474,19 @@ export default function ProcurementWorkspaceV13() {
   const noticeNavigationStartedAt = useRef<number | null>(null);
   const activeTabRef = useRef<Tab>(tab);
   const activeNoticeViewRef = useRef<WorkflowView>(noticeView);
-  activeTabRef.current = tab;
-  activeNoticeViewRef.current = noticeView;
+
+  useEffect(() => {
+    activeTabRef.current = tab;
+    activeNoticeViewRef.current = noticeView;
+  }, [tab, noticeView]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => setDebouncedSearch(search.trim()), 250);
     return () => window.clearTimeout(timer);
   }, [search]);
 
-  function markNoticeNavigation() {
-    if (typeof performance !== "undefined") noticeNavigationStartedAt.current = performance.now();
+  function markNoticeNavigation(startedAt: number) {
+    noticeNavigationStartedAt.current = startedAt;
   }
 
   useEffect(() => {
@@ -1098,7 +1101,7 @@ export default function ProcurementWorkspaceV13() {
     {mode === "loading" && <article className={styles.panel} style={{marginTop:18}}><p>در حال بررسی نشست واقعی...</p></article>}
 
     {mode === "live" && <>
-      <nav className={styles.tabs}>{tabs.map(([id,label]) => <button key={id} className={tab === id ? styles.active : ""} onClick={() => { if (id === "tenders" || id === "inquiries") markNoticeNavigation(); setTab(id); resetFilters(); setNoticeView("all"); setDirectView("all"); }}>{label}</button>)}</nav>
+      <nav className={styles.tabs}>{tabs.map(([id,label]) => <button key={id} className={tab === id ? styles.active : ""} onClick={(event) => { if (id === "tenders" || id === "inquiries") markNoticeNavigation(event.timeStamp); setTab(id); resetFilters(); setNoticeView("all"); setDirectView("all"); }}>{label}</button>)}</nav>
 
       {tab === "dashboard" && <section>
         {dashboardLoading && !dashboard.generated_at && <div className={styles.message}>در حال دریافت خلاصه مدیریتی...</div>}
@@ -1122,7 +1125,7 @@ export default function ProcurementWorkspaceV13() {
       </section>}
 
       {(tab === "tenders" || tab === "inquiries") && <section data-pdp-shared-notice-layout={tab}>
-        <div className={`${styles.views} pdp-v9-workflow-row`}>{noticeViews.map(([id,label]) => <button key={id} className={noticeView === id ? styles.active : ""} onClick={() => { markNoticeNavigation(); setNoticeView(id); setNoticePage(1); }}>{label}</button>)}<ProcurementV9NativeToolbar /></div>
+        <div className={`${styles.views} pdp-v9-workflow-row`}>{noticeViews.map(([id,label]) => <button key={id} className={noticeView === id ? styles.active : ""} onClick={(event) => { markNoticeNavigation(event.timeStamp); setNoticeView(id); setNoticePage(1); }}>{label}</button>)}<ProcurementV9NativeToolbar /></div>
         <div className="pdp-v9-filter-bar" style={filterStyle}>
           <label>جست‌وجو<input style={inputStyle} value={search} onChange={(event) => setSearch(event.target.value)} placeholder="عنوان، کارفرما، استان یا کد" /></label>
           <label className="pdp-v9-native-filter">منبع<select style={inputStyle} value={sourceFilter} onChange={(event) => setSourceFilter(event.target.value)}><option value="">همه منابع</option>{[...new Set(notices.map((item) => item.source_name).filter(Boolean))].map((source) => <option key={source}>{source}</option>)}</select></label>
@@ -1137,7 +1140,7 @@ export default function ProcurementWorkspaceV13() {
           <div><div className={styles.recordTop}><small><b>ردیف {fa.format((noticePage-1)*noticePageSize+index+1)}</b>{item.reference_code && noticeView !== "all" && noticeView !== "recommended" && <> · <span className={styles.codeBadge}>{item.reference_code}</span></>} · انتشار {formatDate(item.published_date)}</small><div style={{display:"flex",gap:5,alignItems:"center",marginInlineStart:"auto",flexWrap:"wrap"}}>{item.source_url || item.detail_url ? <a href={item.detail_url || item.source_url} target="_blank" rel="noreferrer" style={sourceBadgeStyle}>{item.source_name || "منبع"}</a> : <span style={sourceBadgeStyle}>{item.source_name || "منبع نامشخص"}</span>}<span style={{...importanceBadgeBase,...importanceStyles[item.importance]}}>اهمیت {item.importance_label || importanceLabels[item.importance]}</span><span className={`${styles.urgency} ${styles[u.tone]}`}>{u.label}</span><button className={styles.secondaryButton} style={compactViewStyle} onClick={() => setDetail({kind:"notice",item})}>مشاهده</button></div></div><h3 style={{margin:"4px 0 2px",fontSize:17}}>{item.title}</h3><p>{item.employer_name || "کارفرما نامشخص"}</p><div className={styles.facts} style={{marginTop:5,gap:5}}>{item.province && <span>{item.province}</span>}<span>{u.remaining}</span><span>پردازش: {item.processing_status_label}</span>{(item.submission_document_count || 0) > 0 && <span>{fa.format(item.submission_document_count || 0)} سند</span>}</div></div>
           <div className={styles.decision} style={compactDecisionStyle}><span className={styles.stage}>{item.case_stage_label || (item.is_recommended ? "پیشنهادی" : allLabel(tab))}</span><dl style={{margin:0}}><div style={{padding:"2px 0"}}><dt>مسئول</dt><dd>{item.case_responsible_username || "تعیین نشده"}</dd></div></dl>{!item.case_stage && <div className={styles.actions}><button className={styles.primaryButton} style={{padding:"6px 9px"}} disabled={selecting} onClick={() => selectNotice(item)}>{selecting ? "در حال ثبت..." : "انتخاب"}</button></div>}</div>
         </article>; }) : <div className={styles.empty}>{noticeLoading ? "در حال دریافت این صفحه..." : "رکورد واقعی مطابق این فیلتر وجود ندارد."}</div>}</div>
-        <PaginationControls page={noticePage} pageSize={noticePageSize} count={noticeExactCount ?? noticeCount} loading={noticeLoading || noticeExactCount === null} onPage={(page) => { markNoticeNavigation(); setNoticePage(page); }} onPageSize={(size) => { markNoticeNavigation(); setNoticePageSize(size); setNoticePage(1); }} />
+        <PaginationControls page={noticePage} pageSize={noticePageSize} count={noticeExactCount ?? noticeCount} loading={noticeLoading || noticeExactCount === null} onPage={setNoticePage} onPageSize={(size) => { setNoticePageSize(size); setNoticePage(1); }} />
       </section>}
 
       {tab === "direct" && <section data-pdp-shared-notice-layout="direct">
