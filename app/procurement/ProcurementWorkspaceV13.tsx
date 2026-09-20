@@ -8,7 +8,14 @@ import {
   ProcurementV9NativeToolbar,
   resetProcurementV9NativeFilters,
 } from "./ProcurementWebPreviewV9Enhancement";
-import { procurementDataClient, type ProcurementQueryContext } from "./procurementDataClient";
+import {
+  PROCUREMENT_BROWSER_PERFORMANCE_EVENT,
+  PROCUREMENT_NOTICE_CONTEXT_LIFECYCLE_EVENT,
+  procurementDataClient,
+  type ProcurementBrowserPerformanceDetail,
+  type ProcurementNoticeContextLifecycleDetail,
+  type ProcurementQueryContext,
+} from "./procurementDataClient";
 import { directWorkflowQuery } from "./directWorkflowSemantics";
 import { getProcurementV9FilterState } from "./procurementV9FilterState";
 import { setProcurementStableViewState } from "./procurementStableViewState";
@@ -159,6 +166,28 @@ const DIRECT_DATA_EVENT = "pdp-procurement-direct-page-data";
 const fa = new Intl.NumberFormat("fa-IR");
 const dateFa = new Intl.DateTimeFormat("fa-IR-u-ca-persian", { year: "numeric", month: "2-digit", day: "2-digit" });
 const dateTimeFa = new Intl.DateTimeFormat("fa-IR-u-ca-persian", { year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
+
+const NOTICE_PREFETCH_WORKFLOWS = ["recent", "recommended", "selected", "submitted", "results"] as const;
+
+type IdleCapableWindow = Window & {
+  requestIdleCallback?: (callback: () => void, options?: { timeout: number }) => number;
+  cancelIdleCallback?: (handle: number) => void;
+};
+
+function scheduleBrowserIdle(callback: () => void, timeout = 1200) {
+  if (typeof window === "undefined") return () => {};
+  const idleWindow = window as IdleCapableWindow;
+  if (idleWindow.requestIdleCallback) {
+    const handle = idleWindow.requestIdleCallback(callback, { timeout });
+    return () => idleWindow.cancelIdleCallback?.(handle);
+  }
+  const handle = window.setTimeout(callback, 250);
+  return () => window.clearTimeout(handle);
+}
+
+function noNoticeFiltersActive(context: ProcurementQueryContext) {
+  return !Object.values(context.filters || {}).some((value) => Array.isArray(value) ? value.length > 0 : Boolean(value));
+}
 
 const tabs: [Tab, string][] = [
   ["dashboard", "داشبورد مدیریتی"],
@@ -431,6 +460,7 @@ export default function ProcurementWorkspaceV13() {
   const [selectingNoticeIds, setSelectingNoticeIds] = useState<Set<string>>(() => new Set());
   const [refresh, setRefresh] = useState(0);
   const [viewRefresh, setViewRefresh] = useState(0);
+  const [noticeRevisionRefresh, setNoticeRevisionRefresh] = useState(0);
   const [dashboardRefresh, setDashboardRefresh] = useState(0);
   const [directRefresh, setDirectRefresh] = useState(0);
   const [detail, setDetail] = useState<DetailItem>(null);
@@ -441,11 +471,58 @@ export default function ProcurementWorkspaceV13() {
   const directController = useRef<AbortController | null>(null);
   const directGeneration = useRef(0);
   const directCache = useRef(new Map<string, DirectCacheEntry>());
+  const noticeNavigationStartedAt = useRef<number | null>(null);
+  const activeTabRef = useRef<Tab>(tab);
+  const activeNoticeViewRef = useRef<WorkflowView>(noticeView);
+
+  useEffect(() => {
+    activeTabRef.current = tab;
+    activeNoticeViewRef.current = noticeView;
+  }, [tab, noticeView]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => setDebouncedSearch(search.trim()), 250);
     return () => window.clearTimeout(timer);
   }, [search]);
+
+  function markNoticeNavigation(startedAt: number) {
+    noticeNavigationStartedAt.current = startedAt;
+  }
+
+  useEffect(() => {
+    let paintFrame = 0;
+    let secondPaintFrame = 0;
+    const onLifecycle = (event: Event) => {
+      const detail = (event as CustomEvent<ProcurementNoticeContextLifecycleDetail>).detail;
+      if (!detail || (detail.phase !== "cache-hit" && detail.phase !== "success")) return;
+      const startedAt = noticeNavigationStartedAt.current;
+      if (startedAt === null) return;
+      noticeNavigationStartedAt.current = null;
+      const outcome: ProcurementBrowserPerformanceDetail["outcome"] = detail.phase === "cache-hit"
+        ? (detail.cacheOrigin === "prefetch" ? "prefetch-hit" : "cache-hit")
+        : "cold-network";
+      paintFrame = requestAnimationFrame(() => {
+        secondPaintFrame = requestAnimationFrame(() => {
+          const measurement: ProcurementBrowserPerformanceDetail = {
+            noticeType: detail.noticeType,
+            workflow: detail.workflow,
+            outcome,
+            clickToUsableMs: Math.max(0, Number((performance.now() - startedAt).toFixed(1))),
+          };
+          window.dispatchEvent(new CustomEvent<ProcurementBrowserPerformanceDetail>(
+            PROCUREMENT_BROWSER_PERFORMANCE_EVENT,
+            { detail: measurement },
+          ));
+        });
+      });
+    };
+    window.addEventListener(PROCUREMENT_NOTICE_CONTEXT_LIFECYCLE_EVENT, onLifecycle);
+    return () => {
+      if (paintFrame) cancelAnimationFrame(paintFrame);
+      if (secondPaintFrame) cancelAnimationFrame(secondPaintFrame);
+      window.removeEventListener(PROCUREMENT_NOTICE_CONTEXT_LIFECYCLE_EVENT, onLifecycle);
+    };
+  }, []);
 
   useEffect(() => {
     const workflow = tab === "tenders" || tab === "inquiries" ? noticeView : tab === "direct" ? directView : "all";
@@ -489,6 +566,7 @@ export default function ProcurementWorkspaceV13() {
     const controller = new AbortController();
     let active = true;
     setDashboardLoading(true);
+    let cancelIdlePrefetch = () => {};
     void fetch(`${PROCUREMENT_API}/ui/dashboard/`, {
       credentials: "include",
       headers: { Accept: "application/json" },
@@ -496,14 +574,28 @@ export default function ProcurementWorkspaceV13() {
     }).then(async (response) => {
       if (!response.ok) throw new Error(`dashboard-${response.status}`);
       const payload = await response.json() as DashboardPayload;
-      if (active) setDashboard(payload);
+      if (!active) return;
+      setDashboard(payload);
+      cancelIdlePrefetch = scheduleBrowserIdle(() => {
+        if (!active || document.visibilityState !== "visible") return;
+        const base = {
+          page: 1,
+          pageSize: noticePageSize,
+          sort: "-publication_sort,-last_seen_at,-id",
+          filters: {},
+        };
+        void Promise.allSettled([
+          procurementDataClient.prefetch({ ...base, noticeType: "tender", workflow: "recent" }),
+          procurementDataClient.prefetch({ ...base, noticeType: "inquiry", workflow: "recent" }),
+        ]);
+      });
     }).catch((error) => {
       if (active && !(error instanceof DOMException && error.name === "AbortError")) {
         setMessage("به‌روزرسانی داشبورد موقتاً انجام نشد؛ آخرین داده سالم حفظ شد.");
       }
     }).finally(() => { if (active) setDashboardLoading(false); });
-    return () => { active = false; controller.abort(); };
-  }, [mode, tab, dashboardRefresh]);
+    return () => { active = false; cancelIdlePrefetch(); controller.abort(); };
+  }, [mode, tab, dashboardRefresh, noticePageSize]);
 
   useEffect(() => {
     if (mode !== "live" || (tab !== "tenders" && tab !== "inquiries")) return;
@@ -528,6 +620,7 @@ export default function ProcurementWorkspaceV13() {
       },
     };
     let active = true;
+    let cancelIdlePrefetch = () => {};
     setNoticeLoading(true);
     setNoticeError("");
     procurementDataClient.abortAllExcept(context);
@@ -541,12 +634,23 @@ export default function ProcurementWorkspaceV13() {
       setNotices(result.payload.results || []);
       setNoticeCount(Number(result.payload.count || result.payload.results?.length || 0));
       window.dispatchEvent(new CustomEvent(NOTICE_DATA_EVENT, { detail: result.payload }));
+
+      if (context.page === 1 && noNoticeFiltersActive(context)) {
+        cancelIdlePrefetch = scheduleBrowserIdle(() => {
+          if (!active || document.visibilityState !== "visible") return;
+          const activeWorkflow = String(context.workflow);
+          const siblings = NOTICE_PREFETCH_WORKFLOWS
+            .filter((workflow) => workflow !== activeWorkflow)
+            .map((workflow) => ({ ...context, workflow, page: 1 }));
+          void Promise.allSettled(siblings.map((candidate) => procurementDataClient.prefetch(candidate)));
+        });
+      }
     }).catch((error) => {
       if (!active || (error instanceof DOMException && error.name === "AbortError")) return;
       setNoticeError("دریافت این فهرست موقتاً ناموفق بود؛ داده سالم قبلی حفظ شده است.");
     }).finally(() => { if (active) setNoticeLoading(false); });
-    return () => { active = false; procurementDataClient.abort(context); };
-  }, [mode, tab, noticeView, noticePage, noticePageSize, debouncedSearch, sourceFilter, provinceFilter, importanceFilter, urgencyFilter, viewRefresh]);
+    return () => { active = false; cancelIdlePrefetch(); procurementDataClient.abort(context); };
+  }, [mode, tab, noticeView, noticePage, noticePageSize, debouncedSearch, sourceFilter, provinceFilter, importanceFilter, urgencyFilter, viewRefresh, noticeRevisionRefresh]);
 
   useEffect(() => {
     if (mode !== "live" || (tab !== "tenders" && tab !== "inquiries")) {
@@ -696,6 +800,52 @@ export default function ProcurementWorkspaceV13() {
     if (mode !== "live") return;
     let cancelled = false;
     let lastRevision: number | null = null;
+
+    const broadReconciliationRefresh = () => {
+      procurementDataClient.invalidate();
+      directCache.current.clear();
+      setViewRefresh((value) => value + 1);
+      setDirectRefresh((value) => value + 1);
+      setDashboardRefresh((value) => value + 1);
+    };
+
+    const applyScopedChanges = async (fromRevision: number, targetRevision: number) => {
+      const response = await fetch(`${PROCUREMENT_API}/interaction/changes/?since=${fromRevision}&limit=500`, {
+        credentials: "include",
+        headers: { Accept: "application/json" },
+      });
+      if (!response.ok) return false;
+      const payload = await response.json() as {
+        current_revision?: number;
+        changes?: Array<{ revision?: number; affected_contexts?: string[] }>;
+      };
+      const changes = Array.isArray(payload.changes) ? payload.changes : [];
+      const highestReturnedRevision = changes.reduce((highest, change) => Math.max(highest, Number(change.revision || 0)), fromRevision);
+      if (!changes.length || highestReturnedRevision < targetRevision) return false;
+
+      const affectedContexts = [...new Set(changes.flatMap((change) =>
+        Array.isArray(change.affected_contexts) ? change.affected_contexts.map((value) => String(value)) : []
+      ))];
+      if (!affectedContexts.length) return false;
+      const invalidation = procurementDataClient.invalidateAffectedContexts(affectedContexts);
+      const activeTab = activeTabRef.current;
+      const activeNoticeView = activeNoticeViewRef.current;
+      const activeNoticeContext = activeTab === "tenders" || activeTab === "inquiries"
+        ? `${activeTab === "tenders" ? "tender" : "inquiry"}:${workflowCode(activeNoticeView)}`
+        : "";
+      if (activeNoticeContext && affectedContexts.includes(activeNoticeContext)) {
+        setNoticeRevisionRefresh((value) => value + 1);
+      }
+      if (invalidation.directAffected || affectedContexts.some((value) => value.startsWith("direct:"))) {
+        directCache.current.clear();
+        if (activeTab === "direct") setDirectRefresh((value) => value + 1);
+      }
+      if (invalidation.dashboardAffected && activeTab === "dashboard") {
+        setDashboardRefresh((value) => value + 1);
+      }
+      return true;
+    };
+
     const checkRevision = async () => {
       if (document.visibilityState !== "visible") return;
       try {
@@ -705,11 +855,8 @@ export default function ProcurementWorkspaceV13() {
         const revision = Number(payload.revision || 0);
         if (cancelled) return;
         if (lastRevision !== null && revision > lastRevision) {
-          procurementDataClient.invalidate();
-          directCache.current.clear();
-          setViewRefresh((value) => value + 1);
-          setDirectRefresh((value) => value + 1);
-          setDashboardRefresh((value) => value + 1);
+          const scopedApplied = await applyScopedChanges(lastRevision, revision).catch(() => false);
+          if (!scopedApplied && !cancelled) broadReconciliationRefresh();
         }
         lastRevision = revision;
       } catch {
@@ -954,7 +1101,7 @@ export default function ProcurementWorkspaceV13() {
     {mode === "loading" && <article className={styles.panel} style={{marginTop:18}}><p>در حال بررسی نشست واقعی...</p></article>}
 
     {mode === "live" && <>
-      <nav className={styles.tabs}>{tabs.map(([id,label]) => <button key={id} className={tab === id ? styles.active : ""} onClick={() => { setTab(id); resetFilters(); setNoticeView("all"); setDirectView("all"); }}>{label}</button>)}</nav>
+      <nav className={styles.tabs}>{tabs.map(([id,label]) => <button key={id} className={tab === id ? styles.active : ""} onClick={(event) => { if (id === "tenders" || id === "inquiries") markNoticeNavigation(event.timeStamp); setTab(id); resetFilters(); setNoticeView("all"); setDirectView("all"); }}>{label}</button>)}</nav>
 
       {tab === "dashboard" && <section>
         {dashboardLoading && !dashboard.generated_at && <div className={styles.message}>در حال دریافت خلاصه مدیریتی...</div>}
@@ -978,7 +1125,7 @@ export default function ProcurementWorkspaceV13() {
       </section>}
 
       {(tab === "tenders" || tab === "inquiries") && <section data-pdp-shared-notice-layout={tab}>
-        <div className={`${styles.views} pdp-v9-workflow-row`}>{noticeViews.map(([id,label]) => <button key={id} className={noticeView === id ? styles.active : ""} onClick={() => { setNoticeView(id); setNoticePage(1); }}>{label}</button>)}<ProcurementV9NativeToolbar /></div>
+        <div className={`${styles.views} pdp-v9-workflow-row`}>{noticeViews.map(([id,label]) => <button key={id} className={noticeView === id ? styles.active : ""} onClick={(event) => { markNoticeNavigation(event.timeStamp); setNoticeView(id); setNoticePage(1); }}>{label}</button>)}<ProcurementV9NativeToolbar /></div>
         <div className="pdp-v9-filter-bar" style={filterStyle}>
           <label>جست‌وجو<input style={inputStyle} value={search} onChange={(event) => setSearch(event.target.value)} placeholder="عنوان، کارفرما، استان یا کد" /></label>
           <label className="pdp-v9-native-filter">منبع<select style={inputStyle} value={sourceFilter} onChange={(event) => setSourceFilter(event.target.value)}><option value="">همه منابع</option>{[...new Set(notices.map((item) => item.source_name).filter(Boolean))].map((source) => <option key={source}>{source}</option>)}</select></label>
