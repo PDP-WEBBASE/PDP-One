@@ -11,7 +11,7 @@ test("cold notice contexts publish lifecycle ownership while same-context cache 
   assert.match(dataClient, /if \(!cached\) \{\s*emitNoticeContextLifecycle\(context, "cold-start"\)/s);
   assert.match(dataClient, /emitNoticeContextLifecycle\(context, "success"\)/);
   assert.match(dataClient, /aborted \? "aborted" : "error"/);
-  assert.match(dataClient, /emitNoticeContextLifecycle\(context, "cache-hit"\);[\s\S]*void this\.load<T>\(context\)[\s\S]*return cached;/);
+  assert.match(dataClient, /emitNoticeContextLifecycle\(context, "cache-hit", cacheOrigin\);[\s\S]*void this\.load<T>\(context\)[\s\S]*return cached;/);
 });
 
 test("render guard is presentation-only and never becomes a navigation or network owner", () => {
