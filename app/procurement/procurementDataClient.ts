@@ -79,7 +79,10 @@ export function normalizeProcurementWorkflow(value: string): ProcurementWorkflow
 
 function normalizedFilterEntries(filters: ProcurementQueryContext["filters"] = {}) {
   return Object.entries(filters)
-    .filter(([, value]) => value !== undefined && value !== null && value !== "")
+    .filter(([, value]) => value !== undefined
+      && value !== null
+      && value !== ""
+      && (!Array.isArray(value) || value.length > 0))
     .map(([key, value]) => {
       const normalized = Array.isArray(value)
         ? [...value].map((item) => String(item)).sort()
