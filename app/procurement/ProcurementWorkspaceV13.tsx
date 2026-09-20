@@ -460,6 +460,7 @@ export default function ProcurementWorkspaceV13() {
   const [selectingNoticeIds, setSelectingNoticeIds] = useState<Set<string>>(() => new Set());
   const [refresh, setRefresh] = useState(0);
   const [viewRefresh, setViewRefresh] = useState(0);
+  const [noticeRevisionRefresh, setNoticeRevisionRefresh] = useState(0);
   const [dashboardRefresh, setDashboardRefresh] = useState(0);
   const [directRefresh, setDirectRefresh] = useState(0);
   const [detail, setDetail] = useState<DetailItem>(null);
@@ -471,6 +472,10 @@ export default function ProcurementWorkspaceV13() {
   const directGeneration = useRef(0);
   const directCache = useRef(new Map<string, DirectCacheEntry>());
   const noticeNavigationStartedAt = useRef<number | null>(null);
+  const activeTabRef = useRef<Tab>(tab);
+  const activeNoticeViewRef = useRef<WorkflowView>(noticeView);
+  activeTabRef.current = tab;
+  activeNoticeViewRef.current = noticeView;
 
   useEffect(() => {
     const timer = window.setTimeout(() => setDebouncedSearch(search.trim()), 250);
@@ -642,7 +647,7 @@ export default function ProcurementWorkspaceV13() {
       setNoticeError("دریافت این فهرست موقتاً ناموفق بود؛ داده سالم قبلی حفظ شده است.");
     }).finally(() => { if (active) setNoticeLoading(false); });
     return () => { active = false; cancelIdlePrefetch(); procurementDataClient.abort(context); };
-  }, [mode, tab, noticeView, noticePage, noticePageSize, debouncedSearch, sourceFilter, provinceFilter, importanceFilter, urgencyFilter, viewRefresh]);
+  }, [mode, tab, noticeView, noticePage, noticePageSize, debouncedSearch, sourceFilter, provinceFilter, importanceFilter, urgencyFilter, viewRefresh, noticeRevisionRefresh]);
 
   useEffect(() => {
     if (mode !== "live" || (tab !== "tenders" && tab !== "inquiries")) {
@@ -818,18 +823,21 @@ export default function ProcurementWorkspaceV13() {
       const affectedContexts = [...new Set(changes.flatMap((change) =>
         Array.isArray(change.affected_contexts) ? change.affected_contexts.map((value) => String(value)) : []
       ))];
+      if (!affectedContexts.length) return false;
       const invalidation = procurementDataClient.invalidateAffectedContexts(affectedContexts);
-      const activeNoticeContext = tab === "tenders" || tab === "inquiries"
-        ? `${tab === "tenders" ? "tender" : "inquiry"}:${workflowCode(noticeView)}`
+      const activeTab = activeTabRef.current;
+      const activeNoticeView = activeNoticeViewRef.current;
+      const activeNoticeContext = activeTab === "tenders" || activeTab === "inquiries"
+        ? `${activeTab === "tenders" ? "tender" : "inquiry"}:${workflowCode(activeNoticeView)}`
         : "";
       if (activeNoticeContext && affectedContexts.includes(activeNoticeContext)) {
-        setViewRefresh((value) => value + 1);
+        setNoticeRevisionRefresh((value) => value + 1);
       }
       if (invalidation.directAffected || affectedContexts.some((value) => value.startsWith("direct:"))) {
         directCache.current.clear();
-        if (tab === "direct") setDirectRefresh((value) => value + 1);
+        if (activeTab === "direct") setDirectRefresh((value) => value + 1);
       }
-      if (invalidation.dashboardAffected && tab === "dashboard") {
+      if (invalidation.dashboardAffected && activeTab === "dashboard") {
         setDashboardRefresh((value) => value + 1);
       }
       return true;
@@ -856,7 +864,7 @@ export default function ProcurementWorkspaceV13() {
     const onFocus = () => { void checkRevision(); };
     window.addEventListener("focus", onFocus);
     return () => { cancelled = true; window.clearInterval(timer); window.removeEventListener("focus", onFocus); };
-  }, [mode, tab, noticeView]);
+  }, [mode]);
 
   useEffect(() => {
     if (tab !== "management" || mode !== "live" || managementLoadVersion.current === refresh) return;
