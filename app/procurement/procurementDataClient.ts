@@ -48,9 +48,18 @@ export type ProcurementNoticeContextLifecycleDetail = {
   page: number;
   pageSize: number;
   phase: ProcurementNoticeContextLifecyclePhase;
+  cacheOrigin?: "active" | "prefetch";
+};
+
+export type ProcurementBrowserPerformanceDetail = {
+  noticeType: ProcurementNoticeType;
+  workflow: ProcurementWorkflow;
+  outcome: "cold-network" | "cache-hit" | "prefetch-hit";
+  clickToUsableMs: number;
 };
 
 export const PROCUREMENT_NOTICE_CONTEXT_LIFECYCLE_EVENT = "pdp-procurement-notice-context-lifecycle";
+export const PROCUREMENT_BROWSER_PERFORMANCE_EVENT = "pdp-procurement-browser-performance";
 
 const WORKFLOW_ALLOWLIST = new Set<ProcurementWorkflow>([
   "recent",
@@ -94,6 +103,7 @@ export function procurementQueryKey(context: ProcurementQueryContext) {
 function emitNoticeContextLifecycle(
   context: ProcurementQueryContext,
   phase: ProcurementNoticeContextLifecyclePhase,
+  cacheOrigin?: "active" | "prefetch",
 ) {
   if (typeof window === "undefined") return;
   const detail: ProcurementNoticeContextLifecycleDetail = {
@@ -103,6 +113,7 @@ function emitNoticeContextLifecycle(
     page: Math.max(1, context.page),
     pageSize: Math.max(1, context.pageSize),
     phase,
+    cacheOrigin,
   };
   window.dispatchEvent(new CustomEvent<ProcurementNoticeContextLifecycleDetail>(
     PROCUREMENT_NOTICE_CONTEXT_LIFECYCLE_EVENT,
@@ -154,11 +165,22 @@ export class ProcurementDataClient {
   private readonly inflight = new Map<string, Promise<ProcurementQueryPayload>>();
   private readonly controllers = new Map<string, AbortController>();
   private readonly generation = new Map<string, number>();
+  private readonly prefetchedKeys = new Set<string>();
+  private readonly prefetchQueue: Array<{
+    context: ProcurementQueryContext;
+    epoch: number;
+    resolve: (result: ProcurementLoadResult) => void;
+    reject: (error: unknown) => void;
+  }> = [];
+  private readonly prefetchConcurrency: number;
+  private prefetchActive = 0;
+  private prefetchEpoch = 0;
 
   constructor(options: ProcurementDataClientOptions = {}) {
     this.endpoint = options.endpoint || "/api/v1/procurement/ui/notices/";
     this.cacheTtlMs = options.cacheTtlMs ?? 60_000;
     this.now = options.now || Date.now;
+    this.prefetchConcurrency = Math.min(2, Math.max(1, options.concurrency ?? 2));
     // Never store the native Window.fetch function as an unbound instance method.
     // Chromium requires the Window receiver for native fetch; the wrapper preserves
     // dependency injection while always invoking the platform fetch with its own realm.
@@ -202,26 +224,65 @@ export class ProcurementDataClient {
     // Same-context cached data is valid for immediate stale-while-revalidate rendering.
     // Publish this presentation signal before the background refresh so any guard left by
     // an older cold/aborted context is released without becoming a second data owner.
-    emitNoticeContextLifecycle(context, "cache-hit");
+    const key = procurementQueryKey(context);
+    const cacheOrigin = this.prefetchedKeys.delete(key) ? "prefetch" : "active";
+    emitNoticeContextLifecycle(context, "cache-hit", cacheOrigin);
     void this.load<T>(context)
       .then((fresh) => onRefresh?.(fresh))
       .catch(() => undefined);
     return cached;
   }
 
-  prefetch(context: ProcurementQueryContext) {
+  prefetch(context: ProcurementQueryContext): Promise<ProcurementLoadResult> {
+    if (Math.max(1, context.page) !== 1) {
+      return Promise.reject(new Error("procurement-prefetch-first-page-only"));
+    }
     const cached = this.getCached(context);
     if (cached && !cached.stale) return Promise.resolve(cached);
-    return this.load(context);
+    const key = procurementQueryKey(context);
+    const existing = this.inflight.get(key);
+    if (existing) {
+      return existing.then((payload) => ({ payload, source: "network" as const, stale: false }));
+    }
+    const epoch = this.prefetchEpoch;
+    return new Promise<ProcurementLoadResult>((resolve, reject) => {
+      this.prefetchQueue.push({ context, epoch, resolve, reject });
+      this.drainPrefetchQueue();
+    });
+  }
+
+  invalidateAffectedContexts(affectedContexts: string[]) {
+    const affected = new Set(affectedContexts.map((value) => String(value || "").trim()).filter(Boolean));
+    let invalidatedNoticeKeys = 0;
+    for (const key of [...this.cache.keys()]) {
+      try {
+        const parsed = JSON.parse(key) as { noticeType?: string; workflow?: string };
+        const contextId = `${parsed.noticeType || ""}:${parsed.workflow || ""}`;
+        if (!affected.has(contextId)) continue;
+        this.cache.delete(key);
+        this.prefetchedKeys.delete(key);
+        invalidatedNoticeKeys += 1;
+      } catch {
+        // Unknown cache-key shapes are left untouched; current keys are JSON-owned here.
+      }
+    }
+    return {
+      invalidatedNoticeKeys,
+      dashboardAffected: affected.has("dashboard:metrics"),
+      directAffected: [...affected].some((value) => value.startsWith("direct:")),
+    };
   }
 
   invalidate(predicate?: (contextKey: string) => boolean) {
     if (!predicate) {
       this.cache.clear();
+      this.prefetchedKeys.clear();
       return;
     }
     for (const key of this.cache.keys()) {
-      if (predicate(key)) this.cache.delete(key);
+      if (!predicate(key)) continue;
+      this.cache.delete(key);
+      this.prefetchedKeys.delete(key);
     }
   }
 
@@ -231,8 +292,43 @@ export class ProcurementDataClient {
 
   abortAllExcept(context: ProcurementQueryContext) {
     const keep = procurementQueryKey(context);
+    this.cancelQueuedPrefetch();
     for (const key of [...this.controllers.keys()]) {
       if (key !== keep) this.abortKey(key);
+    }
+  }
+
+  private cancelQueuedPrefetch() {
+    this.prefetchEpoch += 1;
+    const queued = this.prefetchQueue.splice(0);
+    for (const task of queued) task.reject(abortError());
+  }
+
+  private drainPrefetchQueue() {
+    while (this.prefetchActive < this.prefetchConcurrency && this.prefetchQueue.length) {
+      const task = this.prefetchQueue.shift();
+      if (!task) return;
+      if (task.epoch !== this.prefetchEpoch) {
+        task.reject(abortError());
+        continue;
+      }
+      if (typeof document !== "undefined" && document.visibilityState !== "visible") {
+        task.reject(abortError());
+        continue;
+      }
+      this.prefetchActive += 1;
+      const key = procurementQueryKey(task.context);
+      void this.load(task.context)
+        .then((result) => {
+          if (task.epoch !== this.prefetchEpoch) throw abortError();
+          this.prefetchedKeys.add(key);
+          task.resolve(result);
+        })
+        .catch((error) => task.reject(error))
+        .finally(() => {
+          this.prefetchActive = Math.max(0, this.prefetchActive - 1);
+          this.drainPrefetchQueue();
+        });
     }
   }
 
