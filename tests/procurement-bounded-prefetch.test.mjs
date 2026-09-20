@@ -60,3 +60,9 @@ test("browser-path timing distinguishes cold, cache and prefetch hit without bus
   assert.doesNotMatch(client, /title.*ProcurementBrowserPerformanceDetail/);
   assert.doesNotMatch(client, /noticeId.*ProcurementBrowserPerformanceDetail/);
 });
+
+test("empty filter arrays canonicalize to the same cache context as no filters", async () => {
+  const client = await read("app/procurement/procurementDataClient.ts");
+  assert.match(client, /!Array\.isArray\(value\) \|\| value\.length > 0/);
+  assert.match(client, /normalizedFilterEntries\(context\.filters\)/);
+});
