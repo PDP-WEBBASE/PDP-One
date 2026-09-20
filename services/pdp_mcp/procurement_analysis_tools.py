@@ -188,3 +188,68 @@ def register_procurement_analysis_tools(mcp, api: ApiCall) -> None:
     )
     async def get_procurement_analysis_import_status(import_id: str) -> dict:
         return await api("GET", f"procurement/analysis/imports/{import_id}/")
+
+
+    @mcp.tool(
+        description="Create one fixed, non-production-mutating procurement corpus for the Hyper Turbo V5 mega-batch benchmark. Semantic analysis remains entirely in ChatGPT; production Claim/Lease state is not changed.",
+        annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, openWorldHint=False, idempotentHint=False),
+    )
+    async def start_procurement_megabatch_benchmark(
+        run_id: str,
+        corpus_size: int = 5000,
+    ) -> dict:
+        return await api(
+            "POST",
+            "procurement/analysis/benchmarks/megabatch/start/",
+            json={
+                "run_id": run_id,
+                "corpus_size": max(1, min(int(corpus_size), 5000)),
+            },
+        )
+
+    @mcp.tool(
+        description="Read one fixed-corpus benchmark slice for ChatGPT semantic analysis. Allowed stage sizes are 50, 250, 500, 1000, 2000 and 5000. This is read-only with respect to production claims and drafts.",
+        annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, openWorldHint=False, idempotentHint=True),
+    )
+    async def get_procurement_megabatch_benchmark_batch(
+        benchmark_id: str,
+        stage_size: int,
+        offset: int = 0,
+    ) -> dict:
+        return await api(
+            "GET",
+            f"procurement/analysis/benchmarks/megabatch/{benchmark_id}/batch/",
+            params={"stage_size": int(stage_size), "offset": max(0, int(offset))},
+        )
+
+    @mcp.tool(
+        description="Persist ChatGPT semantic results for one non-production mega-batch benchmark slice. Results are stored only as benchmark evidence; they do not create or publish procurement drafts.",
+        annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, openWorldHint=False, idempotentHint=False),
+    )
+    async def submit_procurement_megabatch_benchmark_results(
+        benchmark_id: str,
+        stage_size: int,
+        offset: int,
+        results: list[dict[str, Any]],
+    ) -> dict:
+        return await api(
+            "POST",
+            f"procurement/analysis/benchmarks/megabatch/{benchmark_id}/submit/",
+            json={
+                "stage_size": int(stage_size),
+                "offset": max(0, int(offset)),
+                "results": results,
+            },
+        )
+
+    @mcp.tool(
+        description="Return Hyper Turbo V5 mega-batch benchmark progress, class counts, exact Recommended sets for completed stages, and Recommendation Set Overlap/Drift versus the 50-item baseline.",
+        annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, openWorldHint=False, idempotentHint=True),
+    )
+    async def get_procurement_megabatch_benchmark_status(
+        benchmark_id: str,
+    ) -> dict:
+        return await api(
+            "GET",
+            f"procurement/analysis/benchmarks/megabatch/{benchmark_id}/status/",
+        )
