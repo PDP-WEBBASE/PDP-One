@@ -6,6 +6,12 @@ from .views_analysis import AnalysisBatchViewSet, AnalysisRequestViewSet, active
 from .views_analysis_adaptive import claim_analysis_work_adaptive
 from .views_analysis_engine import analysis_engine_work, finish_analysis_engine, start_analysis_engine
 from .views_analysis_management import ManagedAnalysisContextAttachmentViewSet, ManagedAnalysisContextSnapshotViewSet
+from .views_analysis_megabatch_benchmark import (
+    megabatch_benchmark_batch,
+    megabatch_benchmark_status_view,
+    start_megabatch_benchmark,
+    submit_megabatch_benchmark,
+)
 from .views_analysis_reconciliation import analysis_integrity, repair_analysis_integrity
 from .views_analysis_run_status_stats import analysis_run_status_with_statistics, current_analysis_run_with_statistics
 from .views_analysis_runs import (
@@ -109,6 +115,10 @@ urlpatterns = [
     path("analysis/context/active/", active_analysis_context, name="analysis-context-active"),
     path("analysis/latest-extraction/", latest_extraction_run, name="analysis-latest-extraction"),
     path("analysis/queue/", analysis_queue, name="analysis-queue"),
+    path("analysis/benchmarks/megabatch/start/", start_megabatch_benchmark, name="analysis-megabatch-benchmark-start"),
+    path("analysis/benchmarks/megabatch/<uuid:benchmark_id>/batch/", megabatch_benchmark_batch, name="analysis-megabatch-benchmark-batch"),
+    path("analysis/benchmarks/megabatch/<uuid:benchmark_id>/submit/", submit_megabatch_benchmark, name="analysis-megabatch-benchmark-submit"),
+    path("analysis/benchmarks/megabatch/<uuid:benchmark_id>/status/", megabatch_benchmark_status_view, name="analysis-megabatch-benchmark-status"),
     path("analysis/integrity/", analysis_integrity, name="analysis-integrity"),
     path("analysis/integrity/repair/", repair_analysis_integrity, name="analysis-integrity-repair"),
     path("analysis/review-summary/", analysis_review_summary_view, name="analysis-review-summary"),
