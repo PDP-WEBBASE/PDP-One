@@ -25,7 +25,8 @@ $ProjectRoot = (Resolve-Path -LiteralPath $ProjectRoot).Path
 # 2026-08-21-hidden-background-tasks-v5
 # 2026-08-27-passive-mcp-route-observability-v6
 # 2026-08-28-public-edge-closed-loop-v7
-$taskPolicyVersion = "2026-08-28-battery-resilient-recurring-tasks-v8"
+# 2026-08-28-battery-resilient-recurring-tasks-v8
+$taskPolicyVersion = "2026-09-21-ingress-stability-v9"
 $taskPolicyRoot = "C:\ProgramData\PDP-One\maintenance"
 $taskPolicyPath = Join-Path $taskPolicyRoot "startup-task-policy.version"
 if ($ApplyIfNeeded -and (Test-Path -LiteralPath $taskPolicyPath)) {
@@ -38,6 +39,7 @@ if ($ApplyIfNeeded -and (Test-Path -LiteralPath $taskPolicyPath)) {
 
 $startScript = Join-Path $ProjectRoot "scripts\windows\Start-PDPOne.ps1"
 $rancherStartupScript = Join-Path $ProjectRoot "scripts\windows\Start-PDPOneRancherResilient.ps1"
+$networkRecoveryScript = Join-Path $ProjectRoot "scripts\windows\Recover-PDPOneNetworkPath.ps1"
 $openScript = Join-Path $ProjectRoot "scripts\windows\Open-PDPOneLocal.ps1"
 $mcpWatchdogScript = Join-Path $ProjectRoot "scripts\windows\Ensure-PDPOneMcpHealthy.ps1"
 $mcpObservabilityScript = Join-Path $ProjectRoot "scripts\windows\Observe-PDPOneMcpRoute.ps1"
@@ -45,7 +47,7 @@ $publicEdgeWatchdogScript = Join-Path $ProjectRoot "scripts\windows\Ensure-PDPOn
 $deploymentAgentWatchdogScript = Join-Path $ProjectRoot "scripts\windows\Ensure-PDPOneDeploymentAgentHealthy.ps1"
 $diskGuardScript = Join-Path $ProjectRoot "scripts\windows\Invoke-PDPOneDiskGuard.ps1"
 $hiddenRunner = Get-PDPOneHiddenRunnerPath -BaseDirectory $PSScriptRoot
-foreach ($required in @($startScript, $rancherStartupScript, $openScript, $mcpWatchdogScript, $mcpObservabilityScript, $publicEdgeWatchdogScript, $deploymentAgentWatchdogScript, $diskGuardScript, $hiddenRunner)) {
+foreach ($required in @($startScript, $rancherStartupScript, $networkRecoveryScript, $openScript, $mcpWatchdogScript, $mcpObservabilityScript, $publicEdgeWatchdogScript, $deploymentAgentWatchdogScript, $diskGuardScript, $hiddenRunner)) {
     if (-not (Test-Path -LiteralPath $required)) { throw "Required Scheduled Task source was not found: $(Split-Path $required -Leaf)" }
 }
 
@@ -61,8 +63,8 @@ $settings = New-ScheduledTaskSettingsSet -RestartCount 1 -RestartInterval (New-T
 Register-ScheduledTask -TaskName $StartupTaskName -Action $startupAction -Trigger @($logonTrigger, $watchdogTrigger) -Principal $principal -Settings $settings -Description "Starts PDP One after Windows logon and rechecks it every ten minutes. It tolerates slow Rancher startup, performs one bounded non-destructive Rancher recovery, preserves data and tokens, repairs Tailscale Funnel, and writes safe diagnostics on failure." -Force | Out-Null
 
 $networkRunner = ConvertTo-PDPOneScheduledTaskArgument $hiddenRunner
-$networkStartScript = ConvertTo-PDPOneScheduledTaskArgument $startScript
-$networkCommand = "`"$env:SystemRoot\System32\wscript.exe`" //B //NoLogo $networkRunner $networkStartScript"
+$networkRecoveryTaskScript = ConvertTo-PDPOneScheduledTaskArgument $networkRecoveryScript
+$networkCommand = "`"$env:SystemRoot\System32\wscript.exe`" //B //NoLogo $networkRunner $networkRecoveryTaskScript"
 $networkEventFilter = "*[System[Provider[@Name='Microsoft-Windows-NetworkProfile'] and EventID=10000]]"
 & schtasks.exe /Create /TN $NetworkRecoveryTaskName /TR $networkCommand /SC ONEVENT /EC "Microsoft-Windows-NetworkProfile/Operational" /MO $networkEventFilter /RL HIGHEST /F | Out-Null
 if ($LASTEXITCODE -ne 0) { throw "The PDP One network-recovery Scheduled Task could not be registered." }
