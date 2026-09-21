@@ -205,6 +205,7 @@ def register_procurement_analysis_tools(mcp, api: ApiCall) -> None:
                 "run_id": run_id,
                 "corpus_size": max(1, min(int(corpus_size), 5000)),
             },
+            timeout=180,
         )
 
     @mcp.tool(
@@ -220,6 +221,7 @@ def register_procurement_analysis_tools(mcp, api: ApiCall) -> None:
             "GET",
             f"procurement/analysis/benchmarks/megabatch/{benchmark_id}/batch/",
             params={"stage_size": int(stage_size), "offset": max(0, int(offset))},
+            timeout=180,
         )
 
     @mcp.tool(
@@ -240,6 +242,7 @@ def register_procurement_analysis_tools(mcp, api: ApiCall) -> None:
                 "offset": max(0, int(offset)),
                 "results": results,
             },
+            timeout=180,
         )
 
     @mcp.tool(
@@ -252,4 +255,5 @@ def register_procurement_analysis_tools(mcp, api: ApiCall) -> None:
         return await api(
             "GET",
             f"procurement/analysis/benchmarks/megabatch/{benchmark_id}/status/",
+            timeout=180,
         )

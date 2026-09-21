@@ -66,3 +66,18 @@ test("cached ChatGPT app schema has a safe persistent-analysis compatibility bri
   assert.match(server, /draft_only/);
   assert.doesNotMatch(server.slice(server.indexOf("if title.startswith"), server.indexOf("payload = {", server.indexOf("if title.startswith") + 1)), /contracts\//);
 });
+
+
+test("V5 mega-batch benchmark MCP calls allow bounded long-running requests", async () => {
+  const tools = await readFile(new URL("../services/pdp_mcp/procurement_analysis_tools.py", import.meta.url), "utf8");
+  for (const name of [
+    "start_procurement_megabatch_benchmark",
+    "get_procurement_megabatch_benchmark_batch",
+    "submit_procurement_megabatch_benchmark_results",
+    "get_procurement_megabatch_benchmark_status",
+  ]) {
+    assert.match(tools, new RegExp(`async def ${name}\\(`));
+  }
+  const benchmarkBlock = tools.slice(tools.indexOf("async def start_procurement_megabatch_benchmark"));
+  assert.ok((benchmarkBlock.match(/timeout=180/g) || []).length >= 4);
+});
