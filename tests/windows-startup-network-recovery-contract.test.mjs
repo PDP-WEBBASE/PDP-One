@@ -59,6 +59,7 @@ test("startup task retries immediately on Windows network connection and keeps a
   const task = await load("../scripts/windows/Register-PDPOneStartupTask.ps1");
 
   assert.match(task, /PDP One Network Recovery/);
+  assert.match(task, /Recover-PDPOneNetworkPath\.ps1/);
   assert.match(task, /Microsoft-Windows-NetworkProfile\/Operational/);
   assert.match(task, /EventID=10000/);
   assert.match(task, /\/SC ONEVENT/);
@@ -123,12 +124,40 @@ test("deployed startup source recognizes the new windowless host task policy", a
   const registration = await load("../scripts/windows/Register-PDPOneStartupTask.ps1");
 
   assert.match(startup, /startup-task-policy\.version/);
-  assert.match(startup, /2026-08-21-hidden-background-tasks-v5/);
+  assert.match(startup, /2026-09-21-ingress-stability-v9/);
   assert.match(startup, /Register-PDPOneStartupTask\.ps1/);
   assert.match(startup, /installedPolicyVersion -ne \$startupPolicyVersion/);
   assert.match(startup, /startup_task_policy = "updated"/);
   assert.match(startup, /startup_task_policy = "current"/);
   assert.match(startup, /startup_task_policy_warning/);
-  assert.match(registration, /2026-08-21-hidden-background-tasks-v5/);
+  assert.match(registration, /2026-09-21-ingress-stability-v9/);
   assert.match(registration, /ApplyIfNeeded/);
+});
+
+
+test("network-profile recovery avoids full Rancher and Compose startup when the local path is healthy", async () => {
+  const recovery = await load("../scripts/windows/Recover-PDPOneNetworkPath.ps1");
+  const registration = await load("../scripts/windows/Register-PDPOneStartupTask.ps1");
+
+  assert.match(recovery, /Test-PDPOneDockerEngine/);
+  assert.match(recovery, /127\.0\.0\.1:8080\/healthz/);
+  assert.match(recovery, /127\.0\.0\.1:8080\/api\/v1\/auth\/session\//);
+  assert.match(recovery, /Repair-PDPOneConnectivity\.ps1/);
+  assert.match(recovery, /public_connectivity_only/);
+  assert.match(recovery, /Start-PDPOne\.ps1/);
+  assert.doesNotMatch(recovery, /docker compose --profile tunnel up/);
+  assert.doesNotMatch(recovery, /rdctl\.Source shutdown/);
+
+  assert.match(registration, /\$networkRecoveryScript = Join-Path \$ProjectRoot "scripts\\windows\\Recover-PDPOneNetworkPath\.ps1"/);
+  assert.match(registration, /\$networkRecoveryTaskScript = ConvertTo-PDPOneScheduledTaskArgument \$networkRecoveryScript/);
+  assert.doesNotMatch(registration, /\$networkStartScript = ConvertTo-PDPOneScheduledTaskArgument \$startScript/);
+});
+
+test("stable startup and scheduled-task registration use the same task-policy version", async () => {
+  const startup = await load("../scripts/windows/Start-PDPOne.ps1");
+  const registration = await load("../scripts/windows/Register-PDPOneStartupTask.ps1");
+  const marker = "2026-09-21-ingress-stability-v9";
+
+  assert.ok(startup.includes(marker));
+  assert.ok(registration.includes(marker));
 });
