@@ -1,4 +1,5 @@
 import tempfile
+from unittest.mock import patch
 from datetime import timedelta
 
 from django.contrib.auth import get_user_model
@@ -187,3 +188,47 @@ class ProcurementMegaBatchBenchmarkTests(TestCase):
         )
         self.assertEqual(response.status_code, 400)
         self.assertIn("تعداد نتایج", response.json()["detail"])
+
+
+    def test_corpus_build_is_bounded_resumable_and_keeps_one_benchmark_id(self):
+        with patch("procurement.analysis_megabatch_benchmark.BUILD_COLLECT_TARGET", 1), patch(
+            "procurement.analysis_megabatch_benchmark.BUILD_SCAN_LIMIT", 2
+        ):
+            first_response = self.client.post(
+                reverse("analysis-megabatch-benchmark-start"),
+                {"run_id": str(self.run.id), "corpus_size": 2},
+                content_type="application/json",
+            )
+            self.assertEqual(first_response.status_code, 201)
+            first = first_response.json()["benchmark"]
+            self.assertEqual(first["status"], "preparing")
+            self.assertFalse(first["ready"])
+            self.assertEqual(first["prepared_count"], 1)
+            self.assertEqual(first["next_action"], "call_start_again")
+
+            pending_batch = self.client.get(
+                reverse("analysis-megabatch-benchmark-batch", args=[first["benchmark_id"]]),
+                {"stage_size": 50, "offset": 0},
+            )
+            self.assertEqual(pending_batch.status_code, 400)
+            self.assertIn("هنوز آماده نیست", pending_batch.json()["detail"])
+
+            second_response = self.client.post(
+                reverse("analysis-megabatch-benchmark-start"),
+                {"run_id": str(self.run.id), "corpus_size": 2},
+                content_type="application/json",
+            )
+            self.assertEqual(second_response.status_code, 201)
+            second = second_response.json()["benchmark"]
+            self.assertEqual(second["benchmark_id"], first["benchmark_id"])
+            self.assertEqual(second["status"], "ready")
+            self.assertTrue(second["ready"])
+            self.assertEqual(second["prepared_count"], 2)
+            self.assertTrue(second["corpus_sha256"])
+
+    def test_ready_corpus_is_reused_for_same_run_context_and_size(self):
+        first = self._start()
+        second = self._start()
+        self.assertEqual(second["benchmark_id"], first["benchmark_id"])
+        self.assertEqual(second["corpus_sha256"], first["corpus_sha256"])
+        self.assertTrue(second["ready"])

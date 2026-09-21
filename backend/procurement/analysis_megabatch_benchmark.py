@@ -17,6 +17,8 @@ from .models_analysis_runs import ProcurementAnalysisRun, ProcurementAnalysisRun
 BENCHMARK_SCHEMA = "pdp-one.analysis-megabatch-benchmark.v1"
 ALLOWED_STAGE_SIZES = (50, 250, 500, 1000, 2000, 5000)
 MAX_CORPUS_SIZE = 5000
+BUILD_COLLECT_TARGET = 250
+BUILD_SCAN_LIMIT = 500
 
 
 def _root() -> Path:
@@ -97,22 +99,77 @@ def _normalize_result(result: dict[str, Any]) -> dict[str, Any]:
     return normalized
 
 
-def create_megabatch_benchmark(
-    *,
-    run_id: str,
-    corpus_size: int = MAX_CORPUS_SIZE,
-) -> dict[str, Any]:
-    requested = max(1, min(int(corpus_size), MAX_CORPUS_SIZE))
-    run = ProcurementAnalysisRun.objects.select_related("context_snapshot").get(pk=run_id)
+def _matching_ready_manifest(*, run: ProcurementAnalysisRun, requested: int) -> dict[str, Any] | None:
+    candidates: list[dict[str, Any]] = []
+    for child in _root().iterdir():
+        path = child / "manifest.json"
+        if not path.is_file():
+            continue
+        try:
+            manifest = _read_json(path)
+        except (OSError, ValueError, json.JSONDecodeError):
+            continue
+        if (
+            str(manifest.get("run_id") or "") == str(run.id)
+            and str((manifest.get("context") or {}).get("hash") or "") == str(run.context_snapshot.content_hash)
+            and str(manifest.get("status") or "ready") == "ready"
+            and int(manifest.get("corpus_size") or 0) == requested
+            and len(manifest.get("records") or []) == requested
+        ):
+            candidates.append(manifest)
+    if not candidates:
+        return None
+    candidates.sort(key=lambda item: str(item.get("created_at") or ""), reverse=True)
+    return candidates[0]
+
+
+def _resumable_benchmark_id(*, run: ProcurementAnalysisRun, requested: int) -> str:
+    key = f"pdp-one-megabatch:{run.id}:{run.context_snapshot.content_hash}:{requested}:{BENCHMARK_SCHEMA}"
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, key))
+
+
+def _new_preparing_manifest(*, run: ProcurementAnalysisRun, requested: int, benchmark_id: str) -> dict[str, Any]:
+    return {
+        "schema": BENCHMARK_SCHEMA,
+        "benchmark_id": benchmark_id,
+        "run_id": str(run.id),
+        "created_at": timezone.now().isoformat(),
+        "updated_at": timezone.now().isoformat(),
+        "status": "preparing",
+        "context": {
+            "id": str(run.context_snapshot_id),
+            "version": run.context_snapshot.version,
+            "hash": run.context_snapshot.content_hash,
+        },
+        "target_corpus_size": requested,
+        "corpus_size": 0,
+        "corpus_sha256": None,
+        "skipped_changed_records": 0,
+        "last_sequence": 0,
+        "stages": list(ALLOWED_STAGE_SIZES),
+        "records": [],
+    }
+
+
+def _advance_preparing_manifest(*, run: ProcurementAnalysisRun, manifest: dict[str, Any]) -> dict[str, Any]:
+    if str(manifest.get("status") or "") == "ready":
+        return manifest
+
+    requested = int(manifest.get("target_corpus_size") or MAX_CORPUS_SIZE)
+    records = list(manifest.get("records") or [])
+    last_sequence = int(manifest.get("last_sequence") or 0)
+    skipped_changed = int(manifest.get("skipped_changed_records") or 0)
+
     queryset = (
-        ProcurementAnalysisRunItem.objects.filter(run=run)
+        ProcurementAnalysisRunItem.objects.filter(run=run, sequence__gt=last_sequence)
         .select_related("notice", "run", "run__context_snapshot")
         .prefetch_related("notice__source_links__source_notice")
-        .order_by("sequence")
+        .order_by("sequence")[:BUILD_SCAN_LIMIT]
     )
-    records: list[dict[str, Any]] = []
-    skipped_changed = 0
-    for item in queryset.iterator(chunk_size=250):
+    items = list(queryset)
+    added = 0
+    for item in items:
+        last_sequence = max(last_sequence, int(item.sequence))
         current_hash = notice_basis_hash(item.notice)
         if current_hash != item.notice_content_hash or item.context_hash != run.context_snapshot.content_hash:
             skipped_changed += 1
@@ -127,54 +184,92 @@ def create_megabatch_benchmark(
                 "b": _compact_basis(item.notice),
             }
         )
-        if len(records) >= requested:
+        added += 1
+        if len(records) >= requested or added >= BUILD_COLLECT_TARGET:
             break
-    if len(records) < requested:
-        raise ValueError(
-            f"برای Corpus ثابت {requested} رکورد سالم کافی نیست؛ فقط {len(records)} رکورد ثابت پیدا شد."
-        )
 
-    benchmark_id = str(uuid.uuid4())
-    manifest = {
-        "schema": BENCHMARK_SCHEMA,
-        "benchmark_id": benchmark_id,
-        "run_id": str(run.id),
-        "created_at": timezone.now().isoformat(),
-        "context": {
-            "id": str(run.context_snapshot_id),
-            "version": run.context_snapshot.version,
-            "hash": run.context_snapshot.content_hash,
-        },
-        "corpus_size": len(records),
-        "skipped_changed_records": skipped_changed,
-        "stages": list(ALLOWED_STAGE_SIZES),
-        "records": records,
-    }
-    manifest["corpus_sha256"] = _canonical_sha(
-        {
-            "context": manifest["context"],
-            "records": records,
-        }
-    )
-    _atomic_json(_manifest_path(benchmark_id), manifest)
+    manifest["records"] = records[:requested]
+    manifest["corpus_size"] = len(manifest["records"])
+    manifest["skipped_changed_records"] = skipped_changed
+    manifest["last_sequence"] = last_sequence
+    manifest["updated_at"] = timezone.now().isoformat()
+
+    if len(manifest["records"]) >= requested:
+        manifest["status"] = "ready"
+        manifest["corpus_size"] = requested
+        manifest["corpus_sha256"] = _canonical_sha(
+            {
+                "context": manifest["context"],
+                "records": manifest["records"],
+            }
+        )
+    elif len(items) < BUILD_SCAN_LIMIT:
+        manifest["status"] = "failed"
+        manifest["last_error"] = (
+            f"برای Corpus ثابت {requested} رکورد سالم کافی نیست؛ "
+            f"فقط {len(manifest['records'])} رکورد ثابت پیدا شد."
+        )
+    else:
+        manifest["status"] = "preparing"
+
+    _atomic_json(_manifest_path(str(manifest["benchmark_id"])), manifest)
+    return manifest
+
+
+def create_megabatch_benchmark(
+    *,
+    run_id: str,
+    corpus_size: int = MAX_CORPUS_SIZE,
+) -> dict[str, Any]:
+    requested = max(1, min(int(corpus_size), MAX_CORPUS_SIZE))
+    run = ProcurementAnalysisRun.objects.select_related("context_snapshot").get(pk=run_id)
+
+    reusable = _matching_ready_manifest(run=run, requested=requested)
+    if reusable is not None:
+        return benchmark_manifest_summary(reusable)
+
+    benchmark_id = _resumable_benchmark_id(run=run, requested=requested)
+    path = _manifest_path(benchmark_id)
+    if path.is_file():
+        manifest = _read_json(path)
+        if (
+            str(manifest.get("run_id") or "") != str(run.id)
+            or str((manifest.get("context") or {}).get("hash") or "") != str(run.context_snapshot.content_hash)
+            or int(manifest.get("target_corpus_size") or requested) != requested
+        ):
+            raise ValueError("Benchmark در حال ساخت با Run/Context فعلی تطابق ندارد.")
+    else:
+        manifest = _new_preparing_manifest(run=run, requested=requested, benchmark_id=benchmark_id)
+        _atomic_json(path, manifest)
+
+    manifest = _advance_preparing_manifest(run=run, manifest=manifest)
+    if str(manifest.get("status") or "") == "failed":
+        raise ValueError(str(manifest.get("last_error") or "ساخت Corpus Benchmark ناموفق بود."))
     return benchmark_manifest_summary(manifest)
 
-
 def benchmark_manifest_summary(manifest: dict[str, Any]) -> dict[str, Any]:
+    status = str(manifest.get("status") or "ready")
+    prepared_count = len(manifest.get("records") or [])
+    target = int(manifest.get("target_corpus_size") or manifest.get("corpus_size") or 0)
     return {
         "schema": manifest["schema"],
         "benchmark_id": manifest["benchmark_id"],
         "run_id": manifest["run_id"],
         "created_at": manifest["created_at"],
+        "updated_at": manifest.get("updated_at"),
+        "status": status,
+        "ready": status == "ready",
         "context": manifest["context"],
-        "corpus_size": manifest["corpus_size"],
-        "corpus_sha256": manifest["corpus_sha256"],
+        "target_corpus_size": target,
+        "prepared_count": prepared_count,
+        "corpus_size": int(manifest.get("corpus_size") or prepared_count),
+        "corpus_sha256": manifest.get("corpus_sha256"),
         "stages": manifest["stages"],
         "skipped_changed_records": manifest.get("skipped_changed_records", 0),
+        "next_action": "benchmark" if status == "ready" else "call_start_again",
         "production_mutation": False,
         "draft_only": True,
     }
-
 
 def get_megabatch_benchmark_batch(
     *,
@@ -186,6 +281,8 @@ def get_megabatch_benchmark_batch(
     if size not in ALLOWED_STAGE_SIZES:
         raise ValueError("Stage size خارج از مقادیر مصوب Benchmark است.")
     manifest = _read_json(_manifest_path(benchmark_id))
+    if str(manifest.get("status") or "ready") != "ready":
+        raise ValueError("Corpus Benchmark هنوز آماده نیست؛ start_procurement_megabatch_benchmark را دوباره فراخوانی کنید.")
     corpus_size = int(manifest["corpus_size"])
     start = max(0, int(offset))
     if start >= corpus_size:
@@ -233,6 +330,8 @@ def submit_megabatch_benchmark_results(
     if size not in ALLOWED_STAGE_SIZES:
         raise ValueError("Stage size خارج از مقادیر مصوب Benchmark است.")
     manifest = _read_json(_manifest_path(benchmark_id))
+    if str(manifest.get("status") or "ready") != "ready":
+        raise ValueError("Corpus Benchmark هنوز آماده نیست و Result قابل ثبت نیست.")
     start = max(0, int(offset))
     if start % size != 0:
         raise ValueError("Offset باید مضربی از Stage size باشد.")
@@ -410,6 +509,13 @@ def _comparison(
 
 def megabatch_benchmark_status(benchmark_id: str) -> dict[str, Any]:
     manifest = _read_json(_manifest_path(benchmark_id))
+    if str(manifest.get("status") or "ready") != "ready":
+        return {
+            "manifest": benchmark_manifest_summary(manifest),
+            "stages": [],
+            "comparisons_to_50": {},
+            "production_mutation": False,
+        }
     stages: list[dict[str, Any]] = []
     stage_objects: dict[int, dict[str, Any]] = {}
     for size in ALLOWED_STAGE_SIZES:
