@@ -191,7 +191,7 @@ def register_procurement_analysis_tools(mcp, api: ApiCall) -> None:
 
 
     @mcp.tool(
-        description="Create one fixed, non-production-mutating procurement corpus for the Hyper Turbo V5 mega-batch benchmark. Semantic analysis remains entirely in ChatGPT; production Claim/Lease state is not changed.",
+        description="Create or resume one bounded fixed, non-production-mutating procurement corpus for the Hyper Turbo V5 mega-batch benchmark. Repeated calls return the same benchmark ID until the corpus is ready. Semantic analysis remains entirely in ChatGPT; production Claim/Lease state is not changed.",
         annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, openWorldHint=False, idempotentHint=False),
     )
     async def start_procurement_megabatch_benchmark(
